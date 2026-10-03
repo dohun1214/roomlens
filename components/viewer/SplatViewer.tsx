@@ -4,6 +4,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
+import CalibrationTool from './CalibrationTool';
+import type { Engine } from './engine';
+import { pickPoint } from '@/lib/three/pickPoint';
 
 export const SAMPLE_SPLAT_URL = 'https://sparkjs.dev/assets/splats/fireplace.spz';
 
@@ -16,16 +19,6 @@ type Stats = {
   numSplats?: number;
   fromLodTree?: boolean;
   error?: string;
-};
-
-type Engine = {
-  renderer: THREE.WebGLRenderer;
-  scene: THREE.Scene;
-  camera: THREE.PerspectiveCamera;
-  controls: OrbitControls;
-  spark: SparkRenderer;
-  roomGroup: THREE.Group;
-  splat: SplatMesh | null;
 };
 
 // X축 180° 회전 (OpenCV 좌표계 → OpenGL 좌표계)
@@ -64,7 +57,9 @@ export default function SplatViewer() {
     );
     camera.position.set(0, 0, 3);
 
-    const spark = new SparkRenderer({ renderer });
+    // Spark 자체 레이캐스트는 정확도가 부족해 쓰지 않는다(lib/three/pickPoint 참고).
+    // lodRaycast: 0 으로 레이캐스트용 LOD 인덱스를 주기적으로 만드는 작업을 끈다.
+    const spark = new SparkRenderer({ renderer, lodRaycast: 0 });
     scene.add(spark);
 
     const roomGroup = new THREE.Group(); // 이후 보정 변환(회전·크기·높이)을 적용할 그룹
@@ -98,7 +93,7 @@ export default function SplatViewer() {
 
     engineRef.current = { renderer, scene, camera, controls, spark, roomGroup, splat: null };
     if (process.env.NODE_ENV !== 'production') {
-      (window as unknown as { __roomlens?: Engine }).__roomlens = engineRef.current;
+      Object.assign(window, { __roomlens: engineRef.current, __roomlensPick: pickPoint });
     }
 
     return () => {
@@ -236,6 +231,10 @@ export default function SplatViewer() {
           <div>FPS: {fps}</div>
         </div>
       </div>
+
+      {stats.status === 'ready' && (
+        <CalibrationTool key={`${stats.name}|${stats.loadMs}|${flipped}`} engineRef={engineRef} />
+      )}
     </div>
   );
 }
