@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool from './CalibrationTool';
+import FurnitureLayer from '@/components/layout/FurnitureLayer';
+import type { Point2 } from '@/lib/three/floorDrag';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
 
@@ -33,6 +35,8 @@ export default function SplatViewer() {
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [flipped, setFlipped] = useState(false);
+  // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
+  const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
   const [urlInput, setUrlInput] = useState(
     () => new URLSearchParams(window.location.search).get('url') || SAMPLE_SPLAT_URL,
   );
@@ -181,6 +185,8 @@ export default function SplatViewer() {
     }
   };
 
+  const sceneKey = `${stats.name}|${stats.loadMs}|${flipped}`;
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
@@ -232,8 +238,15 @@ export default function SplatViewer() {
         </div>
       </div>
 
+      {stats.status === 'ready' && room?.key === sceneKey && (
+        <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} />
+      )}
       {stats.status === 'ready' && (
-        <CalibrationTool key={`${stats.name}|${stats.loadMs}|${flipped}`} engineRef={engineRef} />
+        <CalibrationTool
+          key={sceneKey}
+          engineRef={engineRef}
+          onApplied={(polygon) => setRoom(polygon ? { key: sceneKey, polygon } : null)}
+        />
       )}
     </div>
   );

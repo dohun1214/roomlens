@@ -42,7 +42,14 @@ const describeError = (err: unknown) => (err instanceof RoomTransformError ? err
 const mean = (points: THREE.Vector3[]) =>
   points.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(points.length);
 
-export default function CalibrationTool({ engineRef }: { engineRef: RefObject<Engine | null> }) {
+export default function CalibrationTool({
+  engineRef,
+  onApplied,
+}: {
+  engineRef: RefObject<Engine | null>;
+  /** 보정을 적용하면 방 평면도([x, z], m)를, 되돌리면 null을 알린다 */
+  onApplied?: (floorPolygon: [number, number][] | null) => void;
+}) {
   const [active, setActive] = useState(false);
   const [taps, setTaps] = useState<Tap[]>([]);
   const [length, setLength] = useState('');
@@ -213,6 +220,7 @@ export default function CalibrationTool({ engineRef }: { engineRef: RefObject<En
     engine.camera.far = 200;
     engine.camera.updateProjectionMatrix();
     setApplied(tr);
+    onApplied?.(outcome.cal.floorPolygon);
   };
 
   const reset = () => {
@@ -222,6 +230,7 @@ export default function CalibrationTool({ engineRef }: { engineRef: RefObject<En
       setObjectRoomTransform(engine.roomGroup, IDENTITY_ROOM_TRANSFORM);
     }
     setApplied(null);
+    onApplied?.(null);
     setTaps([]);
     setMessage(null);
   };
@@ -234,6 +243,21 @@ export default function CalibrationTool({ engineRef }: { engineRef: RefObject<En
       >
         크기·바닥 보정
       </button>
+    );
+  }
+
+  // 적용한 뒤에는 화면을 가리지 않게 한 줄로 접는다
+  if (applied) {
+    return (
+      <div
+        className="absolute bottom-3 right-2 flex items-center gap-2 rounded bg-black/75 px-3 py-2 text-xs text-white"
+        data-testid="calibration-panel"
+      >
+        <span className="text-emerald-300">보정 적용됨 · 격자 한 칸 1m</span>
+        <button className="rounded bg-white/20 px-2 py-1" onClick={reset}>
+          다시 찍기
+        </button>
+      </div>
     );
   }
 
@@ -346,7 +370,6 @@ export default function CalibrationTool({ engineRef }: { engineRef: RefObject<En
           다시 찍기
         </button>
       </div>
-      {applied && <p className="text-emerald-300">적용됨: 바닥이 y=0, 격자 한 칸이 1m입니다.</p>}
     </div>
   );
 }
