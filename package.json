@@ -11,6 +11,8 @@
     "check:gemini": "node --env-file=.env.local --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-gemini.ts"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1146.0",
+    "@aws-sdk/s3-request-presigner": "^3.1146.0",
     "@google/genai": "^2.27.0",
     "@sparkjsdev/spark": "^2.3.0",
     "@supabase/ssr": "^0.12.7",
@@ -18,6 +20,7 @@
     "next": "16.3.8",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "server-only": "^0.0.1",
     "three": "^0.186.1",
     "zod": "^4.6.5"
   },
