@@ -66,11 +66,11 @@ export function toSavedItems(items: PlacedItem[]): SavedItem[] {
   }));
 }
 
-/** 카탈로그 가구 하나를 주어진 자리에 놓은 것 */
+/** 가구 목록의 가구(카탈로그 또는 내 가구) 하나를 주어진 자리에 놓은 것 */
 export function placeCatalogItem(entry: CatalogItem, id: string, at: Pick<Footprint, 'x' | 'z' | 'rotationDeg'>): PlacedItem {
   return {
     id,
-    kind: 'catalog',
+    kind: entry.kind ?? 'catalog',
     furnitureRef: entry.id,
     name: entry.nameKo,
     w: entry.w,
@@ -85,14 +85,19 @@ export function placeCatalogItem(entry: CatalogItem, id: string, at: Pick<Footpr
 
 /**
  * 저장된 배치를 화면의 가구로 되살린다.
- * 카탈로그에서 찾을 수 없는 가구는 건너뛰고 그 수를 missing으로 알려준다.
+ * 카탈로그나 내 가구에서 찾을 수 없는 가구는 건너뛰고 그 수를 missing으로 알려준다.
  */
-export function restoreItems(saved: SavedItem[], catalog: CatalogItem[]): { items: PlacedItem[]; missing: number } {
+export function restoreItems(
+  saved: SavedItem[],
+  catalog: CatalogItem[],
+  userFurniture: CatalogItem[] = [],
+): { items: PlacedItem[]; missing: number } {
   const byId = new Map(catalog.map((entry) => [entry.id, entry]));
+  const mineById = new Map(userFurniture.map((entry) => [entry.id, entry]));
   const items: PlacedItem[] = [];
   let missing = 0;
   for (const s of saved) {
-    const entry = s.kind === 'catalog' ? byId.get(s.furnitureRef) : undefined;
+    const entry = s.kind === 'catalog' ? byId.get(s.furnitureRef) : mineById.get(s.furnitureRef);
     if (!entry) {
       missing += 1;
       continue;

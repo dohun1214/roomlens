@@ -2,6 +2,8 @@
 
 export type CatalogItem = {
   id: string;
+  /** 카탈로그 가구(기본값)인지 사용자가 만든 내 가구인지 */
+  kind?: 'catalog' | 'user';
   nameKo: string;
   category: string;
   /** 가로 × 깊이 × 높이 (m) */
@@ -54,6 +56,8 @@ const CATEGORY_COLORS: Record<string, number> = {
   chair: 0xc27ba0,
   storage: 0x93c47d,
   table: 0xd5a6bd,
+  // 내 가구의 기본 분류
+  etc: 0xb4a7d6,
 };
 
 /** 박스 가구의 색 (종류별). 모르는 종류는 회색 */

@@ -5,6 +5,13 @@ import * as THREE from 'three';
 import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
+import {
+  MAX_USER_FURNITURE,
+  parseUserFurnitureForm,
+  USER_FURNITURE_NAME_MAX,
+  type UserFurnitureForm,
+  type UserFurnitureValue,
+} from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
 import {
   MAX_LAYOUT_ITEMS,
@@ -30,6 +37,8 @@ const VIOLATION_EMISSIVE = 0x7a1010;
 const WARNING_EDGE_COLOR = 0xffc233;
 const WARNING_EMISSIVE = 0x4a3800;
 const NO_OPENINGS: Opening[] = [];
+const NO_FURNITURE: CatalogItem[] = [];
+const EMPTY_MINE_FORM: UserFurnitureForm = { name: '', width: '', depth: '', height: '' };
 
 type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
 
@@ -44,6 +53,9 @@ export default function FurnitureLayer({
   floorPolygon,
   catalog = DEFAULT_CATALOG,
   openings = NO_OPENINGS,
+  userFurniture = NO_FURNITURE,
+  onCreateFurniture,
+  onDeleteFurniture,
   initialItems,
   onSave,
   loginHint = false,
@@ -54,6 +66,12 @@ export default function FurnitureLayer({
   catalog?: CatalogItem[];
   /** 방의 문·창문. 문 앞·통로·창문 가림 검사에 쓴다 */
   openings?: Opening[];
+  /** 내가 만들어 둔 가구. 처음 한 번만 읽는다 */
+  userFurniture?: CatalogItem[];
+  /** 내 가구를 만든다 (주면 "내 가구" 칸이 생긴다). 실패하면 null */
+  onCreateFurniture?: (value: UserFurnitureValue) => Promise<CatalogItem | null>;
+  /** 내 가구를 지운다. 지웠으면 true */
+  onDeleteFurniture?: (id: string) => Promise<boolean>;
   /** 저장된 배치. 처음 한 번만 읽는다 */
   initialItems?: SavedItem[];
   /** 배치를 저장한다. 성공하면 true */
@@ -61,7 +79,13 @@ export default function FurnitureLayer({
   /** 로그인하면 저장할 수 있다는 안내를 보여줄지 */
   loginHint?: boolean;
 }) {
-  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog));
+  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, userFurniture));
+  const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
+  const [mineFormOpen, setMineFormOpen] = useState(false);
+  const [mineForm, setMineForm] = useState<UserFurnitureForm>(EMPTY_MINE_FORM);
+  const [mineMessage, setMineMessage] = useState<string | null>(null);
+  const [mineBusy, setMineBusy] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>(restored.items);
   // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
   const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
@@ -243,6 +267,42 @@ export default function FurnitureLayer({
     setSavePhase(ok ? 'idle' : 'error');
   };
 
+  const createMine = async () => {
+    if (!onCreateFurniture || mineBusy) return;
+    const parsed = parseUserFurnitureForm(mineForm);
+    if (!parsed.ok) {
+      setMineMessage(parsed.message);
+      return;
+    }
+    setMineBusy(true);
+    const created = await onCreateFurniture(parsed.value);
+    setMineBusy(false);
+    if (!created) {
+      setMineMessage('만들지 못했습니다. 잠시 뒤에 다시 해 주세요.');
+      return;
+    }
+    setMine((prev) => [...prev, created]);
+    setMineForm(EMPTY_MINE_FORM);
+    setMineFormOpen(false);
+    setMineMessage(null);
+  };
+
+  const deleteMine = async (id: string) => {
+    if (!onDeleteFurniture || mineBusy) return;
+    setMineBusy(true);
+    const ok = await onDeleteFurniture(id);
+    setMineBusy(false);
+    setConfirmDeleteId(null);
+    if (!ok) {
+      setMineMessage('지우지 못했습니다. 잠시 뒤에 다시 해 주세요.');
+      return;
+    }
+    setMine((prev) => prev.filter((f) => f.id !== id));
+    // 방에 놓여 있던 그 가구도 함께 치운다
+    setItems((prev) => prev.filter((i) => !(i.kind === 'user' && i.furnitureRef === id)));
+    setMineMessage(null);
+  };
+
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
   return (
@@ -287,6 +347,94 @@ export default function FurnitureLayer({
             </button>
           ))}
         </div>
+        {onCreateFurniture && (
+          <div className={compact ? 'hidden' : 'space-y-1 border-t border-white/20 pt-2'} data-testid="user-furniture">
+            <div className="flex items-center justify-between">
+              <span className="opacity-80">내 가구</span>
+              {!mineFormOpen && mine.length < MAX_USER_FURNITURE && (
+                <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
+                  직접 만들기
+                </button>
+              )}
+            </div>
+            {mine.length > 0 && (
+              <div className="flex flex-wrap gap-1" data-testid="user-furniture-list">
+                {mine.map((entry) => (
+                  <span key={entry.id} className="inline-flex overflow-hidden rounded bg-white/20">
+                    <button className="px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)} title={`${Math.round(entry.w * 100)} × ${Math.round(entry.d * 100)} × ${Math.round(entry.h * 100)} cm`}>
+                      + {entry.nameKo}
+                    </button>
+                    <button className="border-l border-white/20 px-1.5 py-1" onClick={() => setConfirmDeleteId(entry.id)} aria-label={`${entry.nameKo} 지우기`}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {confirmDeleteId && (
+              <div className="flex flex-wrap items-center gap-1 text-amber-300" data-testid="user-furniture-confirm">
+                <span>&ldquo;{mine.find((f) => f.id === confirmDeleteId)?.nameKo}&rdquo;을(를) 지울까요? 방에 놓인 것도 사라집니다.</span>
+                <button className="rounded bg-red-600 px-2 py-0.5 text-white disabled:opacity-50" disabled={mineBusy} onClick={() => deleteMine(confirmDeleteId)} data-testid="user-furniture-confirm-yes">
+                  지우기
+                </button>
+                <button className="rounded bg-white/20 px-2 py-0.5 text-white" onClick={() => setConfirmDeleteId(null)}>
+                  취소
+                </button>
+              </div>
+            )}
+            {mineFormOpen && (
+              <div className="space-y-1" data-testid="user-furniture-form">
+                <input
+                  className="w-full rounded bg-white/10 px-2 py-1"
+                  placeholder="이름 (예: 수납장)"
+                  maxLength={USER_FURNITURE_NAME_MAX}
+                  value={mineForm.name}
+                  onChange={(e) => setMineForm({ ...mineForm, name: e.target.value })}
+                  data-testid="user-furniture-name"
+                />
+                <div className="flex items-center gap-1">
+                  {(['width', 'depth', 'height'] as const).map((key) => (
+                    <input
+                      key={key}
+                      className="w-0 flex-1 rounded bg-white/10 px-2 py-1"
+                      inputMode="decimal"
+                      placeholder={{ width: '가로', depth: '깊이', height: '높이' }[key]}
+                      aria-label={{ width: '가로 (cm)', depth: '깊이 (cm)', height: '높이 (cm)' }[key]}
+                      value={mineForm[key]}
+                      onChange={(e) => setMineForm({ ...mineForm, [key]: e.target.value })}
+                      data-testid={`user-furniture-${key}`}
+                    />
+                  ))}
+                  <span>cm</span>
+                </div>
+                <div className="flex gap-1">
+                  <button className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50" disabled={mineBusy} onClick={createMine} data-testid="user-furniture-create">
+                    만들기
+                  </button>
+                  <button
+                    className="rounded bg-white/20 px-2 py-1"
+                    onClick={() => {
+                      setMineFormOpen(false);
+                      setMineMessage(null);
+                    }}
+                  >
+                    취소
+                  </button>
+                </div>
+              </div>
+            )}
+            {mineMessage && (
+              <p className="text-amber-300" data-testid="user-furniture-message">
+                {mineMessage}
+              </p>
+            )}
+          </div>
+        )}
+        {!onCreateFurniture && loginHint && (
+          <p className={compact ? 'hidden' : 'opacity-80'} data-testid="user-furniture-login-hint">
+            로그인하면 치수를 넣어 내 가구를 만들 수 있습니다.
+          </p>
+        )}
         {selected ? (
           <div className="space-y-1">
             <div className="font-mono">

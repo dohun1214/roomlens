@@ -80,7 +80,7 @@ describe('toSavedItems · restoreItems', () => {
     expect(items).toEqual(placed);
   });
 
-  it('카탈로그에 없는 가구와 내 가구(아직 지원 전)는 건너뛰고 수를 센다', () => {
+  it('카탈로그에 없는 가구와 목록에 없는 내 가구는 건너뛰고 수를 센다', () => {
     const { items, missing } = restoreItems(
       [saved(), saved({ id: 'f2', furnitureRef: 'gone' }), saved({ id: 'f3', kind: 'user', furnitureRef: 'desk' })],
       DEFAULT_CATALOG,
