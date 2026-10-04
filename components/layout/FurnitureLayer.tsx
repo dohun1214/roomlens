@@ -68,6 +68,8 @@ export default function FurnitureLayer({
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
   // 3D 위에 2D 평면도를 덮어 보여줄지
   const [showPlan, setShowPlan] = useState(false);
+  // 가구 목록을 접어 패널을 작게 (좁은 화면에서 평면도를 가리지 않게)
+  const [compact, setCompact] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const itemsRef = useRef<Item[]>([]);
   const groupRef = useRef<THREE.Group | null>(null);
@@ -269,13 +271,16 @@ export default function FurnitureLayer({
         )}
         data-violations={JSON.stringify(violations)}
       >
-        <div className="flex items-center justify-between">
-          <strong>가구 배치</strong>
+        <div className="flex items-center justify-between gap-1">
+          <strong className="mr-auto">가구 배치</strong>
           <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setShowPlan((prev) => !prev)} data-testid="plan-toggle" aria-pressed={showPlan}>
             {showPlan ? '3D로 보기' : '평면도'}
           </button>
+          <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setCompact((prev) => !prev)} data-testid="panel-compact" aria-pressed={compact}>
+            {compact ? '펼치기' : '접기'}
+          </button>
         </div>
-        <div className="flex flex-wrap gap-1">
+        <div className={compact ? 'hidden' : 'flex flex-wrap gap-1'} data-testid="furniture-catalog">
           {catalog.map((entry) => (
             <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
               + {entry.nameKo}
@@ -303,7 +308,7 @@ export default function FurnitureLayer({
             </div>
           </div>
         ) : (
-          <p className="opacity-80">가구를 추가한 뒤 끌어서 옮기세요. 평면도에서도 끌 수 있습니다. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
+          <p className={compact ? 'hidden' : 'opacity-80'}>가구를 추가한 뒤 끌어서 옮기세요. 평면도에서도 끌 수 있습니다. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
         )}
         {items.length > 0 && (
           <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
