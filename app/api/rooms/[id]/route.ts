@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 import { apiError, badRequest, notFound, readJson, unauthenticated } from '@/lib/api/http';
-import { deleteObject, headObject, presignGet, readObjectHead } from '@/lib/r2';
+import { deleteObject, deletePrefix, headObject, presignGet, readObjectHead } from '@/lib/r2';
 import { CompleteUploadInput, firstIssueMessage, RoomId } from '@/lib/rooms/schemas';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
-import { checkSplatFile, SPLAT_HEAD_BYTES, splatKeyFor } from '@/lib/upload/splatFile';
+import { checkSplatFile, roomPrefix, SPLAT_HEAD_BYTES, splatKeyFor } from '@/lib/upload/splatFile';
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -75,4 +75,35 @@ export async function PATCH(request: Request, { params }: Context) {
   if (updateError || !updated) return apiError(500, 'DB_ERROR', '방 상태를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');
 
   return NextResponse.json({ room: updated });
+}
+
+/**
+ * 방 삭제. 개인정보(방 3D 파일·사진)가 남지 않도록 R2의 파일을 먼저 모두 지우고 DB에서 지운다.
+ * 파일 삭제가 실패하면 DB는 그대로 두어 다시 시도할 수 있게 한다.
+ */
+export async function DELETE(_request: Request, { params }: Context) {
+  const user = await getCurrentUser();
+  if (!user) return unauthenticated();
+
+  const id = RoomId.safeParse((await params).id);
+  if (!id.success) return notFound();
+
+  const supabase = await createClient();
+  const { data: room, error } = await supabase.from('rooms').select('id, owner_id').eq('id', id.data).maybeSingle();
+  if (error) return apiError(500, 'DB_ERROR', '방 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+  if (!room || room.owner_id !== user.id) return notFound();
+
+  let removedFiles = 0;
+  try {
+    removedFiles = await deletePrefix(roomPrefix(room.id));
+  } catch (err) {
+    console.error(err);
+    return apiError(502, 'STORAGE_ERROR', '파일을 지우지 못했습니다. 잠시 후 다시 시도해 주세요.');
+  }
+
+  // 본인 권한(RLS)으로 지운다. 사진·리포트·배치·코멘트는 on delete cascade
+  const { error: deleteError } = await supabase.from('rooms').delete().eq('id', room.id);
+  if (deleteError) return apiError(500, 'DB_ERROR', '방을 지우지 못했습니다. 잠시 후 다시 시도해 주세요.');
+
+  return NextResponse.json({ deleted: true, removedFiles });
 }
