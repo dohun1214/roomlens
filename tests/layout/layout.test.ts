@@ -92,15 +92,15 @@ describe('checkLayout', () => {
   it('겹치면 양쪽 가구 모두에 알린다', () => {
     const violations = checkLayout([item('a', '책상', box(0, 0)), item('b', '옷장', box(0.5, 0))], room);
     expect(violations).toEqual([
-      { itemId: 'a', type: 'overlap', otherId: 'b', message: '책상: 옷장와(과) 겹칩니다' },
-      { itemId: 'b', type: 'overlap', otherId: 'a', message: '옷장: 책상와(과) 겹칩니다' },
+      { itemId: 'a', type: 'overlap', severity: 'error', otherId: 'b', message: '책상: 옷장와(과) 겹칩니다' },
+      { itemId: 'b', type: 'overlap', severity: 'error', otherId: 'a', message: '옷장: 책상와(과) 겹칩니다' },
     ]);
     expect([...violatingIds(violations)].sort()).toEqual(['a', 'b']);
   });
 
   it('방 밖으로 나간 가구', () => {
     const violations = checkLayout([item('a', '침대', box(1.9, 0))], room);
-    expect(violations).toEqual([{ itemId: 'a', type: 'outside', message: '침대: 방 밖으로 나갔습니다' }]);
+    expect(violations).toEqual([{ itemId: 'a', type: 'outside', severity: 'error', message: '침대: 방 밖으로 나갔습니다' }]);
   });
 
   it('방 정보가 없으면 겹침만 검사한다', () => {
