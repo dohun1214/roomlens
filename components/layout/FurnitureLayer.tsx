@@ -19,6 +19,7 @@ import {
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { pointerToNdc } from '@/lib/three/pickPoint';
 import type { Engine } from '@/components/viewer/engine';
+import FloorPlan from './FloorPlan';
 
 type Item = PlacedItem;
 
@@ -65,6 +66,10 @@ export default function FurnitureLayer({
   // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
   const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
+  // 3D 위에 2D 평면도를 덮어 보여줄지
+  const [showPlan, setShowPlan] = useState(false);
+  // 가구 목록을 접어 패널을 작게 (좁은 화면에서 평면도를 가리지 않게)
+  const [compact, setCompact] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const itemsRef = useRef<Item[]>([]);
   const groupRef = useRef<THREE.Group | null>(null);
@@ -241,99 +246,125 @@ export default function FurnitureLayer({
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
   return (
-    <div
-      className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
-      data-testid="furniture-panel"
-      data-json={JSON.stringify(
-        items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg }) => ({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg })),
+    <>
+      {showPlan && (
+        <div className="absolute inset-0 bg-neutral-900/95" data-testid="plan-overlay">
+          <div className="absolute inset-x-2 bottom-16 top-2 sm:right-[17.5rem]">
+            <FloorPlan
+              floorPolygon={floorPolygon}
+              items={items}
+              openings={openings}
+              badIds={badIds}
+              warnIds={warnIds}
+              selectedId={selectedId}
+              onSelect={setSelectedId}
+              onMove={(id, x, z) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+            />
+          </div>
+        </div>
       )}
-      data-violations={JSON.stringify(violations)}
-    >
-      <strong>가구 배치</strong>
-      <div className="flex flex-wrap gap-1">
-        {catalog.map((entry) => (
-          <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
-            + {entry.nameKo}
+      <div
+        className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
+        data-testid="furniture-panel"
+        data-json={JSON.stringify(
+          items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg }) => ({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg })),
+        )}
+        data-violations={JSON.stringify(violations)}
+      >
+        <div className="flex items-center justify-between gap-1">
+          <strong className="mr-auto">가구 배치</strong>
+          <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setShowPlan((prev) => !prev)} data-testid="plan-toggle" aria-pressed={showPlan}>
+            {showPlan ? '3D로 보기' : '평면도'}
           </button>
-        ))}
+          <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setCompact((prev) => !prev)} data-testid="panel-compact" aria-pressed={compact}>
+            {compact ? '펼치기' : '접기'}
+          </button>
+        </div>
+        <div className={compact ? 'hidden' : 'flex flex-wrap gap-1'} data-testid="furniture-catalog">
+          {catalog.map((entry) => (
+            <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
+              + {entry.nameKo}
+            </button>
+          ))}
+        </div>
+        {selected ? (
+          <div className="space-y-1">
+            <div className="font-mono">
+              <div>{selected.name}</div>
+              <div>
+                {(selected.w * 100).toFixed(0)} × {(selected.d * 100).toFixed(0)} × {(selected.h * 100).toFixed(0)} cm
+              </div>
+              <div>
+                위치 x {selected.x.toFixed(2)}, z {selected.z.toFixed(2)} · {selected.rotationDeg}°
+              </div>
+            </div>
+            <div className="flex gap-1">
+              <button className="rounded bg-white/20 px-2 py-1" onClick={rotate}>
+                90° 회전
+              </button>
+              <button className="rounded bg-white/20 px-2 py-1" onClick={remove}>
+                삭제
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className={compact ? 'hidden' : 'opacity-80'}>가구를 추가한 뒤 끌어서 옮기세요. 평면도에서도 끌 수 있습니다. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
+        )}
+        {items.length > 0 && (
+          <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
+            {violations.length === 0 ? (
+              <p className="text-emerald-300">배치에 문제가 없습니다.</p>
+            ) : (
+              <ul className="space-y-0.5">
+                {violations.map((v) => (
+                  <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`} className={v.severity === 'error' ? 'text-red-300' : 'text-amber-300'} data-type={v.type}>
+                    {v.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        {items.length > 0 && !hasDoor && (
+          <p className="opacity-80" data-testid="layout-door-hint">
+            문을 넣으면 문 앞과 통로(60cm)도 검사합니다.
+          </p>
+        )}
+        {full && <p className="opacity-80">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
+        {restored.missing > 0 && (
+          <p className="text-amber-300" data-testid="layout-missing">
+            저장된 가구 {restored.missing}개는 목록에서 사라져 불러오지 못했습니다.
+          </p>
+        )}
+        {onSave && (items.length > 0 || savedItems.length > 0) && (
+          <div className="flex items-center justify-between gap-2 border-t border-white/20 pt-2">
+            <span data-testid="layout-save-state" data-state={saveState}>
+              {saveState === 'saved' && '배치 저장됨'}
+              {saveState === 'dirty' && '저장 안 됨'}
+              {saveState === 'saving' && '저장하는 중…'}
+              {saveState === 'error' && '저장하지 못했습니다'}
+            </span>
+            {saveState !== 'saved' && (
+              <button
+                className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50"
+                data-testid="layout-save"
+                disabled={saveState === 'saving'}
+                onClick={save}
+              >
+                {saveState === 'error' ? '다시 저장' : '배치 저장'}
+              </button>
+            )}
+          </div>
+        )}
+        {!onSave && loginHint && items.length > 0 && (
+          <p className="border-t border-white/20 pt-2 opacity-80" data-testid="layout-login-hint">
+            <a className="underline" href="/account">
+              로그인
+            </a>
+            하면 배치를 저장할 수 있습니다. 지금은 새로고침하면 사라집니다.
+          </p>
+        )}
       </div>
-      {selected ? (
-        <div className="space-y-1">
-          <div className="font-mono">
-            <div>{selected.name}</div>
-            <div>
-              {(selected.w * 100).toFixed(0)} × {(selected.d * 100).toFixed(0)} × {(selected.h * 100).toFixed(0)} cm
-            </div>
-            <div>
-              위치 x {selected.x.toFixed(2)}, z {selected.z.toFixed(2)} · {selected.rotationDeg}°
-            </div>
-          </div>
-          <div className="flex gap-1">
-            <button className="rounded bg-white/20 px-2 py-1" onClick={rotate}>
-              90° 회전
-            </button>
-            <button className="rounded bg-white/20 px-2 py-1" onClick={remove}>
-              삭제
-            </button>
-          </div>
-        </div>
-      ) : (
-        <p className="opacity-80">가구를 추가한 뒤 끌어서 옮기세요. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
-      )}
-      {items.length > 0 && (
-        <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
-          {violations.length === 0 ? (
-            <p className="text-emerald-300">배치에 문제가 없습니다.</p>
-          ) : (
-            <ul className="space-y-0.5">
-              {violations.map((v) => (
-                <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`} className={v.severity === 'error' ? 'text-red-300' : 'text-amber-300'} data-type={v.type}>
-                  {v.message}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-      {items.length > 0 && !hasDoor && (
-        <p className="opacity-80" data-testid="layout-door-hint">
-          문을 넣으면 문 앞과 통로(60cm)도 검사합니다.
-        </p>
-      )}
-      {full && <p className="opacity-80">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
-      {restored.missing > 0 && (
-        <p className="text-amber-300" data-testid="layout-missing">
-          저장된 가구 {restored.missing}개는 목록에서 사라져 불러오지 못했습니다.
-        </p>
-      )}
-      {onSave && (items.length > 0 || savedItems.length > 0) && (
-        <div className="flex items-center justify-between gap-2 border-t border-white/20 pt-2">
-          <span data-testid="layout-save-state" data-state={saveState}>
-            {saveState === 'saved' && '배치 저장됨'}
-            {saveState === 'dirty' && '저장 안 됨'}
-            {saveState === 'saving' && '저장하는 중…'}
-            {saveState === 'error' && '저장하지 못했습니다'}
-          </span>
-          {saveState !== 'saved' && (
-            <button
-              className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50"
-              data-testid="layout-save"
-              disabled={saveState === 'saving'}
-              onClick={save}
-            >
-              {saveState === 'error' ? '다시 저장' : '배치 저장'}
-            </button>
-          )}
-        </div>
-      )}
-      {!onSave && loginHint && items.length > 0 && (
-        <p className="border-t border-white/20 pt-2 opacity-80" data-testid="layout-login-hint">
-          <a className="underline" href="/account">
-            로그인
-          </a>
-          하면 배치를 저장할 수 있습니다. 지금은 새로고침하면 사라집니다.
-        </p>
-      )}
-    </div>
+    </>
   );
 }
