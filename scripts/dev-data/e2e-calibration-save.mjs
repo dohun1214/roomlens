@@ -163,7 +163,8 @@ try {
 
   // 6) 보정을 새로 해서 저장하면 벽이 달라지므로 문·창문을 비운다
   process.env.JITTER_PX = '3';
-  await calibrate(page, scene, { alreadyOpen: true });
+  // 이번에는 벽 1의 가운데에도 한 점을 찍어 모서리 다섯 개로 보정한다
+  await calibrate(page, scene, { alreadyOpen: true, midWall: true });
   await page.getByTestId('calibration-apply').click();
   await page.getByTestId('openings-toggle').click();
   check('새 보정을 저장하기 전: 문·창문은 0개로 시작하고 넣을 수 없음', (await page.getByTestId('openings-locked').isVisible()) && (await page.getByTestId('openings').getAttribute('data-count')) === '0', null);
@@ -171,6 +172,14 @@ try {
   await page.getByTestId('calibration-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=calibration-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
   const { data: afterSave } = await admin.from('rooms').select('openings, floor_polygon').eq('id', roomId).maybeSingle();
+  const five = afterSave?.floor_polygon ?? [];
+  const fiveSkew = Math.max(...five.map((p, i) => Math.min(Math.abs(five[(i + 1) % five.length][0] - p[0]), Math.abs(five[(i + 1) % five.length][1] - p[1]))));
+  const fiveWalls = wallLengthsOf(five);
+  check(
+    '모서리 5개로 보정: 평면도 꼭짓점 5개, 모든 벽이 가로·세로, 나뉜 벽 1의 두 조각 합이 정답과 3% 이내',
+    five.length === 5 && fiveSkew < 1e-9 && Math.abs(fiveWalls[0] + fiveWalls[1] - truth.wallLengths[0]) / truth.wallLengths[0] < 0.03,
+    fiveWalls.map((v) => round(v)),
+  );
   check(
     '새 보정을 저장: DB의 문·창문이 비워지고(1 → 0) 다시 넣을 수 있게 됨',
     beforeSave?.openings?.length === 1 && afterSave?.openings?.length === 0 && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
