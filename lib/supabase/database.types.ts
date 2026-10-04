@@ -263,6 +263,7 @@ export type Database = {
         Row: {
           consent_at: string;
           created_at: string;
+          credit: string;
           description: string;
           floor_polygon: Json | null;
           id: string;
@@ -281,6 +282,7 @@ export type Database = {
         Insert: {
           consent_at: string;
           created_at?: string;
+          credit?: string;
           description?: string;
           floor_polygon?: Json | null;
           id?: string;
@@ -299,6 +301,7 @@ export type Database = {
         Update: {
           consent_at?: string;
           created_at?: string;
+          credit?: string;
           description?: string;
           floor_polygon?: Json | null;
           id?: string;

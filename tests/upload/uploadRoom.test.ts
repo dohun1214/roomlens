@@ -58,12 +58,18 @@ describe('uploadRoom', () => {
 
     expect(result).toEqual({ roomId: ROOM, format: 'ply' });
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(['POST /api/rooms', 'POST /api/upload-url', `PATCH /api/rooms/${ROOM}`]);
-    expect(calls[0].body).toEqual({ title: '내 방', description: '', consent: true });
+    expect(calls[0].body).toEqual({ title: '내 방', description: '', consent: true, source: 'scaniverse', credit: '' });
     expect(calls[1].body).toEqual({ roomId: ROOM, kind: 'splat', format: 'ply', size: 5000 });
     expect(calls[2].body).toEqual({ splatFormat: 'ply' });
     expect(puts).toEqual([{ url: 'https://r2.example/put', headers: { 'Content-Type': 'application/octet-stream' }, size: 5000 }]);
     expect(stages).toEqual(['checking', 'creating', 'signing', 'uploading', 'verifying']);
     expect(progress).toEqual([0, 0.5, 1]);
+  });
+
+  it('데이터셋 방은 종류와 출처를 함께 보낸다', async () => {
+    const { deps, calls } = fakeDeps();
+    await uploadRoom({ ...base, file: file(), source: 'dataset', credit: 'Studio 11 by milanoski, CC BY 4.0' }, deps);
+    expect(calls[0].body).toMatchObject({ source: 'dataset', credit: 'Studio 11 by milanoski, CC BY 4.0' });
   });
 
   it('올릴 수 없는 파일이면 서버를 부르지 않는다', async () => {

@@ -13,7 +13,7 @@ export async function POST(request: Request) {
 
   const parsed = CreateRoomInput.safeParse(await readJson(request));
   if (!parsed.success) return badRequest(firstIssueMessage(parsed.error));
-  const { title, description } = parsed.data;
+  const { title, description, source, credit } = parsed.data;
 
   const supabase = await createClient();
   const { count, error: countError } = await supabase
@@ -27,8 +27,8 @@ export async function POST(request: Request) {
 
   const { data: room, error } = await supabase
     .from('rooms')
-    .insert({ title, description, consent_at: new Date().toISOString() })
-    .select('id, title, description, status, created_at')
+    .insert({ title, description, source, credit, consent_at: new Date().toISOString() })
+    .select('id, title, description, status, source, credit, created_at')
     .single();
   if (error || !room) return apiError(500, 'DB_ERROR', '방을 만들지 못했습니다. 잠시 후 다시 시도해 주세요.');
 

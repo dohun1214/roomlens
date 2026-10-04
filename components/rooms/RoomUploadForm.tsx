@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
-import { CreateRoomInput, firstIssueMessage, ROOM_DESCRIPTION_MAX, ROOM_TITLE_MAX } from '@/lib/rooms/schemas';
+import { CreateRoomInput, firstIssueMessage, ROOM_CREDIT_MAX, ROOM_DESCRIPTION_MAX, ROOM_TITLE_MAX, type RoomSource } from '@/lib/rooms/schemas';
 import { checkSplatFile, type SplatFormat } from '@/lib/upload/splatFile';
 import { readFileHead, STAGE_LABEL, uploadRoom, UploadError, type UploadStage } from '@/lib/upload/uploadRoom';
 
@@ -16,6 +16,8 @@ export default function RoomUploadForm() {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [consent, setConsent] = useState(false);
+  const [source, setSource] = useState<RoomSource>('scaniverse');
+  const [credit, setCredit] = useState('');
   const [picked, setPicked] = useState<Picked | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [stage, setStage] = useState<UploadStage | null>(null);
@@ -45,7 +47,7 @@ export default function RoomUploadForm() {
     if (busy) return;
     setError(null);
 
-    const parsed = CreateRoomInput.safeParse({ title, description, consent });
+    const parsed = CreateRoomInput.safeParse({ title, description, consent, source, credit });
     if (!parsed.success) {
       setError(firstIssueMessage(parsed.error));
       return;
@@ -64,6 +66,8 @@ export default function RoomUploadForm() {
         title: parsed.data.title,
         description: parsed.data.description,
         consent: true,
+        source: parsed.data.source,
+        credit: parsed.data.credit,
         roomId: pendingRoomId,
         onStage: setStage,
         onProgress: setProgress,
@@ -88,6 +92,8 @@ export default function RoomUploadForm() {
     setTitle('');
     setDescription('');
     setConsent(false);
+    setSource('scaniverse');
+    setCredit('');
     setPicked(null);
     setFileError(null);
     setError(null);
@@ -149,6 +155,39 @@ export default function RoomUploadForm() {
         />
       </label>
 
+      <fieldset className="space-y-2 text-sm">
+        <legend className="mb-1">어떤 방인가요?</legend>
+        <label className="flex items-center gap-2">
+          <input type="radio" name="source" checked={source === 'scaniverse'} onChange={() => setSource('scaniverse')} disabled={busy} data-testid="room-source-own" />
+          <span>직접 찍은 방</span>
+        </label>
+        <label className="flex items-center gap-2">
+          <input type="radio" name="source" checked={source === 'dataset'} onChange={() => setSource('dataset')} disabled={busy} data-testid="room-source-dataset" />
+          <span>공개 데이터셋 등 다른 사람이 만든 3D</span>
+        </label>
+        {source === 'dataset' && (
+          <label className="block space-y-1">
+            <span>출처와 라이선스</span>
+            <input
+              className={inputClass}
+              name="credit"
+              value={credit}
+              maxLength={ROOM_CREDIT_MAX}
+              onChange={(e) => {
+                setCredit(e.target.value);
+                setError(null);
+              }}
+              disabled={busy}
+              placeholder="예: Studio 11 by milanoski (SuperSplat), CC BY 4.0"
+              data-testid="room-credit-input"
+            />
+            <span className="block text-xs text-neutral-500">
+              방 화면에 그대로 표시됩니다. 공개하려면 다시 배포해도 되는 라이선스(CC BY 등)인지 먼저 확인하세요.
+            </span>
+          </label>
+        )}
+      </fieldset>
+
       <div className="space-y-1 text-sm">
         <label className="block space-y-1">
           <span>3D 파일 (.spz, .ply · 100MB 이하)</span>
@@ -177,7 +216,7 @@ export default function RoomUploadForm() {
       <fieldset className="space-y-2 rounded border border-neutral-300 p-3 text-sm dark:border-neutral-700">
         <legend className="px-1 font-semibold">개인정보 수집·이용 동의</legend>
         <ul className="list-disc space-y-1 pl-5 text-neutral-600 dark:text-neutral-300">
-          <li>수집하는 것: 올린 방 3D 파일과 방 사진 (집 안 모습이 담겨 개인정보로 다룹니다)</li>
+          <li>수집하는 것: 올린 방 3D 파일과 방 사진 (직접 찍은 방은 집 안 모습이 담겨 개인정보로 다룹니다)</li>
           <li>쓰는 곳: 3D로 보여주기, 가구 배치, AI 방 분석</li>
           <li>AI 분석을 요청하면 사진이 Google Gemini API로 전송됩니다. 학습에 쓰이지 않는 유료 API를 씁니다</li>
           <li>보관 기간: 방을 지울 때까지. 방을 지우면 파일도 함께 지웁니다</li>

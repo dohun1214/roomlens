@@ -40,6 +40,9 @@ export type UploadRoomInput = {
   title: string;
   description: string;
   consent: boolean;
+  /** 'dataset'이면 credit(출처·라이선스)이 필요하다 */
+  source?: 'scaniverse' | 'dataset';
+  credit?: string;
   /** 앞선 시도에서 만들어진 방. 있으면 방을 새로 만들지 않는다 */
   roomId?: string | null;
   onStage?: (stage: UploadStage) => void;
@@ -86,6 +89,8 @@ export async function uploadRoom(input: UploadRoomInput, deps: UploadDeps = brow
         title: input.title,
         description: input.description,
         consent: input.consent,
+        source: input.source ?? 'scaniverse',
+        credit: input.credit ?? '',
       });
       const id = isRecord(created.json) && isRecord(created.json.room) ? created.json.room.id : null;
       if (created.status !== 201 || typeof id !== 'string') throw new UploadError(apiMessage(created.json), stage, roomId);
