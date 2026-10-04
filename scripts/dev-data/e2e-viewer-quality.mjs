@@ -30,6 +30,15 @@ async function measure(contextOptions, query = '') {
   const context = await browser.newContext(options);
   // Spark의 isMobile()은 navigator.platform이 win으로 시작하면 폰이 아니라고 본다 → 폰 흉내를 낼 때는 바꿔 준다
   if (platform) await context.addInitScript((value) => Object.defineProperty(navigator, 'platform', { get: () => value }), platform);
+  // 로딩 표시가 어떻게 바뀌는지 처음부터 기록한다
+  await context.addInitScript(() => {
+    window.__loading = [];
+    const record = () => {
+      const el = document.querySelector('[data-testid=viewer-loading]');
+      if (el) window.__loading.push(`${el.getAttribute('data-phase')}:${el.getAttribute('data-percent')}`);
+    };
+    new MutationObserver(record).observe(document, { subtree: true, childList: true, attributes: true });
+  });
   const page = await context.newPage();
   await page.goto(`${appUrl}/viewer?url=${dataUrl}/${scene}.sog${query}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => document.querySelector('[data-testid=viewer-stats]')?.textContent?.includes('ready'), null, { timeout: 120000 });
@@ -39,6 +48,10 @@ async function measure(contextOptions, query = '') {
     drawn: Number(await el.getAttribute('data-drawn')),
     pixelRatio: Number(await el.getAttribute('data-pixel-ratio')),
     motion: await el.getAttribute('data-motion'),
+    loading: await page.evaluate(() => [...new Set(window.__loading)]),
+    loadingGone: (await page.getByTestId('viewer-loading').count()) === 0,
+    downloadMs: Number(await page.getByTestId('viewer-load-time').getAttribute('data-download-ms')),
+    loadMs: Number(await page.getByTestId('viewer-load-time').getAttribute('data-load-ms')),
   };
   await context.close();
   return result;
@@ -51,6 +64,10 @@ try {
   const d = await measure(desktop);
   check('데스크톱 기본: 폰 기본값(80만)보다 많이 그림, 배율 1.5까지', d.drawn > 800_000 && d.pixelRatio === 1.5, d);
 
+  const percents = d.loading.filter((s) => s.startsWith('download:')).map((s) => Number(s.split(':')[1]));
+  check('로딩 중: 받는 퍼센트가 올라간 뒤 준비 단계로 넘어감', percents.some((v) => v > 0 && v < 100) && d.loading.includes('prepare:100'), d.loading.slice(0, 8));
+  check('로딩이 끝나면 표시가 사라지고 받기·준비 시간이 나뉘어 나옴', d.loadingGone && d.downloadMs > 0 && d.loadMs > d.downloadMs, { downloadMs: d.downloadMs, loadMs: d.loadMs });
+
   const dLod = await measure(desktop, '&lod=300000&pr=1');
   check('데스크톱 ?lod=300000&pr=1: 30만 개 이하, 배율 1', dLod.drawn > 0 && dLod.drawn <= 300_000 && dLod.pixelRatio === 1, dLod);
 
@@ -59,7 +76,8 @@ try {
 
   const motion = await measure(phone, '&sort=200&fov=off');
   check('폰 ?sort=200&fov=off: 정렬 200ms, 시야 집중 끔으로 열리고 80만 개 이하', motion.motion === '정렬 200ms · 시야 집중 끔' && motion.drawn > 0 && motion.drawn <= 800_000, motion);
-  check('기본은 정렬 0ms, 시야 집중 켬', p.motion === '정렬 0ms · 시야 집중 켬', p.motion);
+  check('폰 기본은 정렬 200ms, 시야 집중 켬', p.motion === '정렬 200ms · 시야 집중 켬', p.motion);
+  check('데스크톱 기본은 정렬 0ms, 시야 집중 켬', d.motion === '정렬 0ms · 시야 집중 켬', d.motion);
 
   const pLod = await measure(phone, '&lod=1500000&pr=2');
   check('폰 ?lod=1500000&pr=2: 기본값보다 많이 그리고 배율 2', pLod.drawn > 800_000 && pLod.pixelRatio === 2, pLod);
