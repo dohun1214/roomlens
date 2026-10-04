@@ -7,7 +7,7 @@ import { checkSplatFile, type SplatFormat } from '@/lib/upload/splatFile';
 import { readFileHead, STAGE_LABEL, uploadRoom, UploadError, type UploadStage } from '@/lib/upload/uploadRoom';
 
 type Picked = { file: File; format: SplatFormat };
-type Done = { roomId: string; viewerHref: string | null };
+type Done = { roomId: string };
 
 const megabytes = (bytes: number) => `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
 
@@ -70,12 +70,7 @@ export default function RoomUploadForm() {
         signal: controller.signal,
       });
       setPendingRoomId(null);
-      // 방 상세 페이지가 생기기 전까지는 3D 뷰어로 연결한다
-      const detail = await fetch(`/api/rooms/${roomId}`)
-        .then((res) => (res.ok ? res.json() : null))
-        .catch(() => null);
-      const splatUrl: unknown = detail?.splatUrl;
-      setDone({ roomId, viewerHref: typeof splatUrl === 'string' ? `/viewer?url=${encodeURIComponent(splatUrl)}` : null });
+      setDone({ roomId });
     } catch (err) {
       if (err instanceof UploadError) {
         setPendingRoomId(err.roomId);
@@ -107,11 +102,9 @@ export default function RoomUploadForm() {
         <p className="font-semibold">방을 만들었습니다.</p>
         <p className="text-neutral-500">지금은 나만 볼 수 있습니다.</p>
         <div className="flex gap-3">
-          {done.viewerHref && (
-            <Link href={done.viewerHref} className="rounded bg-neutral-900 px-3 py-2 text-white dark:bg-white dark:text-neutral-900" data-testid="upload-view">
+            <Link href={`/rooms/${done.roomId}`} className="rounded bg-neutral-900 px-3 py-2 text-white dark:bg-white dark:text-neutral-900" data-testid="upload-view">
               3D로 보기
             </Link>
-          )}
           <button type="button" onClick={reset} className="rounded border border-neutral-300 px-3 py-2 dark:border-neutral-700">
             방 하나 더 만들기
           </button>
