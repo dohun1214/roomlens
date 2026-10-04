@@ -8,6 +8,8 @@ import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
+import type { SavedItem } from '@/lib/layout/saved';
+import { saveMyLayout, type SavedLayout } from '@/lib/layout/store';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
@@ -47,14 +49,30 @@ type Props = {
   canEdit?: boolean;
   /** 놓을 수 있는 가구 목록 (없으면 기본 카탈로그) */
   catalog?: CatalogItem[];
+  /** 로그인했는지. 로그인한 사람만 배치를 저장할 수 있다 (방 주인이 아니어도 된다) */
+  signedIn?: boolean;
+  /** 이 방에 내가 저장해 둔 배치 */
+  initialLayout?: SavedLayout | null;
 };
 
-export default function SplatViewer({ url, name, calibration = null, roomId, canEdit = false, catalog }: Props) {
+export default function SplatViewer({
+  url,
+  name,
+  calibration = null,
+  roomId,
+  canEdit = false,
+  catalog,
+  signedIn = false,
+  initialLayout = null,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const loadSeq = useRef(0);
   const flippedRef = useRef(calibration?.flipX ?? false);
   const calibrationRef = useRef(calibration);
+  // 저장된 배치. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
+  const [layout, setLayout] = useState<SavedLayout | null>(initialLayout);
+  const layoutIdRef = useRef(initialLayout?.id ?? null);
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
@@ -268,6 +286,19 @@ export default function SplatViewer({ url, name, calibration = null, roomId, can
     [roomId],
   );
 
+  // 내 배치를 저장한다 (처음이면 새로 만들고, 그다음부터는 같은 배치를 고친다)
+  const saveLayout = useCallback(
+    async (items: SavedItem[]) => {
+      if (!roomId) return false;
+      const id = await saveMyLayout(createClient(), roomId, layoutIdRef.current, items);
+      if (!id) return false;
+      layoutIdRef.current = id;
+      setLayout({ id, items });
+      return true;
+    },
+    [roomId],
+  );
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
@@ -352,7 +383,15 @@ export default function SplatViewer({ url, name, calibration = null, roomId, can
       )}
 
       {stats.status === 'ready' && room?.key === sceneKey && (
-        <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} catalog={catalog} />
+        <FurnitureLayer
+          key={`furniture|${sceneKey}`}
+          engineRef={engineRef}
+          floorPolygon={room.polygon}
+          catalog={catalog}
+          initialItems={layout?.items}
+          onSave={roomId && signedIn ? saveLayout : undefined}
+          loginHint={Boolean(roomId) && !signedIn}
+        />
       )}
       {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}
       {stats.status === 'ready' && (!url || canEdit) && (

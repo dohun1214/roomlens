@@ -2,13 +2,23 @@
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
-import { categoryColor, DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
+import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
 import { checkLayout, findFreeSpot, violatingIds } from '@/lib/layout/check';
+import {
+  MAX_LAYOUT_ITEMS,
+  nextItemNumber,
+  placeCatalogItem,
+  restoreItems,
+  sameSavedItems,
+  toSavedItems,
+  type PlacedItem,
+  type SavedItem,
+} from '@/lib/layout/saved';
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { pointerToNdc } from '@/lib/three/pickPoint';
 import type { Engine } from '@/components/viewer/engine';
 
-type Item = Footprint & { id: string; catalogId: string; name: string; h: number; color: number };
+type Item = PlacedItem;
 
 const EDGE_COLOR = 0xffffff;
 const SELECTED_EDGE_COLOR = 0xffe14d;
@@ -21,22 +31,35 @@ type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint 
  * 보정된 방(바닥 y=0, 단위 m) 위에 박스 가구를 놓고 바닥 평면에서 끈다.
  * 가구는 roomGroup이 아니라 scene에 직접 넣는다 (방 좌표 = 월드 좌표).
  * 겹치거나 방 밖으로 나간 가구는 빨갛게 표시하고 이유를 알려준다.
+ * onSave가 있으면 저장 버튼을 보여주고, initialItems(저장된 배치)로 시작한다.
  */
 export default function FurnitureLayer({
   engineRef,
   floorPolygon,
   catalog = DEFAULT_CATALOG,
+  initialItems,
+  onSave,
+  loginHint = false,
 }: {
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
   /** 놓을 수 있는 가구 목록. 방 화면은 DB의 카탈로그를 넘긴다 */
   catalog?: CatalogItem[];
+  /** 저장된 배치. 처음 한 번만 읽는다 */
+  initialItems?: SavedItem[];
+  /** 배치를 저장한다. 성공하면 true */
+  onSave?: (items: SavedItem[]) => Promise<boolean>;
+  /** 로그인하면 저장할 수 있다는 안내를 보여줄지 */
+  loginHint?: boolean;
 }) {
-  const [items, setItems] = useState<Item[]>([]);
+  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog));
+  const [items, setItems] = useState<Item[]>(restored.items);
+  // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
+  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
+  const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const itemsRef = useRef<Item[]>([]);
   const groupRef = useRef<THREE.Group | null>(null);
-  const nextId = useRef(1);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -44,6 +67,10 @@ export default function FurnitureLayer({
 
   const violations = useMemo(() => checkLayout(items, floorPolygon), [items, floorPolygon]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
+  const currentSaved = useMemo(() => toSavedItems(items), [items]);
+  const dirty = !sameSavedItems(currentSaved, savedItems);
+  const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
+  const full = items.length >= MAX_LAYOUT_ITEMS;
 
   // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다)
   useEffect(() => {
@@ -166,14 +193,11 @@ export default function FurnitureLayer({
   }, [engineRef, floorPolygon]);
 
   const add = (entry: CatalogItem) => {
-    const id = `f${nextId.current}`;
-    nextId.current += 1;
+    if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
+    const id = `f${nextItemNumber(itemsRef.current)}`;
     // 방 가운데부터 찾아, 다른 가구와 겹치지 않는 가장 가까운 빈자리에 놓는다
     const placed = findFreeSpot(entry, itemsRef.current, floorPolygon);
-    setItems((prev) => [
-      ...prev,
-      { ...placed, id, catalogId: entry.id, name: entry.nameKo, h: entry.h, color: categoryColor(entry.category) },
-    ]);
+    setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
   };
 
@@ -192,6 +216,15 @@ export default function FurnitureLayer({
     setSelectedId(null);
   };
 
+  const save = async () => {
+    if (!onSave || savePhase === 'saving') return;
+    const snapshot = currentSaved;
+    setSavePhase('saving');
+    const ok = await onSave(snapshot);
+    if (ok) setSavedItems(snapshot);
+    setSavePhase(ok ? 'idle' : 'error');
+  };
+
   const selected = items.find((i) => i.id === selectedId) ?? null;
 
   return (
@@ -199,14 +232,14 @@ export default function FurnitureLayer({
       className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
       data-testid="furniture-panel"
       data-json={JSON.stringify(
-        items.map(({ id, catalogId, name, x, z, w, d, h, rotationDeg }) => ({ id, catalogId, name, x, z, w, d, h, rotationDeg })),
+        items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg }) => ({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg })),
       )}
       data-violations={JSON.stringify(violations)}
     >
       <strong>가구 배치</strong>
       <div className="flex flex-wrap gap-1">
         {catalog.map((entry) => (
-          <button key={entry.id} className="rounded bg-white/20 px-2 py-1" onClick={() => add(entry)}>
+          <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
             + {entry.nameKo}
           </button>
         ))}
@@ -246,6 +279,40 @@ export default function FurnitureLayer({
             </ul>
           )}
         </div>
+      )}
+      {full && <p className="opacity-80">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
+      {restored.missing > 0 && (
+        <p className="text-amber-300" data-testid="layout-missing">
+          저장된 가구 {restored.missing}개는 목록에서 사라져 불러오지 못했습니다.
+        </p>
+      )}
+      {onSave && (items.length > 0 || savedItems.length > 0) && (
+        <div className="flex items-center justify-between gap-2 border-t border-white/20 pt-2">
+          <span data-testid="layout-save-state" data-state={saveState}>
+            {saveState === 'saved' && '배치 저장됨'}
+            {saveState === 'dirty' && '저장 안 됨'}
+            {saveState === 'saving' && '저장하는 중…'}
+            {saveState === 'error' && '저장하지 못했습니다'}
+          </span>
+          {saveState !== 'saved' && (
+            <button
+              className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50"
+              data-testid="layout-save"
+              disabled={saveState === 'saving'}
+              onClick={save}
+            >
+              {saveState === 'error' ? '다시 저장' : '배치 저장'}
+            </button>
+          )}
+        </div>
+      )}
+      {!onSave && loginHint && items.length > 0 && (
+        <p className="border-t border-white/20 pt-2 opacity-80" data-testid="layout-login-hint">
+          <a className="underline" href="/account">
+            로그인
+          </a>
+          하면 배치를 저장할 수 있습니다. 지금은 새로고침하면 사라집니다.
+        </p>
       )}
     </div>
   );

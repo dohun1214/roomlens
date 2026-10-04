@@ -4,6 +4,7 @@ import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
+import { loadMyLayout } from '@/lib/layout/store';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
@@ -32,13 +33,15 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   // 파일을 아직 올리지 않은 방은 주인에게만 보인다 (지울 수 있게)
   if (!ready && !isOwner) notFound();
 
-  const [splatUrl, { data: owner }, { data: catalogRows }] = await Promise.all([
+  const [splatUrl, { data: owner }, { data: catalogRows }, myLayout] = await Promise.all([
     ready && room.splat_key ? presignGet(room.splat_key) : null,
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
       .from('furniture_catalog')
       .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m')
       .order('sort_order'),
+    // 이 방에 내가 저장해 둔 가구 배치 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
+    ready && user ? loadMyLayout(supabase, room.id, user.id) : null,
   ]);
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   const catalog = catalogRows?.length ? catalogRows.map(fromCatalogRow) : undefined;
@@ -72,6 +75,8 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             roomId={room.id}
             canEdit={isOwner}
             catalog={catalog}
+            signedIn={Boolean(user)}
+            initialLayout={myLayout}
           />
         ) : (
           <p className="p-6 text-sm text-neutral-300" data-testid="room-not-ready">
