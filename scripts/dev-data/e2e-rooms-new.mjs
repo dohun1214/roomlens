@@ -133,6 +133,29 @@ try {
     .catch(() => false);
   check('"3D로 보기" → 올린 파일이 뷰어에서 열림', loaded, page.url().slice(0, 60));
 
+  // 8) 직접 찍은 방에는 출처 줄이 없다
+  check('직접 찍은 방: 출처 표시 없음', (await page.getByTestId('room-credit').count()) === 0, null);
+
+  // 9) 데이터셋 방: 출처가 있어야 만들 수 있고, 방 화면에 표시된다
+  const credit = 'InteriorGS 0194_840128 (시험용, 비공개)';
+  await page.goto(`${appUrl}/rooms/new`);
+  check('안내에 "찍지 않아도 된다"는 설명', (await text('dataset-guide')).includes('데이터셋'), null);
+  await page.getByTestId('room-title').fill('데이터셋 방');
+  await page.getByTestId('room-file').setInputFiles(scenePath);
+  await page.getByTestId('room-source-dataset').check();
+  await page.getByTestId('room-consent').check();
+  await page.getByTestId('room-submit').click();
+  check('데이터셋인데 출처 없이 제출 → 안내', (await text('upload-error')).includes('출처'), await text('upload-error'));
+  await page.getByTestId('room-credit-input').fill(credit);
+  await page.getByTestId('room-submit').click();
+  await page.getByTestId('upload-done').waitFor({ timeout: 90000 });
+  const datasetId = await page.getByTestId('upload-done').getAttribute('data-room-id');
+  const { data: datasetRoom } = await admin.from('rooms').select('source, credit, status').eq('id', datasetId).maybeSingle();
+  check('DB: source=dataset, 출처 저장', datasetRoom?.source === 'dataset' && datasetRoom.credit === credit && datasetRoom.status === 'ready', datasetRoom);
+  await page.getByTestId('upload-view').click();
+  await page.getByTestId('room-credit').waitFor({ timeout: 15000 });
+  check('방 화면에 출처 표시', (await text('room-credit')).includes(credit), await text('room-credit'));
+
   check('브라우저 콘솔 오류 없음', errors.filter((e) => !e.includes('422') && !e.includes('ERR_FAILED') && !e.includes('net::')).length === 0, errors.slice(0, 3));
 } catch (err) {
   check('예외 없이 끝까지 실행', false, String(err).slice(0, 300));
