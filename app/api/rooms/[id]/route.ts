@@ -9,7 +9,7 @@ import { checkSplatFile, roomPrefix, SPLAT_HEAD_BYTES, splatKeyFor } from '@/lib
 type Context = { params: Promise<{ id: string }> };
 
 const PUBLIC_COLUMNS =
-  'id, owner_id, title, description, is_public, status, source, splat_format, splat_bytes, transform, floor_polygon, openings, created_at, updated_at';
+  'id, owner_id, title, description, is_public, status, source, credit, splat_format, splat_bytes, transform, floor_polygon, openings, created_at, updated_at';
 
 /**
  * 방 정보와 3D 파일을 읽을 주소(presigned GET, 1시간)를 준다.

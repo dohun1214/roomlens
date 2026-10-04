@@ -20,7 +20,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   const supabase = await createClient();
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, owner_id, title, description, is_public, status, splat_key')
+    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit')
     .eq('id', id)
     .maybeSingle();
   if (!room) notFound();
@@ -46,6 +46,11 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             <span data-testid="room-owner">{owner?.nickname ?? '알 수 없음'}</span>
             {room.description ? ` · ${room.description}` : ''}
           </p>
+          {room.credit && (
+            <p className="truncate text-xs text-neutral-500" data-testid="room-credit" title={room.credit}>
+              출처: {room.credit}
+            </p>
+          )}
         </div>
         {isOwner && <RoomOwnerControls roomId={room.id} initialPublic={room.is_public} canPublish={ready} />}
       </div>

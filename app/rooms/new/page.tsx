@@ -23,7 +23,7 @@ export default async function NewRoomPage() {
       <h1 className="text-2xl font-bold">방 만들기</h1>
 
       <section className="space-y-2 text-sm" data-testid="capture-guide">
-        <h2 className="font-semibold">1. 휴대폰으로 방 찍기</h2>
+        <h2 className="font-semibold">1. 방 3D 파일 준비하기</h2>
         <p className="text-neutral-600 dark:text-neutral-300">
           무료 앱 <strong>Scaniverse</strong>에서 스플랫(Splat) 방식으로 방을 찍습니다. 일반 동영상은 쓸 수 없고, 앱 안에서
           찍어야 합니다.
@@ -36,6 +36,10 @@ export default async function NewRoomPage() {
         <p className="text-neutral-600 dark:text-neutral-300">
           다 찍으면 앱에서 <strong>SPZ</strong> 또는 <strong>PLY</strong> 파일로 내보냅니다. SPZ가 열리지 않는다는 안내가 나오면
           PLY로 내보내 주세요.
+        </p>
+        <p className="text-neutral-600 dark:text-neutral-300" data-testid="dataset-guide">
+          직접 찍지 않아도 됩니다. 공개 데이터셋의 방 3D 파일(.ply, .spz, .sog)을 올려도 같은 기능을 쓸 수 있습니다. 이때는 아래에서
+          &ldquo;공개 데이터셋&rdquo;을 고르고 출처와 라이선스를 적어 주세요.
         </p>
       </section>
 

@@ -10,7 +10,27 @@ describe('CreateRoomInput', () => {
       title: '내 자취방',
       description: '',
       consent: true,
+      source: 'scaniverse',
+      credit: '',
     });
+  });
+
+  it('직접 찍은 방이 기본값이고 출처는 비워도 된다', () => {
+    expect(CreateRoomInput.parse({ title: '내 방', consent: true })).toMatchObject({ source: 'scaniverse', credit: '' });
+  });
+
+  it('데이터셋 방은 출처·라이선스가 있어야 한다', () => {
+    const missing = CreateRoomInput.safeParse({ title: '샘플 방', consent: true, source: 'dataset', credit: '   ' });
+    expect(missing.success).toBe(false);
+    if (!missing.success) expect(firstIssueMessage(missing.error)).toContain('출처');
+    expect(
+      CreateRoomInput.parse({ title: '샘플 방', consent: true, source: 'dataset', credit: ' Studio 11 by milanoski, CC BY 4.0 ' }),
+    ).toMatchObject({ source: 'dataset', credit: 'Studio 11 by milanoski, CC BY 4.0' });
+  });
+
+  it('알 수 없는 종류와 너무 긴 출처는 거부', () => {
+    expect(CreateRoomInput.safeParse({ title: '방', consent: true, source: 'worldlabs' }).success).toBe(false);
+    expect(CreateRoomInput.safeParse({ title: '방', consent: true, source: 'dataset', credit: '가'.repeat(301) }).success).toBe(false);
   });
 
   it('동의하지 않으면 거부하고 이유를 알려준다', () => {
