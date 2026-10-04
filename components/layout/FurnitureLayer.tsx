@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
-import { checkLayout, findFreeSpot, violatingIds } from '@/lib/layout/check';
+import { doorZone } from '@/lib/layout/access';
+import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
+import type { Opening } from '@/lib/rooms/openings';
 import {
   MAX_LAYOUT_ITEMS,
   nextItemNumber,
@@ -24,19 +26,23 @@ const EDGE_COLOR = 0xffffff;
 const SELECTED_EDGE_COLOR = 0xffe14d;
 const VIOLATION_EDGE_COLOR = 0xff3b30;
 const VIOLATION_EMISSIVE = 0x7a1010;
+const WARNING_EDGE_COLOR = 0xffc233;
+const WARNING_EMISSIVE = 0x4a3800;
+const NO_OPENINGS: Opening[] = [];
 
 type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
 
 /**
  * 보정된 방(바닥 y=0, 단위 m) 위에 박스 가구를 놓고 바닥 평면에서 끈다.
  * 가구는 roomGroup이 아니라 scene에 직접 넣는다 (방 좌표 = 월드 좌표).
- * 겹치거나 방 밖으로 나간 가구는 빨갛게 표시하고 이유를 알려준다.
+ * 겹치거나 방 밖으로 나갔거나 문 앞·통로를 막는 가구는 빨갛게, 창문을 가리는 가구는 노랗게 표시하고 이유를 알려준다.
  * onSave가 있으면 저장 버튼을 보여주고, initialItems(저장된 배치)로 시작한다.
  */
 export default function FurnitureLayer({
   engineRef,
   floorPolygon,
   catalog = DEFAULT_CATALOG,
+  openings = NO_OPENINGS,
   initialItems,
   onSave,
   loginHint = false,
@@ -45,6 +51,8 @@ export default function FurnitureLayer({
   floorPolygon: Point2[];
   /** 놓을 수 있는 가구 목록. 방 화면은 DB의 카탈로그를 넘긴다 */
   catalog?: CatalogItem[];
+  /** 방의 문·창문. 문 앞·통로·창문 가림 검사에 쓴다 */
+  openings?: Opening[];
   /** 저장된 배치. 처음 한 번만 읽는다 */
   initialItems?: SavedItem[];
   /** 배치를 저장한다. 성공하면 true */
@@ -65,8 +73,11 @@ export default function FurnitureLayer({
     itemsRef.current = items;
   }, [items]);
 
-  const violations = useMemo(() => checkLayout(items, floorPolygon), [items, floorPolygon]);
+  const violations = useMemo(() => checkLayout(items, floorPolygon, openings), [items, floorPolygon, openings]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
+  const warnIds = useMemo(() => warningIds(violations), [violations]);
+  const errorCount = violations.filter((v) => v.severity === 'error').length;
+  const hasDoor = openings.some((o) => o.type === 'door');
   const currentSaved = useMemo(() => toSavedItems(items), [items]);
   const dirty = !sameSavedItems(currentSaved, savedItems);
   const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
@@ -94,8 +105,9 @@ export default function FurnitureLayer({
 
     for (const item of items) {
       const bad = badIds.has(item.id);
+      const warn = warnIds.has(item.id);
       const geometry = new THREE.BoxGeometry(item.w, item.h, item.d);
-      const material = new THREE.MeshLambertMaterial({ color: item.color, emissive: bad ? VIOLATION_EMISSIVE : 0x000000 });
+      const material = new THREE.MeshLambertMaterial({ color: item.color, emissive: bad ? VIOLATION_EMISSIVE : warn ? WARNING_EMISSIVE : 0x000000 });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(item.x, item.h / 2, item.z);
       mesh.rotation.y = THREE.MathUtils.degToRad(item.rotationDeg);
@@ -103,7 +115,7 @@ export default function FurnitureLayer({
 
       const edgeGeometry = new THREE.EdgesGeometry(geometry);
       const edgeMaterial = new THREE.LineBasicMaterial({
-        color: bad ? VIOLATION_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
+        color: bad ? VIOLATION_EDGE_COLOR : warn ? WARNING_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
       });
       mesh.add(new THREE.LineSegments(edgeGeometry, edgeMaterial));
       group.add(mesh);
@@ -117,7 +129,7 @@ export default function FurnitureLayer({
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId, badIds]);
+  }, [engineRef, items, selectedId, badIds, warnIds]);
 
   // 바닥 평면 드래그
   useEffect(() => {
@@ -195,8 +207,9 @@ export default function FurnitureLayer({
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
     const id = `f${nextItemNumber(itemsRef.current)}`;
-    // 방 가운데부터 찾아, 다른 가구와 겹치지 않는 가장 가까운 빈자리에 놓는다
-    const placed = findFreeSpot(entry, itemsRef.current, floorPolygon);
+    // 방 가운데부터 찾아, 다른 가구와 겹치지 않고 문 앞도 아닌 가장 가까운 빈자리에 놓는다
+    const doorZones = openings.flatMap((o) => (o.type === 'door' ? [doorZone(o, floorPolygon)] : [])).filter((zone) => zone !== null);
+    const placed = findFreeSpot(entry, [...itemsRef.current, ...doorZones], floorPolygon);
     setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
   };
@@ -268,17 +281,24 @@ export default function FurnitureLayer({
         <p className="opacity-80">가구를 추가한 뒤 끌어서 옮기세요. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
       )}
       {items.length > 0 && (
-        <div data-testid="layout-violations" data-count={violations.length}>
+        <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
           {violations.length === 0 ? (
             <p className="text-emerald-300">배치에 문제가 없습니다.</p>
           ) : (
-            <ul className="space-y-0.5 text-red-300">
+            <ul className="space-y-0.5">
               {violations.map((v) => (
-                <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`}>{v.message}</li>
+                <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`} className={v.severity === 'error' ? 'text-red-300' : 'text-amber-300'} data-type={v.type}>
+                  {v.message}
+                </li>
               ))}
             </ul>
           )}
         </div>
+      )}
+      {items.length > 0 && !hasDoor && (
+        <p className="opacity-80" data-testid="layout-door-hint">
+          문을 넣으면 문 앞과 통로(60cm)도 검사합니다.
+        </p>
       )}
       {full && <p className="opacity-80">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
       {restored.missing > 0 && (

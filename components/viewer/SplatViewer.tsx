@@ -84,6 +84,8 @@ export default function SplatViewer({
   const [savedPolygonKey, setSavedPolygonKey] = useState(calibration ? JSON.stringify(calibration.floorPolygon) : null);
   const savedPolygonKeyRef = useRef(savedPolygonKey);
   const [openings, setOpenings] = useState({ key: savedPolygonKey, items: initialOpenings });
+  // 화면에서 넣거나 지운(아직 저장 전일 수 있는) 문·창문. 가구 검사는 이것을 쓴다
+  const [liveOpenings, setLiveOpenings] = useState<{ key: string | null; items: Opening[] } | null>(null);
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
@@ -282,6 +284,8 @@ export default function SplatViewer({
 
   const sceneKey = `${stats.name}|${stats.loadMs}|${flipped}`;
   const roomPolygonKey = room ? JSON.stringify(room.polygon) : null;
+  const savedOpenings = roomPolygonKey === openings.key ? openings.items : NO_OPENINGS;
+  const shownOpenings = liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.items : savedOpenings;
 
   // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
   const saveCalibration = useCallback(
@@ -299,7 +303,10 @@ export default function SplatViewer({
       if (error || data === null) return false;
       savedPolygonKeyRef.current = key;
       setSavedPolygonKey(key);
-      if (wallsChanged) setOpenings({ key, items: [] });
+      if (wallsChanged) {
+        setOpenings({ key, items: [] });
+        setLiveOpenings(null);
+      }
       return true;
     },
     [roomId],
@@ -419,6 +426,7 @@ export default function SplatViewer({
           engineRef={engineRef}
           floorPolygon={room.polygon}
           catalog={catalog}
+          openings={shownOpenings}
           initialItems={layout?.items}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
@@ -429,7 +437,8 @@ export default function SplatViewer({
           key={`openings|${sceneKey}|${roomPolygonKey}`}
           engineRef={engineRef}
           floorPolygon={room.polygon}
-          initial={roomPolygonKey === openings.key ? openings.items : NO_OPENINGS}
+          initial={savedOpenings}
+          onChange={(items) => setLiveOpenings({ key: roomPolygonKey, items })}
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
