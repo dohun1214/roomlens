@@ -7,6 +7,7 @@ import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsd
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
+import type { CatalogItem } from '@/lib/layout/catalog';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
@@ -44,9 +45,11 @@ type Props = {
   /** 보정을 저장할 방 (방 주인일 때만 canEdit) */
   roomId?: string;
   canEdit?: boolean;
+  /** 놓을 수 있는 가구 목록 (없으면 기본 카탈로그) */
+  catalog?: CatalogItem[];
 };
 
-export default function SplatViewer({ url, name, calibration = null, roomId, canEdit = false }: Props) {
+export default function SplatViewer({ url, name, calibration = null, roomId, canEdit = false, catalog }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const loadSeq = useRef(0);
@@ -349,7 +352,7 @@ export default function SplatViewer({ url, name, calibration = null, roomId, can
       )}
 
       {stats.status === 'ready' && room?.key === sceneKey && (
-        <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} />
+        <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} catalog={catalog} />
       )}
       {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}
       {stats.status === 'ready' && (!url || canEdit) && (

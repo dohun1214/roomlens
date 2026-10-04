@@ -98,6 +98,33 @@ try {
   const [same] = await items();
   check('화면을 돌릴 때 가구는 움직이지 않는다', same.x === desk.x && same.z === desk.z, null);
 
+  // 5) 두 번째 가구는 겹치지 않는 빈자리에 놓인다
+  const violations = async () => JSON.parse(await page.getByTestId('furniture-panel').getAttribute('data-violations'));
+  await moveCamera(page, [0.01, 6, 0.01], [0, 0, 0]); // 바로 위에서 내려다본다
+  await page.getByRole('button', { name: '+ 옷장' }).click();
+  await page.waitForTimeout(300);
+  let ward;
+  [desk, ward] = await items();
+  check('두 번째 가구(옷장)가 겹치지 않는 자리에 놓이고 문제 없음', (await violations()).length === 0 && (await page.getByTestId('layout-violations').innerText()).includes('문제가 없습니다'), [round(ward.x), round(ward.z)]);
+
+  // 6) 옷장을 책상 위로 끌면 양쪽 모두 겹침으로 표시된다
+  const moveItemTo = async (item, x, z) => {
+    const grabAt = await toScreen(page, [item.x, item.h, item.z]);
+    const under = await floorUnder(grabAt);
+    await drag(grabAt, clampToView(await toScreen(page, [under[0] + x - item.x, 0, under[1] + z - item.z])));
+  };
+  await moveItemTo(ward, desk.x, desk.z);
+  [desk, ward] = await items();
+  const overlapping = await violations();
+  check('옷장을 책상 위로 끌면 두 가구 모두 겹침 표시', overlapping.filter((v) => v.type === 'overlap').length === 2 && (await page.getByTestId('layout-violations').innerText()).includes('겹칩니다'), overlapping.map((v) => v.message));
+  await moveCamera(page, [desk.x + 0.4, 2.3, desk.z + 2.6], [desk.x, 0.6, desk.z]); // 방 안에서 비스듬히 (빨간 표시 확인용)
+  await page.screenshot({ path: path.join(shotDir, `furniture-${scene}-overlap.png`) });
+  await moveCamera(page, [0.01, 6, 0.01], [0, 0, 0]);
+
+  // 7) 다시 떼어 놓으면 사라진다
+  await moveItemTo(ward, 0, 0.8);
+  check('떼어 놓으면 겹침 표시가 사라진다', (await violations()).length === 0, (await items()).map((i) => [i.name, round(i.x), round(i.z)]));
+
   for (const c of checks) console.log(c.ok ? 'PASS' : 'FAIL', c.name, c.detail ? JSON.stringify(c.detail) : '');
   process.exitCode = checks.every((c) => c.ok) ? 0 : 1;
 } finally {
