@@ -11,6 +11,7 @@ import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
 import type { SavedItem } from '@/lib/layout/saved';
 import { saveMyLayout, type SavedLayout } from '@/lib/layout/store';
+import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
@@ -55,6 +56,8 @@ type Props = {
   signedIn?: boolean;
   /** 이 방에 내가 저장해 둔 배치 */
   initialLayout?: SavedLayout | null;
+  /** 내가 만들어 둔 가구 */
+  userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
   initialOpenings?: Opening[];
 };
@@ -70,6 +73,7 @@ export default function SplatViewer({
   catalog,
   signedIn = false,
   initialLayout = null,
+  userFurniture,
   initialOpenings = NO_OPENINGS,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -324,6 +328,10 @@ export default function SplatViewer({
     [roomId],
   );
 
+  // 내 가구 만들기·지우기 (본인 권한으로 user_furniture에 직접)
+  const createFurniture = useCallback((value: UserFurnitureValue) => createUserFurniture(createClient(), value), []);
+  const deleteFurniture = useCallback((id: string) => deleteUserFurniture(createClient(), id), []);
+
   // 내 배치를 저장한다 (처음이면 새로 만들고, 그다음부터는 같은 배치를 고친다)
   const saveLayout = useCallback(
     async (items: SavedItem[]) => {
@@ -427,6 +435,9 @@ export default function SplatViewer({
           floorPolygon={room.polygon}
           catalog={catalog}
           openings={shownOpenings}
+          userFurniture={userFurniture}
+          onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
+          onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
           initialItems={layout?.items}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
