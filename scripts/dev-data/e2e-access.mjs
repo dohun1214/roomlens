@@ -71,9 +71,6 @@ const openRoom = async (page, roomId) => {
   await page.goto(`${appUrl}/rooms/${roomId}`);
   await page.getByTestId('furniture-panel').waitFor({ timeout: 120000 });
 };
-const openingsOf = async (page) => JSON.parse(await page.getByTestId('openings').getAttribute('data-json'));
-const dbOpenings = async (roomId) => (await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle()).data?.openings;
-const saveState = (page) => page.getByTestId('openings-save-state').getAttribute('data-state');
 /** 종류·벽·시작·폭을 넣고 "추가"를 누른다 */
 const addOpening = async (page, type, wall, from, width) => {
   await page.getByTestId('openings-type').selectOption(type);
@@ -82,7 +79,6 @@ const addOpening = async (page, type, wall, from, width) => {
   await page.getByTestId('openings-width').fill(String(width));
   await page.getByTestId('openings-add').click();
 };
-const messageOf = async (page) => ((await page.getByTestId('openings-message').count()) ? page.getByTestId('openings-message').innerText() : null);
 const DOOR = { type: 'door', wallIndex: 0, from: 0.2, to: 1.1, widthM: 0.9 };
 const WINDOW = { type: 'window', wallIndex: 2, from: 1, to: 2.2, widthM: 1.2 };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
