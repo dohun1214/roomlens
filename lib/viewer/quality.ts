@@ -27,11 +27,13 @@ export const DESKTOP_QUALITY: ViewerQuality = {
 
 // iPhone 15 Pro 실측(10/5): 200만 스플랫 방에서 Spark 기본값(iOS 150만)이면 돌릴 때 20FPS대,
 // 100만까지만 그리면 30~40FPS. 폰은 화면이 작아 배율을 조금 낮춰도 티가 덜 난다.
+// 시야 집중을 끄거나 50만 개로 줄이면 빨라지지만 화질이 눈에 띄게 나빠져 쓰지 않는다.
 export const MOBILE_QUALITY: ViewerQuality = {
   lodSplatCount: 800_000,
   pixelRatioCap: 1.25,
   lodRenderScale: 1,
-  minSortIntervalMs: 0,
+  // 화면을 돌릴 때마다 정렬하면 30FPS까지 떨어졌다. 0.2초 간격으로 줄이면 60FPS 유지 (iPhone 15 Pro, 10/5)
+  minSortIntervalMs: 200,
   foveation: true,
 };
 
