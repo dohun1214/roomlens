@@ -35,7 +35,11 @@ async function measure(contextOptions, query = '') {
   await page.waitForFunction(() => document.querySelector('[data-testid=viewer-stats]')?.textContent?.includes('ready'), null, { timeout: 120000 });
   await page.waitForTimeout(5000);
   const el = page.getByTestId('viewer-drawn');
-  const result = { drawn: Number(await el.getAttribute('data-drawn')), pixelRatio: Number(await el.getAttribute('data-pixel-ratio')) };
+  const result = {
+    drawn: Number(await el.getAttribute('data-drawn')),
+    pixelRatio: Number(await el.getAttribute('data-pixel-ratio')),
+    motion: await el.getAttribute('data-motion'),
+  };
   await context.close();
   return result;
 }
@@ -52,6 +56,10 @@ try {
 
   const p = await measure(phone);
   check('폰 기본: 80만 개 이하, 배율 1.25', p.drawn > 0 && p.drawn <= 800_000 && p.pixelRatio === 1.25, p);
+
+  const motion = await measure(phone, '&sort=200&fov=off');
+  check('폰 ?sort=200&fov=off: 정렬 200ms, 시야 집중 끔으로 열리고 80만 개 이하', motion.motion === '정렬 200ms · 시야 집중 끔' && motion.drawn > 0 && motion.drawn <= 800_000, motion);
+  check('기본은 정렬 0ms, 시야 집중 켬', p.motion === '정렬 0ms · 시야 집중 켬', p.motion);
 
   const pLod = await measure(phone, '&lod=1500000&pr=2');
   check('폰 ?lod=1500000&pr=2: 기본값보다 많이 그리고 배율 2', pLod.drawn > 800_000 && pLod.pixelRatio === 2, pLod);
