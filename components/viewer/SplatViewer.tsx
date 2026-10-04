@@ -4,11 +4,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
-import CalibrationTool from './CalibrationTool';
+import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { setObjectRoomTransform } from '@/lib/three/roomTransform';
+import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
+import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
 
@@ -36,13 +39,19 @@ type Props = {
   url?: string;
   /** 화면에 보여줄 이름 (없으면 주소) */
   name?: string;
+  /** 방에 저장된 보정. 있으면 방 좌표(바닥 y=0, m)로 옮기고 방 안에서 시작한다 */
+  calibration?: SavedCalibration | null;
+  /** 보정을 저장할 방 (방 주인일 때만 canEdit) */
+  roomId?: string;
+  canEdit?: boolean;
 };
 
-export default function SplatViewer({ url, name }: Props) {
+export default function SplatViewer({ url, name, calibration = null, roomId, canEdit = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const loadSeq = useRef(0);
-  const flippedRef = useRef(false);
+  const flippedRef = useRef(calibration?.flipX ?? false);
+  const calibrationRef = useRef(calibration);
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
@@ -50,7 +59,7 @@ export default function SplatViewer({ url, name }: Props) {
   const [drawn, setDrawn] = useState<number | null>(null);
   const [pixelRatio, setPixelRatio] = useState(1);
   const [motionInfo, setMotionInfo] = useState('');
-  const [flipped, setFlipped] = useState(false);
+  const [flipped, setFlipped] = useState(calibration?.flipX ?? false);
   // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
   const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
   const [urlInput, setUrlInput] = useState(
@@ -184,7 +193,21 @@ export default function SplatViewer({ url, name }: Props) {
       engine.splat = splat;
       const loadMs = performance.now() - t0;
 
-      frameCamera(engine, splat);
+      const saved = source.kind === 'url' ? calibrationRef.current : null;
+      if (saved) {
+        // 저장된 보정: 방 좌표로 옮기고 방 안에서 방 가운데를 보며 시작한다
+        setObjectRoomTransform(engine.roomGroup, saved.transform);
+        const pose = startPoseForRoom(saved.floorPolygon);
+        engine.camera.position.set(...pose.position);
+        engine.controls.target.set(...pose.target);
+        engine.camera.near = 0.05;
+        engine.camera.far = 200;
+        engine.camera.updateProjectionMatrix();
+        engine.controls.update();
+        setRoom({ key: `${name}|${loadMs}|${flippedRef.current}`, polygon: saved.floorPolygon });
+      } else {
+        frameCamera(engine, splat);
+      }
 
       // lod: true 이면 원본 배열은 비고 LOD 트리(lodSplats)만 남는다.
       const packed = splat.packedSplats;
@@ -227,6 +250,21 @@ export default function SplatViewer({ url, name }: Props) {
 
   const sceneKey = `${stats.name}|${stats.loadMs}|${flipped}`;
 
+  // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
+  const saveCalibration = useCallback(
+    async (applied: AppliedCalibration) => {
+      if (!roomId) return false;
+      const { data, error } = await createClient()
+        .from('rooms')
+        .update(toCalibrationColumns({ ...applied, flipX: flippedRef.current }))
+        .eq('id', roomId)
+        .select('id')
+        .maybeSingle();
+      return !error && data !== null;
+    },
+    [roomId],
+  );
+
   return (
     <div className="relative h-full w-full">
       <div ref={containerRef} className="absolute inset-0 touch-none" />
@@ -262,9 +300,12 @@ export default function SplatViewer({ url, name }: Props) {
           </label>
             </>
           )}
-          <button className="rounded bg-white/20 px-2 py-1" onClick={toggleFlip}>
-            X축 180° {flipped ? 'ON' : 'OFF'}
-          </button>
+          {/* 저장된 보정은 뒤집기 상태까지 포함하므로 보정된 방에서는 바꾸지 않는다 */}
+          {!calibration && (
+            <button className="rounded bg-white/20 px-2 py-1" onClick={toggleFlip}>
+              X축 180° {flipped ? 'ON' : 'OFF'}
+            </button>
+          )}
         </div>
         <div className="font-mono" data-testid="viewer-stats">
           <div>
@@ -310,10 +351,13 @@ export default function SplatViewer({ url, name }: Props) {
       {stats.status === 'ready' && room?.key === sceneKey && (
         <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} />
       )}
-      {stats.status === 'ready' && (
+      {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}
+      {stats.status === 'ready' && (!url || canEdit) && (
         <CalibrationTool
           key={sceneKey}
           engineRef={engineRef}
+          initial={url && calibration ? { transform: calibration.transform, floorPolygon: calibration.floorPolygon } : null}
+          onSave={roomId && canEdit ? saveCalibration : undefined}
           onApplied={(polygon) => setRoom(polygon ? { key: sceneKey, polygon } : null)}
         />
       )}

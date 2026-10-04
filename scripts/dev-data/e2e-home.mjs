@@ -1,6 +1,6 @@
 // 홈 실측: 내 방 목록(비공개·올리는 중 포함)과 공개 방 목록, 남에게 보이는 범위.
 // 시험용 계정·방·R2 파일은 끝나면 지운다 (secret key, R2 키 필요).
-// 준비: npm run dev, ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/converted 에 .sog 파일
+// 준비: npm run dev, ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/studio11_1m_up.sog (CC BY 샘플)
 // 실행: node --env-file=.env.local scripts/dev-data/e2e-home.mjs [장면 이름]
 import { createRequire } from 'node:module';
 import { statSync } from 'node:fs';
@@ -15,8 +15,11 @@ const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
 
 const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
-const scene = process.argv[2] ?? '0194_840128';
-const scenePath = path.join(dataDir, 'converted', `${scene}.sog`);
+// 이 실측은 방을 잠깐 공개로 바꾼다. 로컬 개발 서버도 운영과 같은 DB·R2를 쓰므로
+// 다시 배포해도 되는 파일(CC BY 샘플)을 기본으로 쓴다. 장면 이름을 주면 converted 폴더의 파일을 쓴다.
+const scenePath = process.argv[2]
+  ? path.join(dataDir, 'converted', `${process.argv[2]}.sog`)
+  : path.join(dataDir, 'samples', 'studio11_1m_up.sog');
 const sceneBytes = statSync(scenePath).size;
 const email = `e2e-${Date.now()}@${process.env.E2E_EMAIL_DOMAIN ?? 'roomlens.test'}`;
 const password = `pw-${Math.random().toString(36).slice(2, 12)}A1`;
@@ -74,7 +77,7 @@ try {
 
   // 3) 방 두 개: 다 올린 데이터셋 방, 올리다 만 방
   await page.route('**/__e2e_scene', (route) => route.fulfill({ path: scenePath, contentType: 'application/octet-stream' }));
-  const readyId = (await api('POST', '/api/rooms', { title: '홈 실측 방', description: '목록에 보일 설명', consent: true, source: 'dataset', credit: 'InteriorGS (시험용)' })).json.room.id;
+  const readyId = (await api('POST', '/api/rooms', { title: '홈 실측 방', description: '목록에 보일 설명', consent: true, source: 'dataset', credit: 'Studio 11 by milanoski (SuperSplat), CC BY 4.0' })).json.room.id;
   const signed = await api('POST', '/api/upload-url', { roomId: readyId, kind: 'splat', format: 'sog', size: sceneBytes });
   const putStatus = await page.evaluate(
     async ({ url, headers }) => (await fetch(url, { method: 'PUT', headers, body: await (await fetch('/__e2e_scene')).blob() })).status,

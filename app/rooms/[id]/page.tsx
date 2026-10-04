@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
+import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
@@ -20,7 +21,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   const supabase = await createClient();
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit')
+    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon')
     .eq('id', id)
     .maybeSingle();
   if (!room) notFound();
@@ -57,7 +58,13 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
 
       <div className="relative min-h-0 flex-1 bg-neutral-900">
         {splatUrl ? (
-          <SplatViewer url={splatUrl} name={room.title} />
+          <SplatViewer
+            url={splatUrl}
+            name={room.title}
+            calibration={parseSavedCalibration(room.transform, room.floor_polygon)}
+            roomId={room.id}
+            canEdit={isOwner}
+          />
         ) : (
           <p className="p-6 text-sm text-neutral-300" data-testid="room-not-ready">
             아직 3D 파일을 올리지 않은 방입니다. 방을 지우고 새로 만들어 주세요.
