@@ -294,9 +294,14 @@ function frameCamera(engine: Engine, splat: SplatMesh) {
   splat.updateMatrixWorld(true);
   box.applyMatrix4(splat.matrixWorld);
   const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3()).length();
+  const extent = box.getSize(new THREE.Vector3());
+  const size = extent.length();
   engine.controls.target.copy(center);
-  engine.camera.position.copy(center).add(new THREE.Vector3(0, size * 0.2, size * 0.7));
+  // 방 안에서 둘러보는 구도: 방 가운데를 보면서, 긴 쪽으로 조금 물러난 눈높이쯤에 선다.
+  // (밖에서 보면 벽 뒷면의 큰 스플랫에 가려 흐리게 보인다)
+  const alongX = extent.x >= extent.z;
+  const back = (alongX ? extent.x : extent.z) * 0.3;
+  engine.camera.position.copy(center).add(new THREE.Vector3(alongX ? back : 0, extent.y * 0.1, alongX ? 0 : back));
   engine.camera.near = Math.max(0.01, size / 1000);
   engine.camera.far = Math.max(100, size * 10);
   engine.camera.updateProjectionMatrix();
