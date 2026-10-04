@@ -4,6 +4,7 @@ import {
   detectSplatFormat,
   isSplatFormat,
   MAX_SPLAT_BYTES,
+  roomPrefix,
   splatKeyFor,
 } from '@/lib/upload/splatFile';
 
@@ -74,6 +75,12 @@ describe('splatKeyFor / isSplatFormat', () => {
     expect(splatKeyFor('3f0c1a52-0000-4000-8000-000000000001', 'spz')).toBe(
       'rooms/3f0c1a52-0000-4000-8000-000000000001/scene.spz',
     );
+  });
+
+  it('방 경로는 "/"로 끝나고 파일 키는 그 아래에 있다', () => {
+    const id = '3f0c1a52-0000-4000-8000-000000000001';
+    expect(roomPrefix(id)).toBe(`rooms/${id}/`);
+    expect(splatKeyFor(id, 'ply').startsWith(roomPrefix(id))).toBe(true);
   });
 
   it('형식 이름 확인', () => {

@@ -1,8 +1,10 @@
 import 'server-only';
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
   S3ServiceException,
@@ -82,4 +84,25 @@ export async function readObjectHead(key: string, bytes: number): Promise<Uint8A
 
 export async function deleteObject(key: string): Promise<void> {
   await r2().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
+}
+
+/**
+ * prefix 아래의 객체를 모두 지우고 지운 개수를 돌려준다.
+ * prefix는 반드시 "/"로 끝나야 한다 ("rooms/ab"가 "rooms/abc/..."까지 지우는 일을 막는다).
+ */
+export async function deletePrefix(prefix: string): Promise<number> {
+  if (!prefix.endsWith('/') || prefix === '/') throw new Error(`잘못된 prefix: ${prefix}`);
+  let removed = 0;
+  let token: string | undefined;
+  do {
+    const page = await r2().send(new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token }));
+    const objects = (page.Contents ?? []).flatMap((o) => (o.Key ? [{ Key: o.Key }] : []));
+    if (objects.length) {
+      const res = await r2().send(new DeleteObjectsCommand({ Bucket: bucket(), Delete: { Objects: objects, Quiet: true } }));
+      if (res.Errors?.length) throw new Error(`R2 삭제 실패 ${res.Errors.length}건`);
+      removed += objects.length;
+    }
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return removed;
 }

@@ -48,3 +48,11 @@ describe('presignGet', () => {
     expect(url.searchParams.get('X-Amz-Expires')).toBe('3600');
   });
 });
+
+describe('deletePrefix', () => {
+  it('"/"로 끝나지 않는 prefix는 거부한다 (옆 방 파일까지 지우는 일 방지)', async () => {
+    await expect(r2.deletePrefix('rooms/abc')).rejects.toThrow('잘못된 prefix');
+    await expect(r2.deletePrefix('')).rejects.toThrow('잘못된 prefix');
+    await expect(r2.deletePrefix('/')).rejects.toThrow('잘못된 prefix');
+  });
+});

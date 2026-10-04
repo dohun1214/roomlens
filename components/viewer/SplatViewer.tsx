@@ -27,7 +27,14 @@ type Stats = {
 const FLIP_X = new THREE.Quaternion(1, 0, 0, 0);
 const IDENTITY = new THREE.Quaternion();
 
-export default function SplatViewer() {
+type Props = {
+  /** 방 화면에서 쓸 때 열 파일 주소. 주면 개발용 URL 입력칸·파일 열기를 숨긴다 */
+  url?: string;
+  /** 화면에 보여줄 이름 (없으면 주소) */
+  name?: string;
+};
+
+export default function SplatViewer({ url, name }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
   const loadSeq = useRef(0);
@@ -38,7 +45,7 @@ export default function SplatViewer() {
   // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
   const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
   const [urlInput, setUrlInput] = useState(
-    () => new URLSearchParams(window.location.search).get('url') || SAMPLE_SPLAT_URL,
+    () => url ?? (new URLSearchParams(window.location.search).get('url') || SAMPLE_SPLAT_URL),
   );
 
   // three.js + Spark 초기화 (한 번만)
@@ -193,6 +200,8 @@ export default function SplatViewer() {
 
       <div className="absolute left-2 top-2 max-w-[calc(100%-1rem)] space-y-2 rounded bg-black/70 p-3 text-xs text-white">
         <div className="flex flex-wrap items-center gap-2">
+          {!url && (
+            <>
           <input
             className="w-64 max-w-full rounded bg-white/10 px-2 py-1"
             value={urlInput}
@@ -218,6 +227,8 @@ export default function SplatViewer() {
               }}
             />
           </label>
+            </>
+          )}
           <button className="rounded bg-white/20 px-2 py-1" onClick={toggleFlip}>
             X축 180° {flipped ? 'ON' : 'OFF'}
           </button>
@@ -227,7 +238,7 @@ export default function SplatViewer() {
             상태: {stats.status}
             {stats.error ? ` (${stats.error})` : ''}
           </div>
-          <div className="truncate">파일: {stats.name}</div>
+          <div className="truncate">파일: {name ?? stats.name}</div>
           {stats.loadMs !== undefined && <div>로딩: {(stats.loadMs / 1000).toFixed(2)}초</div>}
           {stats.numSplats !== undefined && (
             <div>
@@ -283,9 +294,14 @@ function frameCamera(engine: Engine, splat: SplatMesh) {
   splat.updateMatrixWorld(true);
   box.applyMatrix4(splat.matrixWorld);
   const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3()).length();
+  const extent = box.getSize(new THREE.Vector3());
+  const size = extent.length();
   engine.controls.target.copy(center);
-  engine.camera.position.copy(center).add(new THREE.Vector3(0, size * 0.2, size * 0.7));
+  // 방 안에서 둘러보는 구도: 방 가운데를 보면서, 긴 쪽으로 조금 물러난 눈높이쯤에 선다.
+  // (밖에서 보면 벽 뒷면의 큰 스플랫에 가려 흐리게 보인다)
+  const alongX = extent.x >= extent.z;
+  const back = (alongX ? extent.x : extent.z) * 0.3;
+  engine.camera.position.copy(center).add(new THREE.Vector3(alongX ? back : 0, extent.y * 0.1, alongX ? 0 : back));
   engine.camera.near = Math.max(0.01, size / 1000);
   engine.camera.far = Math.max(100, size * 10);
   engine.camera.updateProjectionMatrix();

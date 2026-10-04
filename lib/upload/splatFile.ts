@@ -57,9 +57,14 @@ export function checkSplatFile(size: number, head: Uint8Array): SplatFileCheck {
   return { ok: true, format };
 }
 
+/** 방 하나의 파일이 모두 들어가는 R2 경로. 방을 지울 때 이 아래를 전부 지운다 */
+export function roomPrefix(roomId: string): string {
+  return `rooms/${roomId}/`;
+}
+
 /** R2 키: rooms/{roomId}/scene.{형식} */
 export function splatKeyFor(roomId: string, format: SplatFormat): string {
-  return `rooms/${roomId}/scene.${format}`;
+  return `${roomPrefix(roomId)}scene.${format}`;
 }
 
 export function isSplatFormat(value: unknown): value is SplatFormat {
