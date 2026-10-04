@@ -1,6 +1,6 @@
 // 방 상세 페이지 실측: 3D 투어, 공개/비공개, 삭제(R2 파일 포함), 남의 방 접근 차단.
 // 시험용 계정·방·R2 파일은 끝나면 지운다 (secret key, R2 키 필요).
-// 준비: npm run dev, ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/converted 에 .sog 파일
+// 준비: npm run dev, ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/studio11_1m_up.sog (CC BY 샘플)
 // 실행: node --env-file=.env.local scripts/dev-data/e2e-room-detail.mjs [장면 이름]
 import { createRequire } from 'node:module';
 import { statSync } from 'node:fs';
@@ -15,8 +15,11 @@ const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
 
 const appUrl = process.env.APP_URL ?? 'http://localhost:3000';
-const scene = process.argv[2] ?? '0194_840128';
-const scenePath = path.join(dataDir, 'converted', `${scene}.sog`);
+// 이 실측은 방을 잠깐 공개로 바꾼다. 로컬 개발 서버도 운영과 같은 DB·R2를 쓰므로
+// 다시 배포해도 되는 파일(CC BY 샘플)을 기본으로 쓴다. 장면 이름을 주면 converted 폴더의 파일을 쓴다.
+const scenePath = process.argv[2]
+  ? path.join(dataDir, 'converted', `${process.argv[2]}.sog`)
+  : path.join(dataDir, 'samples', 'studio11_1m_up.sog');
 const sceneBytes = statSync(scenePath).size;
 const stamp = Date.now();
 const domain = process.env.E2E_EMAIL_DOMAIN ?? 'roomlens.test';
