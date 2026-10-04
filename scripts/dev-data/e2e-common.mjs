@@ -95,7 +95,7 @@ export function toScreen(page, point) {
  * 보정 패널을 열고 바닥 3곳 + 모서리 4곳을 실제로 클릭한 뒤 벽 1 길이를 입력한다.
  * @returns 화면에 표시된 보정 결과(data-json)와 정답
  */
-export async function calibrate(page, scene, { shots = false, alreadyOpen = false } = {}) {
+export async function calibrate(page, scene, { shots = false, alreadyOpen = false, midWall = false } = {}) {
   const cornerY = Number(process.env.CORNER_Y ?? 2.3);
   const jitterPx = Number(process.env.JITTER_PX ?? 0);
   const truth = loadTruth(scene, cornerY);
@@ -122,14 +122,18 @@ export async function calibrate(page, scene, { shots = false, alreadyOpen = fals
     await tap([x + 0.01, 2.2, z + 0.01], [x, 0, z], `cal-${scene}-floor${i + 1}.png`);
   }
   // 2) 모서리 네 곳: 방 안쪽에서 모서리를 바라보고 탭
-  for (const [i, corner] of corners.entries()) {
+  // midWall: 벽 1의 가운데에도 한 점을 찍어 모서리를 다섯 개로 만든다 (모서리 수가 자유로운지 확인용)
+  const targets = midWall ? [corners[0], corners[0].map((v, k) => (v + corners[1][k]) / 2), ...corners.slice(1)] : corners;
+  for (const [i, corner] of targets.entries()) {
     const inward = [center[0] - corner[0], center[1] - corner[2]];
     const len = Math.hypot(inward[0], inward[1]);
     const back = cornerY > 0 ? 1.8 : 1.0;
     const eye = [corner[0] + (inward[0] / len) * back, cornerY > 0 ? 1.5 : 1.4, corner[2] + (inward[1] / len) * back];
     await tap(eye, corner, `cal-${scene}-corner${i + 1}.png`);
   }
-  await page.getByTestId('calibration-length').fill(truth.wallLengths[0].toFixed(3));
+  // 모서리 수가 정해져 있지 않으므로 다 찍었다고 알려 준다
+  await page.getByTestId('calibration-corners-done').click();
+  await page.getByTestId('calibration-length').fill((truth.wallLengths[0] / (midWall ? 2 : 1)).toFixed(3));
 
   if (!(await page.getByTestId('calibration-result').isVisible())) {
     const panel = (await page.getByTestId('calibration-panel').innerText()).replace(/\s+/g, ' ');

@@ -23,10 +23,11 @@ import type { Engine } from './engine';
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다. */
 const TAP_MOVE_PX = 6;
 const FLOOR_TAPS = 3;
-const CORNER_TAPS = 4;
-const TOTAL_TAPS = FLOOR_TAPS + CORNER_TAPS;
+const MIN_CORNERS = 3;
+const MAX_CORNERS = 32;
 const FLOOR_COLOR = 0xffffff;
-const CORNER_COLORS = [0xff5a5a, 0xffb020, 0x3ecf6e, 0x4c9bff];
+const CORNER_COLORS = [0xff5a5a, 0xffb020, 0x3ecf6e, 0x4c9bff, 0xc77dff, 0x2ec4b6, 0xff8fab, 0xd4e157];
+const cornerColor = (i: number) => CORNER_COLORS[i % CORNER_COLORS.length];
 const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 
 type Tap = {
@@ -61,6 +62,10 @@ export default function CalibrationTool({
 }) {
   const [active, setActive] = useState(initial !== null);
   const [taps, setTaps] = useState<Tap[]>([]);
+  // 모서리를 다 찍었는지 (모서리 수가 정해져 있지 않으므로 사용자가 알려준다)
+  const [cornersDone, setCornersDone] = useState(false);
+  // 벽을 직각으로 맞출지
+  const [square, setSquare] = useState(true);
   const [length, setLength] = useState('');
   const [applied, setApplied] = useState<RoomTransform | null>(initial?.transform ?? null);
   const [appliedPolygon, setAppliedPolygon] = useState<[number, number][] | null>(initial?.floorPolygon ?? null);
@@ -69,7 +74,7 @@ export default function CalibrationTool({
 
   const floorCount = Math.min(taps.length, FLOOR_TAPS);
   const cornerCount = Math.max(0, taps.length - FLOOR_TAPS);
-  const picking = active && !applied && taps.length < TOTAL_TAPS;
+  const picking = active && !applied && (taps.length < FLOOR_TAPS || (!cornersDone && cornerCount < MAX_CORNERS));
 
   // 탭 → 스플랫 표면의 점 추가
   useEffect(() => {
@@ -98,7 +103,7 @@ export default function CalibrationTool({
         r: hit.distance * 0.012,
         cam: engine.roomGroup.worldToLocal(engine.camera.position.clone()),
       };
-      setTaps((prev) => (prev.length >= TOTAL_TAPS ? prev : [...prev, tap]));
+      setTaps((prev) => (prev.length >= FLOOR_TAPS + MAX_CORNERS ? prev : [...prev, tap]));
     };
 
     el.addEventListener('pointerdown', onDown);
@@ -125,7 +130,7 @@ export default function CalibrationTool({
 
   const outcome = useMemo<{ cal: TapCalibration | null; error: string | null }>(() => {
     const realLength = Number(length);
-    if (taps.length !== TOTAL_TAPS || !floor.plane || !length.trim() || !(realLength > 0)) {
+    if (!cornersDone || cornerCount < MIN_CORNERS || !floor.plane || !length.trim() || !(realLength > 0)) {
       return { cal: null, error: null };
     }
     try {
@@ -134,12 +139,13 @@ export default function CalibrationTool({
         taps.slice(FLOOR_TAPS).map((t) => t.p),
         realLength,
         floor.plane.normal,
+        { square },
       );
       return { cal, error: null };
     } catch (err) {
       return { cal: null, error: describeError(err) };
     }
-  }, [taps, length, floor.plane]);
+  }, [taps, length, floor.plane, cornersDone, cornerCount, square]);
 
   // 찍은 점 표시 (roomGroup의 자식이라 보정을 적용하면 함께 움직인다)
   useEffect(() => {
@@ -162,7 +168,7 @@ export default function CalibrationTool({
       const isFloor = i < FLOOR_TAPS;
       const geometry = new THREE.SphereGeometry(isFloor ? tap.r * 0.7 : tap.r, 16, 12);
       const material = new THREE.MeshBasicMaterial({
-        color: isFloor ? FLOOR_COLOR : CORNER_COLORS[i - FLOOR_TAPS],
+        color: isFloor ? FLOOR_COLOR : cornerColor(i - FLOOR_TAPS),
         ...overlay,
       });
       const marker = new THREE.Mesh(geometry, material);
@@ -174,11 +180,11 @@ export default function CalibrationTool({
 
     // 모서리 탭 → 바닥으로 내린 점까지의 세로선, 바닥 위의 방 외곽선
     floor.corners.forEach((corner, i) => {
-      addLine([taps[FLOOR_TAPS + i].p, corner], CORNER_COLORS[i], 0.8);
+      addLine([taps[FLOOR_TAPS + i].p, corner], cornerColor(i), 0.8);
     });
     if (floor.corners.length >= 2) {
       const outline = [...floor.corners];
-      if (outline.length === CORNER_TAPS) outline.push(floor.corners[0]);
+      if (cornersDone) outline.push(floor.corners[0]);
       addLine(outline, 0xffffff);
     }
 
@@ -187,7 +193,7 @@ export default function CalibrationTool({
       engine.roomGroup.remove(group);
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, taps, floor.corners]);
+  }, [engineRef, taps, floor.corners, cornersDone]);
 
   // 보정 적용 후 바닥(y=0)에 1m 격자 표시
   useEffect(() => {
@@ -251,7 +257,25 @@ export default function CalibrationTool({
     setSaveState('dirty');
     onApplied?.(null);
     setTaps([]);
+    setCornersDone(false);
     setMessage(null);
+  };
+
+  // "파일 단위 그대로": 크기 배율이 1이 되는 벽 1의 길이를 채운다 (직각으로 맞추면 벽 1의 길이가 찍은 두 점 사이와 조금 다르다)
+  const keepScale = () => {
+    if (!floor.plane || cornerCount < MIN_CORNERS) return;
+    try {
+      const probe = calibrateRoomFromTaps(
+        taps.slice(0, FLOOR_TAPS).map((t) => t.p),
+        taps.slice(FLOOR_TAPS).map((t) => t.p),
+        1,
+        floor.plane.normal,
+        { square },
+      );
+      setLength((probe.wallLengths[0] / probe.transform.s).toFixed(3));
+    } catch {
+      setLength(floor.corners[0].distanceTo(floor.corners[1]).toFixed(3));
+    }
   };
 
   const save = async () => {
@@ -305,7 +329,7 @@ export default function CalibrationTool({
   }
 
   const cal = outcome.cal;
-  const step = applied ? 4 : taps.length < FLOOR_TAPS ? 1 : taps.length < TOTAL_TAPS ? 2 : cal ? 4 : 3;
+  const step = applied ? 4 : taps.length < FLOOR_TAPS ? 1 : !cornersDone ? 2 : cal ? 4 : 3;
   const stepClass = (n: number) => (step === n ? 'font-bold' : 'opacity-60');
   const dot = (filled: boolean, color: number, key: number) => (
     <span
@@ -342,11 +366,25 @@ export default function CalibrationTool({
           </div>
         </li>
         <li className={stepClass(2)}>
-          방 모서리 네 곳을 차례로 탭 ({cornerCount}/{CORNER_TAPS})
+          방 모서리를 벽을 따라 차례로 탭 ({cornerCount}개 찍음, {MIN_CORNERS}개 이상)
           <div className="font-normal opacity-80">
             바닥 모서리가 가구에 가려졌으면 두 벽이 만나는 세로 선 위 아무 높이나 찍으세요.
           </div>
-          <div className="mt-1 flex gap-1">{CORNER_COLORS.map((color, i) => dot(i < cornerCount, color, i))}</div>
+          <div className="font-normal opacity-80">ㄱ자처럼 꺾인 방은 꺾이는 곳마다 찍습니다. 다 찍었으면 아래 버튼을 누르세요.</div>
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {Array.from({ length: Math.max(cornerCount, 4) }, (_, i) => dot(i < cornerCount, cornerColor(i), i))}
+            {!cornersDone && (
+              <button
+                type="button"
+                className="ml-1 rounded bg-emerald-600 px-2 py-0.5 font-normal disabled:opacity-40"
+                disabled={cornerCount < MIN_CORNERS}
+                onClick={() => setCornersDone(true)}
+                data-testid="calibration-corners-done"
+              >
+                모서리 다 찍음
+              </button>
+            )}
+          </div>
         </li>
         <li className={stepClass(3)}>
           벽 1(첫째→둘째 모서리)의 실제 길이
@@ -361,11 +399,11 @@ export default function CalibrationTool({
               data-testid="calibration-length"
             />
             <span>m</span>
-            {floor.corners.length >= 2 && (
+            {cornersDone && (
               <button
                 type="button"
                 className="rounded bg-white/20 px-2 py-1 font-normal"
-                onClick={() => setLength(floor.corners[0].distanceTo(floor.corners[1]).toFixed(3))}
+                onClick={keepScale}
                 data-testid="calibration-keep-scale"
               >
                 파일 단위 그대로
@@ -376,7 +414,14 @@ export default function CalibrationTool({
             줄자로 잴 수 없는 데이터셋 방은, 파일이 이미 미터 단위라면 &ldquo;파일 단위 그대로&rdquo;를 누르세요.
           </div>
         </li>
-        <li className={stepClass(4)}>다른 벽 길이가 줄자 값과 맞는지 확인 후 적용</li>
+        <li className={stepClass(4)}>
+          다른 벽 길이가 줄자 값과 맞는지 확인 후 적용
+          <label className="mt-1 flex items-center gap-1 font-normal">
+            <input type="checkbox" checked={square} onChange={(e) => setSquare(e.target.checked)} data-testid="calibration-square" />
+            벽을 직각으로 맞추기
+          </label>
+          <div className="font-normal opacity-80">모서리가 가구에 가려 조금 틀리게 찍혀도 벽이 반듯하게 잡힙니다.</div>
+        </li>
       </ol>
 
       {message && <p className="text-amber-300">{message}</p>}
@@ -393,16 +438,18 @@ export default function CalibrationTool({
             floorPolygon: cal.floorPolygon,
             floorPoints: taps.slice(0, FLOOR_TAPS).map((t) => t.p.toArray()),
             applied: applied !== null,
+            squared: cal.squared,
           })}
         >
           {cal.wallLengths.map((len, i) => (
             <div key={i}>
-              <span style={{ color: hex(CORNER_COLORS[i]) }}>●</span>
-              <span style={{ color: hex(CORNER_COLORS[(i + 1) % CORNER_TAPS]) }}>●</span> 벽 {i + 1}:{' '}
+              <span style={{ color: hex(cornerColor(i)) }}>●</span>
+              <span style={{ color: hex(cornerColor((i + 1) % cal.wallLengths.length)) }}>●</span> 벽 {i + 1}:{' '}
               {len.toFixed(2)} m{i === 0 ? ' (입력값)' : ''}
             </div>
           ))}
           <div>배율: ×{cal.transform.s.toFixed(3)}</div>
+          {square && !cal.squared && <div className="font-sans text-amber-300">비스듬한 벽이 있어 직각으로 맞추지 않고 찍은 그대로 씁니다.</div>}
         </div>
       )}
 
@@ -418,7 +465,13 @@ export default function CalibrationTool({
           </button>
         )}
         {!applied && taps.length > 0 && (
-          <button className="rounded bg-white/20 px-2 py-1" onClick={() => setTaps((prev) => prev.slice(0, -1))}>
+          <button
+            className="rounded bg-white/20 px-2 py-1"
+            onClick={() => {
+              setTaps((prev) => prev.slice(0, -1));
+              setCornersDone(false);
+            }}
+          >
             마지막 점 취소
           </button>
         )}

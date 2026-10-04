@@ -61,7 +61,7 @@ export type TapCalibration = RoomCalibration & {
 };
 
 /**
- * 바닥 세 점 + 모서리 네 점(높이 무관) + 실제 길이 하나로 방을 보정한다.
+ * 바닥 세 점 + 모서리 셋 이상(높이 무관) + 실제 길이 하나로 방을 보정한다.
  * 실제 길이는 기본적으로 벽 1(첫째→둘째 모서리)의 바닥 길이다.
  */
 export function calibrateRoomFromTaps(
@@ -69,10 +69,11 @@ export function calibrateRoomFromTaps(
   cornerTaps: THREE.Vector3[],
   realLength: number,
   upHint: THREE.Vector3,
+  options: { square?: boolean } = {},
 ): TapCalibration {
   const plane = fitFloorPlane(floorPoints, upHint);
   const floorCorners = cornerTaps.map((p) => projectToFloor(p, plane));
-  const cal = calibrateRoom(floorCorners, realLength, plane.normal);
+  const cal = calibrateRoom(floorCorners, realLength, plane.normal, undefined, options);
   const cornerHeights = cornerTaps.map((p) => heightAboveFloor(p, plane) * cal.transform.s);
   return { ...cal, floorCorners, cornerHeights };
 }

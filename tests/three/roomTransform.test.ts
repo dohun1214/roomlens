@@ -194,9 +194,20 @@ describe('잘못된 입력', () => {
     return 'NO_ERROR';
   };
 
-  it('모서리가 네 개가 아니면 CORNER_COUNT', () => {
-    const c = rectangle(3, 4).slice(0, 3);
+  it('모서리가 셋보다 적으면 CORNER_COUNT', () => {
+    const c = rectangle(3, 4).slice(0, 2);
     expect(code(() => computeRoomTransform(c, [c[0], c[1]], 3, v(0, 1, 0)))).toBe('CORNER_COUNT');
+  });
+
+  it('모서리 셋(삼각형 방)이나 다섯 이상도 된다', () => {
+    const triangle = rectangle(3, 4).slice(0, 3);
+    const tr = computeRoomTransform(triangle, [triangle[0], triangle[1]], 3, v(0, 1, 0));
+    expect(tr.s).toBeCloseTo(1);
+    const five = [v(0, 0, 0), v(4, 0, 0), v(4, 0, 2), v(2, 0, 3), v(0, 0, 2)];
+    const cal = calibrateRoom(five, 8, v(0, 1, 0));
+    expect(cal.transform.s).toBeCloseTo(2);
+    expect(cal.floorPolygon).toHaveLength(5);
+    expect(cal.floorError).toBeCloseTo(0);
   });
 
   it('모서리가 한 직선 위에 있으면 DEGENERATE_FLOOR', () => {

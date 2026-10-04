@@ -2,7 +2,7 @@
 import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import type { Opening } from '@/lib/rooms/openings';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
-import { footprintInsideRoom, footprintsOverlap } from './geometry';
+import { footprintInsideRoom, footprintsOverlap, interiorPoint } from './geometry';
 
 /** h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다 */
 export type LayoutItem = Footprint & { id: string; name: string; h?: number };
@@ -91,10 +91,8 @@ const SEARCH_RADIUS = 6;
  */
 export function findFreeSpot(size: Pick<Footprint, 'w' | 'd'>, others: Footprint[], floorPolygon: Point2[] | null): Footprint {
   const polygon = floorPolygon && floorPolygon.length >= 3 ? floorPolygon : null;
-  const center: Point2 = polygon
-    ? // 꼭짓점의 평균. 보정된 방은 네 모서리의 중심이 원점이라 정확히 (0, 0)이 된다
-      [polygon.reduce((s, p) => s + p[0], 0) / polygon.length, polygon.reduce((s, p) => s + p[1], 0) / polygon.length]
-    : [0, 0];
+  // 사각형 방에서는 방 가운데(보정된 방은 정확히 원점), 오목한 방에서는 벽에서 가장 먼 곳
+  const center: Point2 = polygon ? interiorPoint(polygon) : [0, 0];
   const at = (dx: number, dz: number) => placeOnFloor({ x: center[0] + dx, z: center[1] + dz, w: size.w, d: size.d, rotationDeg: 0 }, polygon);
   const fits = (f: Footprint) => (!polygon || footprintInsideRoom(f, polygon)) && others.every((o) => !footprintsOverlap(f, o));
 
