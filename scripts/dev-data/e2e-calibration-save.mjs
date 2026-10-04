@@ -7,7 +7,7 @@ import { statSync } from 'node:fs';
 import path from 'node:path';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
-import { calibrate, dataDir, round } from './e2e-common.mjs';
+import { calibrate, dataDir, moveCamera, round, toScreen } from './e2e-common.mjs';
 
 const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
@@ -121,11 +121,58 @@ try {
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'calibration-saved.png') });
 
+  // 4-2) 문을 화면에서 찍어 넣기: 방 가운데에서 벽 1의 30%·60% 지점(가구 위쪽 높이)을 바라보고 탭
+  const polygon = row.floor_polygon;
+  const along = (f) => [polygon[0][0] + (polygon[1][0] - polygon[0][0]) * f, 2.2, polygon[0][1] + (polygon[1][1] - polygon[0][1]) * f];
+  const eye = [xs.reduce((s, v) => s + v, 0) / xs.length, 1.5, zs.reduce((s, v) => s + v, 0) / zs.length];
+  await page.getByTestId('openings-toggle').click();
+  await page.getByTestId('openings-pick').click();
+  for (const f of [0.3, 0.6]) {
+    await moveCamera(page, eye, along(f));
+    const s = await toScreen(page, along(f));
+    await page.mouse.click(s.x, s.y);
+    await page.waitForTimeout(400);
+  }
+  const picked = {
+    wall: await page.getByTestId('openings-wall').inputValue(),
+    from: Number(await page.getByTestId('openings-from').inputValue()),
+    width: Number(await page.getByTestId('openings-width').inputValue()),
+  };
+  const expected = { from: round(savedWalls[0] * 0.3, 2), width: round(savedWalls[0] * 0.3, 2) };
+  check(
+    `화면에서 두 점을 찍으면 벽 1의 위치가 채워짐 (기대 시작 ${expected.from} m·폭 ${expected.width} m, 오차 10cm 이내)`,
+    picked.wall === '0' && Math.abs(picked.from - expected.from) < 0.1 && Math.abs(picked.width - expected.width) < 0.1,
+    picked,
+  );
+  await page.screenshot({ path: path.join(dataDir, '_e2e', 'openings-picked.png') });
+  await page.getByTestId('openings-add').click();
+  await page.getByTestId('openings-save').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=openings-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
+  const { data: withDoor } = await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle();
+  check('찍은 문을 추가·저장 → DB에 문 1개', withDoor?.openings?.length === 1 && withDoor.openings[0].type === 'door' && withDoor.openings[0].wallIndex === 0, withDoor?.openings);
+  await page.getByRole('button', { name: '닫기', exact: true }).click();
+
   // 5) 다시 찍기: 화면에서는 보정이 풀리지만 저장된 값은 새로 저장하기 전까지 그대로
   await page.getByRole('button', { name: '다시 찍기' }).click();
   const reset = await engineState();
   const { data: still } = await admin.from('rooms').select('transform').eq('id', roomId).maybeSingle();
   check('다시 찍기: 화면의 보정은 풀리고 DB 값은 그대로', reset.scale === 1 && still?.transform?.s === row.transform.s, round(reset.scale, 4));
+
+  // 6) 보정을 새로 해서 저장하면 벽이 달라지므로 문·창문을 비운다
+  process.env.JITTER_PX = '3';
+  await calibrate(page, scene, { alreadyOpen: true });
+  await page.getByTestId('calibration-apply').click();
+  await page.getByTestId('openings-toggle').click();
+  check('새 보정을 저장하기 전: 문·창문은 0개로 시작하고 넣을 수 없음', (await page.getByTestId('openings-locked').isVisible()) && (await page.getByTestId('openings').getAttribute('data-count')) === '0', null);
+  const { data: beforeSave } = await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle();
+  await page.getByTestId('calibration-save').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=calibration-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
+  const { data: afterSave } = await admin.from('rooms').select('openings, floor_polygon').eq('id', roomId).maybeSingle();
+  check(
+    '새 보정을 저장: DB의 문·창문이 비워지고(1 → 0) 다시 넣을 수 있게 됨',
+    beforeSave?.openings?.length === 1 && afterSave?.openings?.length === 0 && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
+    [beforeSave?.openings?.length, afterSave?.openings?.length],
+  );
 } catch (err) {
   check('예외 없이 끝까지 실행', false, String(err).slice(0, 300));
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'calibration-save-failure.png') }).catch(() => {});
