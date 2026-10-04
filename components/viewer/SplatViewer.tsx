@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
+import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool from './CalibrationTool';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { resolveViewerQuality } from '@/lib/viewer/quality';
 
 export const SAMPLE_SPLAT_URL = 'https://sparkjs.dev/assets/splats/fireplace.spz';
 
@@ -41,6 +42,9 @@ export default function SplatViewer({ url, name }: Props) {
   const flippedRef = useRef(false);
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
+  // 지금 화면에 그리는 스플랫 수와 화면 배율 (폰에서 화질 설정이 먹었는지 확인용)
+  const [drawn, setDrawn] = useState<number | null>(null);
+  const [pixelRatio, setPixelRatio] = useState(1);
   const [flipped, setFlipped] = useState(false);
   // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
   const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
@@ -54,7 +58,10 @@ export default function SplatViewer({ url, name }: Props) {
     if (!container) return;
 
     const renderer = new THREE.WebGLRenderer({ antialias: false });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // 기기별 화질 설정 (폰은 그리는 양을 줄인다). 주소의 ?lod= ?pr= ?lrs= 로 바꿔 볼 수 있다
+    const quality = resolveViewerQuality(isMobile(), new URLSearchParams(window.location.search));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
+    setPixelRatio(renderer.getPixelRatio());
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
@@ -70,7 +77,12 @@ export default function SplatViewer({ url, name }: Props) {
 
     // Spark 자체 레이캐스트는 정확도가 부족해 쓰지 않는다(lib/three/pickPoint 참고).
     // lodRaycast: 0 으로 레이캐스트용 LOD 인덱스를 주기적으로 만드는 작업을 끈다.
-    const spark = new SparkRenderer({ renderer, lodRaycast: 0 });
+    const spark = new SparkRenderer({
+      renderer,
+      lodRaycast: 0,
+      lodSplatCount: quality.lodSplatCount,
+      lodRenderScale: quality.lodRenderScale,
+    });
     scene.add(spark);
 
     const roomGroup = new THREE.Group(); // 이후 보정 변환(회전·크기·높이)을 적용할 그룹
@@ -88,6 +100,7 @@ export default function SplatViewer({ url, name }: Props) {
       const now = performance.now();
       if (now - last >= 1000) {
         setFps(Math.round((frames * 1000) / (now - last)));
+        setDrawn(engineRef.current?.splat?.context.numSplats.value ?? null);
         frames = 0;
         last = now;
       }
@@ -246,6 +259,11 @@ export default function SplatViewer({ url, name }: Props) {
             </div>
           )}
           <div>FPS: {fps}</div>
+          {drawn !== null && (
+            <div data-testid="viewer-drawn" data-drawn={drawn} data-pixel-ratio={pixelRatio}>
+              그리는 중: {drawn.toLocaleString()}개 · 배율 {pixelRatio}
+            </div>
+          )}
         </div>
       </div>
 
