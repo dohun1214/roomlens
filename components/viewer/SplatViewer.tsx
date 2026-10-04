@@ -9,6 +9,7 @@ import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
 
 export const SAMPLE_SPLAT_URL = 'https://sparkjs.dev/assets/splats/fireplace.spz';
@@ -19,6 +20,8 @@ type Stats = {
   status: 'idle' | 'loading' | 'ready' | 'error';
   name: string;
   loadMs?: number;
+  /** 그중 파일을 받는 데 걸린 시간 (URL로 열 때만) */
+  downloadMs?: number;
   numSplats?: number;
   fromLodTree?: boolean;
   error?: string;
@@ -42,6 +45,7 @@ export default function SplatViewer({ url, name }: Props) {
   const flippedRef = useRef(false);
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
+  const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
   // 지금 화면에 그리는 스플랫 수와 화면 배율 (폰에서 화질 설정이 먹었는지 확인용)
   const [drawn, setDrawn] = useState<number | null>(null);
   const [pixelRatio, setPixelRatio] = useState(1);
@@ -150,12 +154,21 @@ export default function SplatViewer({ url, name }: Props) {
 
     const name = source.kind === 'url' ? source.url : source.file.name;
     setStats({ status: 'loading', name });
+    setLoadProgress(source.kind === 'url' ? { phase: 'download', percent: null } : { phase: 'prepare', percent: null });
     const t0 = performance.now();
+    let downloadMs: number | undefined;
+    const onProgress = (event: ProgressEvent) => {
+      if (seq !== loadSeq.current) return;
+      const next = progressFromBytes(event.lengthComputable ? event.loaded : Number.NaN, event.total);
+      if (next.phase === 'prepare') downloadMs ??= performance.now() - t0;
+      // 퍼센트가 바뀔 때만 다시 그린다
+      setLoadProgress((prev) => (prev?.phase === next.phase && prev.percent === next.percent ? prev : next));
+    };
 
     try {
       const splat =
         source.kind === 'url'
-          ? new SplatMesh({ url: source.url, lod: true })
+          ? new SplatMesh({ url: source.url, lod: true, onProgress })
           : new SplatMesh({
               fileBytes: await source.file.arrayBuffer(),
               fileName: source.file.name,
@@ -181,6 +194,7 @@ export default function SplatViewer({ url, name }: Props) {
         status: 'ready',
         name,
         loadMs,
+        downloadMs,
         numSplats: original || lodTree,
         fromLodTree: !original && lodTree > 0,
       });
@@ -188,12 +202,13 @@ export default function SplatViewer({ url, name }: Props) {
       if (seq !== loadSeq.current) return;
       console.error(err);
       setStats({ status: 'error', name, error: String(err) });
+    } finally {
+      if (seq === loadSeq.current) setLoadProgress(null);
     }
   }, []);
 
   // 첫 로드: ?url= 이 있으면 그 파일, 없으면 샘플
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- 외부 시스템(스플랫 로딩) 시작
     load({ kind: 'url', url: urlInput });
     // 마운트 시 한 번만 실행
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -257,7 +272,13 @@ export default function SplatViewer({ url, name }: Props) {
             {stats.error ? ` (${stats.error})` : ''}
           </div>
           <div className="truncate">파일: {name ?? stats.name}</div>
-          {stats.loadMs !== undefined && <div>로딩: {(stats.loadMs / 1000).toFixed(2)}초</div>}
+          {stats.loadMs !== undefined && (
+            <div data-testid="viewer-load-time" data-load-ms={Math.round(stats.loadMs)} data-download-ms={stats.downloadMs === undefined ? '' : Math.round(stats.downloadMs)}>
+              로딩: {(stats.loadMs / 1000).toFixed(2)}초
+              {stats.downloadMs !== undefined &&
+                ` (받기 ${(stats.downloadMs / 1000).toFixed(1)}초 + 준비 ${((stats.loadMs - stats.downloadMs) / 1000).toFixed(1)}초)`}
+            </div>
+          )}
           {stats.numSplats !== undefined && (
             <div>
               스플랫: {stats.numSplats.toLocaleString()}개{stats.fromLodTree ? ' (LOD 트리)' : ''}
@@ -271,6 +292,20 @@ export default function SplatViewer({ url, name }: Props) {
           )}
         </div>
       </div>
+
+      {stats.status === 'loading' && loadProgress && (
+        <div
+          className="pointer-events-none absolute inset-0 flex items-center justify-center"
+          data-testid="viewer-loading"
+          data-phase={loadProgress.phase}
+          data-percent={loadProgress.percent ?? ''}
+        >
+          <div className="w-64 max-w-[80%] space-y-2 rounded bg-black/70 p-4 text-center text-sm text-white" role="status">
+            <p>{loadingLabel(loadProgress)}</p>
+            <progress className="w-full" max={100} value={loadingBarValue(loadProgress)} />
+          </div>
+        </div>
+      )}
 
       {stats.status === 'ready' && room?.key === sceneKey && (
         <FurnitureLayer key={`furniture|${sceneKey}`} engineRef={engineRef} floorPolygon={room.polygon} />
