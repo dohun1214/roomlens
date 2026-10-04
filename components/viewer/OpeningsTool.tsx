@@ -40,6 +40,7 @@ export default function OpeningsTool({
   editable,
   locked = false,
   onSave,
+  onChange,
 }: {
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
@@ -51,6 +52,8 @@ export default function OpeningsTool({
   locked?: boolean;
   /** 저장한다. 성공하면 true */
   onSave?: (openings: Opening[]) => Promise<boolean>;
+  /** 넣거나 지울 때마다 알린다 (저장 전이라도 가구 검사에 바로 반영하려고) */
+  onChange?: (openings: Opening[]) => void;
 }) {
   const [openings, setOpenings] = useState<Opening[]>(initial);
   const [savedOpenings, setSavedOpenings] = useState<Opening[]>(initial);
@@ -207,12 +210,15 @@ export default function OpeningsTool({
       return;
     }
     setOpenings(added.openings);
+    onChange?.(added.openings);
     setFrom('');
     setMessage(null);
   };
 
   const remove = (index: number) => {
-    setOpenings((prev) => prev.filter((_, i) => i !== index));
+    const next = openings.filter((_, i) => i !== index);
+    setOpenings(next);
+    onChange?.(next);
     setMessage(null);
   };
 
