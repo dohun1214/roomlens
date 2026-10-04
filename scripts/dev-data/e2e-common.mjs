@@ -95,7 +95,7 @@ export function toScreen(page, point) {
  * 보정 패널을 열고 바닥 3곳 + 모서리 4곳을 실제로 클릭한 뒤 벽 1 길이를 입력한다.
  * @returns 화면에 표시된 보정 결과(data-json)와 정답
  */
-export async function calibrate(page, scene, { shots = false } = {}) {
+export async function calibrate(page, scene, { shots = false, alreadyOpen = false } = {}) {
   const cornerY = Number(process.env.CORNER_Y ?? 2.3);
   const jitterPx = Number(process.env.JITTER_PX ?? 0);
   const truth = loadTruth(scene, cornerY);
@@ -115,7 +115,8 @@ export async function calibrate(page, scene, { shots = false } = {}) {
     if (shots) await page.screenshot({ path: path.join(shotDir, shot) });
   };
 
-  await page.getByRole('button', { name: '크기·바닥 보정' }).click();
+  // "다시 찍기" 직후처럼 보정 패널이 이미 열려 있으면 여는 버튼이 없다
+  if (!alreadyOpen) await page.getByRole('button', { name: '크기·바닥 보정' }).click();
   // 1) 바닥 세 곳: 바로 위 2.2m에서 내려다보고 탭
   for (const [i, [x, z]] of floorPoints.entries()) {
     await tap([x + 0.01, 2.2, z + 0.01], [x, 0, z], `cal-${scene}-floor${i + 1}.png`);

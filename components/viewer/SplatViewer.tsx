@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
+import OpeningsTool from './OpeningsTool';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
@@ -14,6 +15,7 @@ import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
+import type { Opening } from '@/lib/rooms/openings';
 import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
@@ -53,7 +55,11 @@ type Props = {
   signedIn?: boolean;
   /** 이 방에 내가 저장해 둔 배치 */
   initialLayout?: SavedLayout | null;
+  /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
+  initialOpenings?: Opening[];
 };
+
+const NO_OPENINGS: Opening[] = [];
 
 export default function SplatViewer({
   url,
@@ -64,6 +70,7 @@ export default function SplatViewer({
   catalog,
   signedIn = false,
   initialLayout = null,
+  initialOpenings = NO_OPENINGS,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -73,6 +80,10 @@ export default function SplatViewer({
   // 저장된 배치. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
   const [layout, setLayout] = useState<SavedLayout | null>(initialLayout);
   const layoutIdRef = useRef(initialLayout?.id ?? null);
+  // 문·창문은 벽 번호로 저장하므로 "어느 평면도 기준인지"를 함께 기억한다. 보정을 새로 저장하면 비운다
+  const [savedPolygonKey, setSavedPolygonKey] = useState(calibration ? JSON.stringify(calibration.floorPolygon) : null);
+  const savedPolygonKeyRef = useRef(savedPolygonKey);
+  const [openings, setOpenings] = useState({ key: savedPolygonKey, items: initialOpenings });
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
@@ -270,18 +281,38 @@ export default function SplatViewer({
   };
 
   const sceneKey = `${stats.name}|${stats.loadMs}|${flipped}`;
+  const roomPolygonKey = room ? JSON.stringify(room.polygon) : null;
 
   // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
   const saveCalibration = useCallback(
     async (applied: AppliedCalibration) => {
       if (!roomId) return false;
+      // 평면도가 바뀌면 벽 번호가 달라지므로 문·창문도 함께 비운다
+      const key = JSON.stringify(applied.floorPolygon);
+      const wallsChanged = key !== savedPolygonKeyRef.current;
       const { data, error } = await createClient()
         .from('rooms')
-        .update(toCalibrationColumns({ ...applied, flipX: flippedRef.current }))
+        .update({ ...toCalibrationColumns({ ...applied, flipX: flippedRef.current }), ...(wallsChanged ? { openings: [] } : {}) })
         .eq('id', roomId)
         .select('id')
         .maybeSingle();
-      return !error && data !== null;
+      if (error || data === null) return false;
+      savedPolygonKeyRef.current = key;
+      setSavedPolygonKey(key);
+      if (wallsChanged) setOpenings({ key, items: [] });
+      return true;
+    },
+    [roomId],
+  );
+
+  // 방 주인이 문·창문을 저장한다 (지금 저장돼 있는 평면도 기준)
+  const saveOpenings = useCallback(
+    async (items: Opening[]) => {
+      if (!roomId) return false;
+      const { data, error } = await createClient().from('rooms').update({ openings: items }).eq('id', roomId).select('id').maybeSingle();
+      if (error || data === null) return false;
+      setOpenings({ key: savedPolygonKeyRef.current, items });
+      return true;
     },
     [roomId],
   );
@@ -391,6 +422,17 @@ export default function SplatViewer({
           initialItems={layout?.items}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
+        />
+      )}
+      {stats.status === 'ready' && room?.key === sceneKey && (
+        <OpeningsTool
+          key={`openings|${sceneKey}|${roomPolygonKey}`}
+          engineRef={engineRef}
+          floorPolygon={room.polygon}
+          initial={roomPolygonKey === openings.key ? openings.items : NO_OPENINGS}
+          editable={!url || canEdit}
+          locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
+          onSave={roomId && canEdit ? saveOpenings : undefined}
         />
       )}
       {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}

@@ -6,6 +6,7 @@ import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
 import { loadMyLayout } from '@/lib/layout/store';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
+import { parseOpenings } from '@/lib/rooms/openings';
 import { RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
@@ -23,7 +24,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   const supabase = await createClient();
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon')
+    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon, openings')
     .eq('id', id)
     .maybeSingle();
   if (!room) notFound();
@@ -45,6 +46,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   ]);
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   const catalog = catalogRows?.length ? catalogRows.map(fromCatalogRow) : undefined;
+  const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
 
   return (
     <main className="flex h-[calc(100dvh-3rem)] w-full flex-col">
@@ -71,12 +73,13 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
           <SplatViewer
             url={splatUrl}
             name={room.title}
-            calibration={parseSavedCalibration(room.transform, room.floor_polygon)}
+            calibration={calibration}
             roomId={room.id}
             canEdit={isOwner}
             catalog={catalog}
             signedIn={Boolean(user)}
             initialLayout={myLayout}
+            initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
           />
         ) : (
           <p className="p-6 text-sm text-neutral-300" data-testid="room-not-ready">
