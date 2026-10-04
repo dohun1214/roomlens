@@ -1,6 +1,8 @@
 // 가구 배치 검사에 쓰는 평면 기하. 모두 보정된 방 좌표(m)의 바닥 평면 [x, z]에서 계산한다.
 // 가구는 회전된 직사각형(Footprint)으로 본다. 화면(사용자 배치)과 AI 배치 솔버가 같은 함수를 쓴다.
-import { footprintCorners, type Footprint, type Point2 } from '@/lib/three/floorDrag';
+import { footprintCorners, pointInPolygon, type Footprint, type Point2 } from '@/lib/three/floorDrag';
+
+export { pointInPolygon };
 
 /** 이만큼(2cm)까지 파고든 것은 겹침·벗어남으로 보지 않는다 (벽·가구에 딱 붙인 경우의 계산 오차) */
 export const TOLERANCE = 0.02;
@@ -48,19 +50,6 @@ export function footprintsOverlap(a: Footprint, b: Footprint, tolerance = TOLERA
   return overlapDepth(a, b) > tolerance;
 }
 
-/** 점이 다각형 안에 있는지 (경계 위는 구현에 따라 달라지므로 distanceToPolygon과 함께 쓴다) */
-export function pointInPolygon(p: Point2, polygon: Point2[]): boolean {
-  let inside = false;
-  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
-    const a = polygon[i];
-    const b = polygon[j];
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) {
-      inside = !inside;
-    }
-  }
-  return inside;
-}
-
 export function distanceToSegment(p: Point2, a: Point2, b: Point2): number {
   const ab = sub(b, a);
   const len2 = dot(ab, ab);
@@ -78,17 +67,55 @@ export function distanceToPolygon(p: Point2, polygon: Point2[]): number {
 }
 
 /**
- * 가구가 방 밖으로 나간 거리(m): 밑면 꼭짓점 가운데 방 밖에 있는 것의 벽까지 거리의 최댓값.
- * 모두 방 안이면 0. (볼록한 방 기준. 오목한 방에서는 변이 벽을 가로지르는 경우를 놓칠 수 있다)
+ * 가구가 방 밖으로 나간 거리(m). 모두 방 안이면 0.
+ * - 밑면 꼭짓점 가운데 방 밖에 있는 것의 벽까지 거리
+ * - 오목한 방(ㄱ자 등)에서 안쪽으로 튀어나온 벽 모서리가 가구 밑면 속으로 파고든 깊이
+ * 둘 가운데 큰 값이다.
  */
 export function outsideDistance(f: Footprint, polygon: Point2[]): number {
   let worst = 0;
   for (const corner of footprintCorners(f)) {
     if (!pointInPolygon(corner, polygon)) worst = Math.max(worst, distanceToPolygon(corner, polygon));
   }
+  // 방의 꼭짓점이 가구 밑면 안에 있으면, 가장 가까운 변까지의 거리만큼 파고든 것이다
+  const r = (f.rotationDeg * Math.PI) / 180;
+  const c = Math.cos(r);
+  const s = Math.sin(r);
+  for (const [px, pz] of polygon) {
+    const dx = px - f.x;
+    const dz = pz - f.z;
+    const depth = Math.min(f.w / 2 - Math.abs(dx * c - dz * s), f.d / 2 - Math.abs(dx * s + dz * c));
+    if (depth > 0) worst = Math.max(worst, depth);
+  }
   return worst;
 }
-
 export function footprintInsideRoom(f: Footprint, polygon: Point2[], tolerance = TOLERANCE): boolean {
   return outsideDistance(f, polygon) <= tolerance;
+}
+
+/**
+ * 방 안쪽의 한 점: 새 가구를 놓기 시작하거나 카메라를 둘 자리.
+ * 꼭짓점의 평균이 방 안이면 그 점(사각형 방에서는 정확히 가운데), 아니면(오목한 방) 벽에서 가장 먼 격자점.
+ */
+export function interiorPoint(polygon: Point2[]): Point2 {
+  const mean: Point2 = [polygon.reduce((sum, p) => sum + p[0], 0) / polygon.length, polygon.reduce((sum, p) => sum + p[1], 0) / polygon.length];
+  if (polygon.length < 3 || pointInPolygon(mean, polygon)) return mean;
+  const xs = polygon.map((p) => p[0]);
+  const zs = polygon.map((p) => p[1]);
+  const [minX, maxX, minZ, maxZ] = [Math.min(...xs), Math.max(...xs), Math.min(...zs), Math.max(...zs)];
+  const STEPS = 32;
+  let best = mean;
+  let bestDistance = -1;
+  for (let i = 1; i < STEPS; i += 1) {
+    for (let j = 1; j < STEPS; j += 1) {
+      const p: Point2 = [minX + ((maxX - minX) * i) / STEPS, minZ + ((maxZ - minZ) * j) / STEPS];
+      if (!pointInPolygon(p, polygon)) continue;
+      const distance = distanceToPolygon(p, polygon);
+      if (distance > bestDistance) {
+        bestDistance = distance;
+        best = p;
+      }
+    }
+  }
+  return best;
 }
