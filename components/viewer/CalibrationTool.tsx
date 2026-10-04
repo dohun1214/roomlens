@@ -42,18 +42,29 @@ const describeError = (err: unknown) => (err instanceof RoomTransformError ? err
 const mean = (points: THREE.Vector3[]) =>
   points.reduce((a, p) => a.add(p), new THREE.Vector3()).divideScalar(points.length);
 
+export type AppliedCalibration = { transform: RoomTransform; floorPolygon: [number, number][] };
+type SaveState = 'saved' | 'dirty' | 'saving' | 'error';
+
 export default function CalibrationTool({
   engineRef,
   onApplied,
+  initial = null,
+  onSave,
 }: {
   engineRef: RefObject<Engine | null>;
   /** 보정을 적용하면 방 평면도([x, z], m)를, 되돌리면 null을 알린다 */
   onApplied?: (floorPolygon: [number, number][] | null) => void;
+  /** 방에 저장돼 있던 보정. 뷰어가 이미 적용해 둔 상태로 시작한다 */
+  initial?: AppliedCalibration | null;
+  /** 주면 적용 후 "저장" 버튼이 생긴다. 저장에 성공하면 true */
+  onSave?: (calibration: AppliedCalibration) => Promise<boolean>;
 }) {
-  const [active, setActive] = useState(false);
+  const [active, setActive] = useState(initial !== null);
   const [taps, setTaps] = useState<Tap[]>([]);
   const [length, setLength] = useState('');
-  const [applied, setApplied] = useState<RoomTransform | null>(null);
+  const [applied, setApplied] = useState<RoomTransform | null>(initial?.transform ?? null);
+  const [appliedPolygon, setAppliedPolygon] = useState<[number, number][] | null>(initial?.floorPolygon ?? null);
+  const [saveState, setSaveState] = useState<SaveState>(initial ? 'saved' : 'dirty');
   const [message, setMessage] = useState<string | null>(null);
 
   const floorCount = Math.min(taps.length, FLOOR_TAPS);
@@ -195,12 +206,16 @@ export default function CalibrationTool({
     };
   }, [engineRef, applied]);
 
-  // 도구가 사라질 때(다른 파일을 열 때 등) 보정을 되돌린다
+  // 도구가 사라질 때(다른 파일을 열 때 등) 보정을 되돌린다.
+  // 저장된 보정으로 시작했다면 다시 적용해 둔다 (개발 모드에서는 이 effect가 두 번 돌면서 한 번 되돌려지기 때문).
   useEffect(() => {
     const engine = engineRef.current;
+    if (engine && initial) setObjectRoomTransform(engine.roomGroup, initial.transform);
     return () => {
       if (engine) setObjectRoomTransform(engine.roomGroup, IDENTITY_ROOM_TRANSFORM);
     };
+    // 처음 한 번만: initial은 방을 열 때의 값이고 이후에는 바뀌지 않는다
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [engineRef]);
 
   const moveCamera = (engine: Engine, map: (p: THREE.Vector3) => THREE.Vector3) => {
@@ -220,6 +235,8 @@ export default function CalibrationTool({
     engine.camera.far = 200;
     engine.camera.updateProjectionMatrix();
     setApplied(tr);
+    setAppliedPolygon(outcome.cal.floorPolygon);
+    setSaveState('dirty');
     onApplied?.(outcome.cal.floorPolygon);
   };
 
@@ -230,9 +247,18 @@ export default function CalibrationTool({
       setObjectRoomTransform(engine.roomGroup, IDENTITY_ROOM_TRANSFORM);
     }
     setApplied(null);
+    setAppliedPolygon(null);
+    setSaveState('dirty');
     onApplied?.(null);
     setTaps([]);
     setMessage(null);
+  };
+
+  const save = async () => {
+    if (!onSave || !applied || !appliedPolygon || saveState === 'saving') return;
+    setSaveState('saving');
+    const ok = await onSave({ transform: applied, floorPolygon: appliedPolygon });
+    setSaveState(ok ? 'saved' : 'error');
   };
 
   if (!active) {
@@ -254,6 +280,23 @@ export default function CalibrationTool({
         data-testid="calibration-panel"
       >
         <span className="text-emerald-300">보정 적용됨 · 격자 한 칸 1m</span>
+        {onSave && (
+          <>
+            <span data-testid="calibration-save-state" data-state={saveState}>
+              {saveState === 'saved' ? '저장됨' : saveState === 'saving' ? '저장 중…' : saveState === 'error' ? '저장 실패' : '저장 안 됨'}
+            </span>
+            {saveState !== 'saved' && (
+              <button
+                className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-40"
+                disabled={saveState === 'saving'}
+                onClick={save}
+                data-testid="calibration-save"
+              >
+                {saveState === 'error' ? '다시 저장' : '저장'}
+              </button>
+            )}
+          </>
+        )}
         <button className="rounded bg-white/20 px-2 py-1" onClick={reset}>
           다시 찍기
         </button>
@@ -318,6 +361,19 @@ export default function CalibrationTool({
               data-testid="calibration-length"
             />
             <span>m</span>
+            {floor.corners.length >= 2 && (
+              <button
+                type="button"
+                className="rounded bg-white/20 px-2 py-1 font-normal"
+                onClick={() => setLength(floor.corners[0].distanceTo(floor.corners[1]).toFixed(3))}
+                data-testid="calibration-keep-scale"
+              >
+                파일 단위 그대로
+              </button>
+            )}
+          </div>
+          <div className="font-normal opacity-80">
+            줄자로 잴 수 없는 데이터셋 방은, 파일이 이미 미터 단위라면 &ldquo;파일 단위 그대로&rdquo;를 누르세요.
           </div>
         </li>
         <li className={stepClass(4)}>다른 벽 길이가 줄자 값과 맞는지 확인 후 적용</li>
