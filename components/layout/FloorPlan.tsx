@@ -173,10 +173,11 @@ export default function FloorPlan({
         const shown = drag && drag.id === item.id ? { ...item, x: drag.x, z: drag.z } : item;
         const state = badIds.has(item.id) ? 'error' : warnIds.has(item.id) ? 'warning' : 'ok';
         const selected = item.id === selectedId;
+        const corners = footprintCorners(shown);
         return (
           <g key={item.id}>
             <polygon
-              points={pointsAttr(footprintCorners(shown))}
+              points={pointsAttr(corners)}
               fill={hex(item.color)}
               fillOpacity={0.85}
               stroke={state === 'error' ? '#ff3b30' : state === 'warning' ? '#ffc233' : selected ? '#1d4ed8' : '#44403c'}
@@ -188,6 +189,19 @@ export default function FloorPlan({
               data-state={state}
               data-selected={selected}
               onPointerDown={(e) => onItemDown(e, item)}
+            />
+            {/* 앞면(3D 모델의 문·서랍이 있는 쪽, 회전 0°일 때 아래쪽)을 굵은 선으로 */}
+            <line
+              x1={corners[3][0]}
+              y1={corners[3][1]}
+              x2={corners[2][0]}
+              y2={corners[2][1]}
+              stroke="#1c1917"
+              strokeOpacity={0.55}
+              strokeWidth={5}
+              pointerEvents="none"
+              {...stroke}
+              data-testid="plan-front"
             />
             <text x={shown.x} y={shown.z} fontSize={0.15} fill="#1c1917" textAnchor="middle" dominantBaseline="central" pointerEvents="none">
               {item.name}
