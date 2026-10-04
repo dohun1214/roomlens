@@ -1,34 +1,36 @@
 'use client';
 
-import { useEffect, useRef, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
+import { categoryColor, DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
+import { checkLayout, findFreeSpot, violatingIds } from '@/lib/layout/check';
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { pointerToNdc } from '@/lib/three/pickPoint';
 import type { Engine } from '@/components/viewer/engine';
 
-type Item = Footprint & { id: string; name: string; h: number; color: number };
+type Item = Footprint & { id: string; catalogId: string; name: string; h: number; color: number };
 
-/** 원룸 기준 기본 치수 (m). 이후 카탈로그 테이블로 옮긴다. */
-const PRESETS = [
-  { name: '슈퍼싱글 침대', w: 1.1, d: 2.0, h: 0.45, color: 0x6fa8dc },
-  { name: '책상', w: 1.2, d: 0.6, h: 0.73, color: 0xe0a458 },
-  { name: '옷장', w: 0.9, d: 0.6, h: 2.0, color: 0x93c47d },
-];
 const EDGE_COLOR = 0xffffff;
 const SELECTED_EDGE_COLOR = 0xffe14d;
+const VIOLATION_EDGE_COLOR = 0xff3b30;
+const VIOLATION_EMISSIVE = 0x7a1010;
 
 type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
 
 /**
  * 보정된 방(바닥 y=0, 단위 m) 위에 박스 가구를 놓고 바닥 평면에서 끈다.
  * 가구는 roomGroup이 아니라 scene에 직접 넣는다 (방 좌표 = 월드 좌표).
+ * 겹치거나 방 밖으로 나간 가구는 빨갛게 표시하고 이유를 알려준다.
  */
 export default function FurnitureLayer({
   engineRef,
   floorPolygon,
+  catalog = DEFAULT_CATALOG,
 }: {
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
+  /** 놓을 수 있는 가구 목록. 방 화면은 DB의 카탈로그를 넘긴다 */
+  catalog?: CatalogItem[];
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -39,6 +41,9 @@ export default function FurnitureLayer({
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  const violations = useMemo(() => checkLayout(items, floorPolygon), [items, floorPolygon]);
+  const badIds = useMemo(() => violatingIds(violations), [violations]);
 
   // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다)
   useEffect(() => {
@@ -61,8 +66,9 @@ export default function FurnitureLayer({
     const disposables: { dispose: () => void }[] = [];
 
     for (const item of items) {
+      const bad = badIds.has(item.id);
       const geometry = new THREE.BoxGeometry(item.w, item.h, item.d);
-      const material = new THREE.MeshLambertMaterial({ color: item.color });
+      const material = new THREE.MeshLambertMaterial({ color: item.color, emissive: bad ? VIOLATION_EMISSIVE : 0x000000 });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(item.x, item.h / 2, item.z);
       mesh.rotation.y = THREE.MathUtils.degToRad(item.rotationDeg);
@@ -70,7 +76,7 @@ export default function FurnitureLayer({
 
       const edgeGeometry = new THREE.EdgesGeometry(geometry);
       const edgeMaterial = new THREE.LineBasicMaterial({
-        color: item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
+        color: bad ? VIOLATION_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
       });
       mesh.add(new THREE.LineSegments(edgeGeometry, edgeMaterial));
       group.add(mesh);
@@ -84,7 +90,7 @@ export default function FurnitureLayer({
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId]);
+  }, [engineRef, items, selectedId, badIds]);
 
   // 바닥 평면 드래그
   useEffect(() => {
@@ -159,12 +165,15 @@ export default function FurnitureLayer({
     };
   }, [engineRef, floorPolygon]);
 
-  const add = (preset: (typeof PRESETS)[number]) => {
+  const add = (entry: CatalogItem) => {
     const id = `f${nextId.current}`;
     nextId.current += 1;
-    // 방 좌표의 원점 = 모서리 중심
-    const placed = placeOnFloor({ x: 0, z: 0, w: preset.w, d: preset.d, rotationDeg: 0 }, floorPolygon);
-    setItems((prev) => [...prev, { ...preset, ...placed, id }]);
+    // 방 가운데부터 찾아, 다른 가구와 겹치지 않는 가장 가까운 빈자리에 놓는다
+    const placed = findFreeSpot(entry, itemsRef.current, floorPolygon);
+    setItems((prev) => [
+      ...prev,
+      { ...placed, id, catalogId: entry.id, name: entry.nameKo, h: entry.h, color: categoryColor(entry.category) },
+    ]);
     setSelectedId(id);
   };
 
@@ -187,17 +196,18 @@ export default function FurnitureLayer({
 
   return (
     <div
-      className="absolute right-2 top-2 w-64 max-w-[calc(100%-1rem)] space-y-2 rounded bg-black/75 p-3 text-xs text-white"
+      className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
       data-testid="furniture-panel"
       data-json={JSON.stringify(
-        items.map(({ id, name, x, z, w, d, h, rotationDeg }) => ({ id, name, x, z, w, d, h, rotationDeg })),
+        items.map(({ id, catalogId, name, x, z, w, d, h, rotationDeg }) => ({ id, catalogId, name, x, z, w, d, h, rotationDeg })),
       )}
+      data-violations={JSON.stringify(violations)}
     >
       <strong>가구 배치</strong>
       <div className="flex flex-wrap gap-1">
-        {PRESETS.map((preset) => (
-          <button key={preset.name} className="rounded bg-white/20 px-2 py-1" onClick={() => add(preset)}>
-            + {preset.name}
+        {catalog.map((entry) => (
+          <button key={entry.id} className="rounded bg-white/20 px-2 py-1" onClick={() => add(entry)}>
+            + {entry.nameKo}
           </button>
         ))}
       </div>
@@ -223,6 +233,19 @@ export default function FurnitureLayer({
         </div>
       ) : (
         <p className="opacity-80">가구를 추가한 뒤 끌어서 옮기세요. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
+      )}
+      {items.length > 0 && (
+        <div data-testid="layout-violations" data-count={violations.length}>
+          {violations.length === 0 ? (
+            <p className="text-emerald-300">배치에 문제가 없습니다.</p>
+          ) : (
+            <ul className="space-y-0.5 text-red-300">
+              {violations.map((v) => (
+                <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`}>{v.message}</li>
+              ))}
+            </ul>
+          )}
+        </div>
       )}
     </div>
   );

@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
+import { fromCatalogRow } from '@/lib/layout/catalog';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
@@ -31,10 +32,16 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   // 파일을 아직 올리지 않은 방은 주인에게만 보인다 (지울 수 있게)
   if (!ready && !isOwner) notFound();
 
-  const [splatUrl, { data: owner }] = await Promise.all([
+  const [splatUrl, { data: owner }, { data: catalogRows }] = await Promise.all([
     ready && room.splat_key ? presignGet(room.splat_key) : null,
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
+    supabase
+      .from('furniture_catalog')
+      .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m')
+      .order('sort_order'),
   ]);
+  // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
+  const catalog = catalogRows?.length ? catalogRows.map(fromCatalogRow) : undefined;
 
   return (
     <main className="flex h-[calc(100dvh-3rem)] w-full flex-col">
@@ -64,6 +71,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             calibration={parseSavedCalibration(room.transform, room.floor_polygon)}
             roomId={room.id}
             canEdit={isOwner}
+            catalog={catalog}
           />
         ) : (
           <p className="p-6 text-sm text-neutral-300" data-testid="room-not-ready">
