@@ -21,6 +21,11 @@ export default async function SiteHeader() {
         <Link href="/viewer" className="text-neutral-500 hover:underline">
           3D 뷰어
         </Link>
+        {user && (
+          <Link href="/rooms/new" className="text-neutral-500 hover:underline">
+            방 만들기
+          </Link>
+        )}
       </nav>
       <div className="flex items-center gap-3">
         {user ? (
