@@ -103,6 +103,9 @@ try {
   const error = maxErrorPct(savedWalls, truth.wallLengths);
   check(`DB: 저장된 벽 길이 오차 최대 ${error.toFixed(2)}% (3% 이내)`, error < 3, savedWalls.map((v) => round(v)));
 
+  const skew = Math.max(...row.floor_polygon.map((p, i) => { const q = row.floor_polygon[(i + 1) % row.floor_polygon.length]; return Math.min(Math.abs(q[0] - p[0]), Math.abs(q[1] - p[1])); }));
+  check('DB: 직각으로 맞춘 평면도 (모든 벽이 정확히 가로·세로)', skew < 1e-9, skew);
+
   // 4) 다시 열기
   await page.reload();
   await viewerReady();

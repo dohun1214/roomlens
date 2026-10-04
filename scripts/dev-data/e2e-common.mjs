@@ -129,6 +129,8 @@ export async function calibrate(page, scene, { shots = false, alreadyOpen = fals
     const eye = [corner[0] + (inward[0] / len) * back, cornerY > 0 ? 1.5 : 1.4, corner[2] + (inward[1] / len) * back];
     await tap(eye, corner, `cal-${scene}-corner${i + 1}.png`);
   }
+  // 모서리 수가 정해져 있지 않으므로 다 찍었다고 알려 준다
+  await page.getByTestId('calibration-corners-done').click();
   await page.getByTestId('calibration-length').fill(truth.wallLengths[0].toFixed(3));
 
   if (!(await page.getByTestId('calibration-result').isVisible())) {
