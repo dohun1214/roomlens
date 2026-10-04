@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
@@ -24,6 +25,7 @@ import {
   type SavedItem,
 } from '@/lib/layout/saved';
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
+import { disposeModelTemplate, instantiateModel, makeModelTemplate, type ModelTemplate } from '@/lib/three/furnitureModel';
 import { pointerToNdc } from '@/lib/three/pickPoint';
 import type { Engine } from '@/components/viewer/engine';
 import FloorPlan from './FloorPlan';
@@ -94,6 +96,9 @@ export default function FurnitureLayer({
   const [showPlan, setShowPlan] = useState(false);
   // 가구 목록을 접어 패널을 작게 (좁은 화면에서 평면도를 가리지 않게)
   const [compact, setCompact] = useState(false);
+  // 불러온 3D 모델 틀 (주소 → 틀, 받는 중이거나 실패했으면 null). 다 받으면 modelVersion을 올려 다시 그린다
+  const [modelCache] = useState(() => new Map<string, ModelTemplate | null>());
+  const [modelVersion, setModelVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const itemsRef = useRef<Item[]>([]);
   const groupRef = useRef<THREE.Group | null>(null);
@@ -125,6 +130,34 @@ export default function FurnitureLayer({
     };
   }, [engineRef]);
 
+  // 가구 3D 모델 불러오기: 놓인 가구가 쓰는 모델을 한 번씩만 받아 틀로 만들어 둔다.
+  // 받는 동안과 받지 못했을 때는 상자로 보인다
+  useEffect(() => {
+    for (const item of items) {
+      const url = item.modelUrl;
+      if (!url || modelCache.has(url)) continue;
+      modelCache.set(url, null);
+      new GLTFLoader().load(
+        url,
+        (gltf) => {
+          const template = makeModelTemplate(gltf.scene);
+          if (!template) return;
+          modelCache.set(url, template);
+          setModelVersion((v) => v + 1);
+        },
+        undefined,
+        () => {}, // 실패하면 상자로 둔다
+      );
+    }
+  }, [items, modelCache]);
+
+  useEffect(
+    () => () => {
+      for (const template of modelCache.values()) if (template) disposeModelTemplate(template);
+    },
+    [modelCache],
+  );
+
   // 가구 메시 만들기
   useEffect(() => {
     const engine = engineRef.current;
@@ -135,8 +168,18 @@ export default function FurnitureLayer({
     for (const item of items) {
       const bad = badIds.has(item.id);
       const warn = warnIds.has(item.id);
+      const template = item.modelUrl ? modelCache.get(item.modelUrl) : null;
       const geometry = new THREE.BoxGeometry(item.w, item.h, item.d);
-      const material = new THREE.MeshLambertMaterial({ color: item.color, emissive: bad ? VIOLATION_EMISSIVE : warn ? WARNING_EMISSIVE : 0x000000 });
+      // 3D 모델이 있으면 상자는 잡기·표시용이다: 평소에는 보이지 않고, 문제·경고일 때만 반투명하게 덧씌운다
+      const material = template
+        ? new THREE.MeshLambertMaterial({
+            color: bad ? VIOLATION_EDGE_COLOR : WARNING_EDGE_COLOR,
+            transparent: true,
+            opacity: 0.3,
+            depthWrite: false,
+            visible: bad || warn,
+          })
+        : new THREE.MeshLambertMaterial({ color: item.color, emissive: bad ? VIOLATION_EMISSIVE : warn ? WARNING_EMISSIVE : 0x000000 });
       const mesh = new THREE.Mesh(geometry, material);
       mesh.position.set(item.x, item.h / 2, item.z);
       mesh.rotation.y = THREE.MathUtils.degToRad(item.rotationDeg);
@@ -146,11 +189,19 @@ export default function FurnitureLayer({
       const edgeMaterial = new THREE.LineBasicMaterial({
         color: bad ? VIOLATION_EDGE_COLOR : warn ? WARNING_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
       });
-      mesh.add(new THREE.LineSegments(edgeGeometry, edgeMaterial));
+      const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      // 모델이 있으면 외곽선은 고른 가구와 문제 있는 가구에만
+      edges.visible = !template || bad || warn || item.id === selectedId;
+      mesh.add(edges);
+      if (template) {
+        // 상자의 중심이 원점이므로 모델(바닥 가운데가 원점)은 높이의 절반만큼 내린다
+        const model = instantiateModel(template, item.w, item.h, item.d);
+        model.position.y = -item.h / 2;
+        mesh.add(model);
+      }
       group.add(mesh);
       disposables.push(geometry, material, edgeGeometry, edgeMaterial);
     }
-
     engine.scene.add(group);
     groupRef.current = group;
     return () => {
@@ -158,7 +209,7 @@ export default function FurnitureLayer({
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId, badIds, warnIds]);
+  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion]);
 
   // 바닥 평면 드래그
   useEffect(() => {
@@ -327,7 +378,20 @@ export default function FurnitureLayer({
         className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
         data-testid="furniture-panel"
         data-json={JSON.stringify(
-          items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg }) => ({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg })),
+          items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg, modelUrl }) => ({
+            id,
+            kind,
+            furnitureRef,
+            name,
+            x,
+            z,
+            w,
+            d,
+            h,
+            rotationDeg,
+            // 3D 모델로 그려지고 있는지 (없거나 아직 받는 중이면 상자)
+            model: Boolean(modelUrl && modelCache.get(modelUrl)),
+          })),
         )}
         data-violations={JSON.stringify(violations)}
       >

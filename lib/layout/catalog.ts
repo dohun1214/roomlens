@@ -12,6 +12,8 @@ export type CatalogItem = {
   h: number;
   /** 앞에 비워 둘 공간 (m). 통로·접근 검사에 쓴다 */
   clearance: number;
+  /** 3D 모델(GLB)을 받을 주소. 없으면 상자로 그린다 */
+  modelUrl?: string | null;
 };
 
 export type CatalogRow = {
@@ -24,8 +26,9 @@ export type CatalogRow = {
   clearance_m: number;
 };
 
-export function fromCatalogRow(row: CatalogRow): CatalogItem {
+export function fromCatalogRow(row: CatalogRow, modelUrl?: string | null): CatalogItem {
   return {
+    ...(modelUrl ? { modelUrl } : {}),
     id: row.id,
     nameKo: row.name_ko,
     category: row.category,

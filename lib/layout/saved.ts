@@ -30,6 +30,8 @@ export type PlacedItem = Footprint & {
   name: string;
   h: number;
   color: number;
+  /** 3D 모델(GLB) 주소. 없으면 상자로 그린다 */
+  modelUrl?: string;
 };
 
 // + 0 은 -0 을 0 으로 바꾼다
@@ -80,6 +82,7 @@ export function placeCatalogItem(entry: CatalogItem, id: string, at: Pick<Footpr
     x: at.x,
     z: at.z,
     rotationDeg: at.rotationDeg,
+    ...(entry.modelUrl ? { modelUrl: entry.modelUrl } : {}),
   };
 }
 

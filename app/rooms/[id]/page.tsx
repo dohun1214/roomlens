@@ -40,14 +40,17 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
       .from('furniture_catalog')
-      .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m')
+      .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m, model_key')
       .order('sort_order'),
     // 이 방에 내가 저장해 둔 가구 배치 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
     ready && user ? loadMyLayout(supabase, room.id, user.id) : null,
     ready && user ? loadUserFurniture(supabase, user.id) : undefined,
   ]);
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
-  const catalog = catalogRows?.length ? catalogRows.map(fromCatalogRow) : undefined;
+  // 모델 파일도 비공개 버킷에 있어 가구마다 읽기 주소를 만든다 (서명은 서버 안에서 계산하므로 요청이 나가지 않는다)
+  const catalog = catalogRows?.length
+    ? await Promise.all(catalogRows.map(async (row) => fromCatalogRow(row, row.model_key ? await presignGet(row.model_key) : null)))
+    : undefined;
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
 
   return (
