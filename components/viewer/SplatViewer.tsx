@@ -45,6 +45,7 @@ export default function SplatViewer({ url, name }: Props) {
   // 지금 화면에 그리는 스플랫 수와 화면 배율 (폰에서 화질 설정이 먹었는지 확인용)
   const [drawn, setDrawn] = useState<number | null>(null);
   const [pixelRatio, setPixelRatio] = useState(1);
+  const [motionInfo, setMotionInfo] = useState('');
   const [flipped, setFlipped] = useState(false);
   // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
   const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
@@ -62,6 +63,7 @@ export default function SplatViewer({ url, name }: Props) {
     const quality = resolveViewerQuality(isMobile(), new URLSearchParams(window.location.search));
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
     setPixelRatio(renderer.getPixelRatio());
+    setMotionInfo(`정렬 ${quality.minSortIntervalMs}ms · 시야 집중 ${quality.foveation ? '켬' : '끔'}`);
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
@@ -82,6 +84,9 @@ export default function SplatViewer({ url, name }: Props) {
       lodRaycast: 0,
       lodSplatCount: quality.lodSplatCount,
       lodRenderScale: quality.lodRenderScale,
+      minSortIntervalMs: quality.minSortIntervalMs,
+      // 시야 집중을 끄면 어느 방향이든 같은 세밀함으로 고른다 (돌려도 LOD가 다시 골라지지 않음)
+      ...(quality.foveation ? {} : { coneFov0: 0, coneFov: 0, coneFoveate: 1, behindFoveate: 1 }),
     });
     scene.add(spark);
 
@@ -260,8 +265,8 @@ export default function SplatViewer({ url, name }: Props) {
           )}
           <div>FPS: {fps}</div>
           {drawn !== null && (
-            <div data-testid="viewer-drawn" data-drawn={drawn} data-pixel-ratio={pixelRatio}>
-              그리는 중: {drawn.toLocaleString()}개 · 배율 {pixelRatio}
+            <div data-testid="viewer-drawn" data-drawn={drawn} data-pixel-ratio={pixelRatio} data-motion={motionInfo}>
+              그리는 중: {drawn.toLocaleString()}개 · 배율 {pixelRatio} · {motionInfo}
             </div>
           )}
         </div>

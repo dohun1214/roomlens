@@ -16,7 +16,7 @@ describe('resolveViewerQuality', () => {
   });
 
   it('주소의 값이 기본값보다 우선한다', () => {
-    expect(q(true, 'lod=500000&pr=1&lrs=2')).toEqual({ lodSplatCount: 500_000, pixelRatioCap: 1, lodRenderScale: 2 });
+    expect(q(true, 'lod=500000&pr=1&lrs=2')).toMatchObject({ lodSplatCount: 500_000, pixelRatioCap: 1, lodRenderScale: 2 });
     expect(q(false, 'lod=1200000')).toEqual({ ...DESKTOP_QUALITY, lodSplatCount: 1_200_000 });
   });
 
@@ -29,6 +29,14 @@ describe('resolveViewerQuality', () => {
     expect(q(false, 'lod=99999999').lodSplatCount).toBe(5_000_000);
     expect(q(false, 'pr=10').pixelRatioCap).toBe(3);
     expect(q(false, 'lrs=0').lodRenderScale).toBe(1);
+  });
+
+  it('정렬 간격과 시야 집중도 주소 값으로 바꾼다', () => {
+    expect(q(true, 'sort=200&fov=off')).toEqual({ ...MOBILE_QUALITY, minSortIntervalMs: 200, foveation: false });
+    expect(q(true, 'fov=on').foveation).toBe(true);
+    expect(q(true, 'fov=maybe').foveation).toBe(MOBILE_QUALITY.foveation);
+    expect(q(false, 'sort=-5').minSortIntervalMs).toBe(0);
+    expect(q(false, 'sort=99999').minSortIntervalMs).toBe(1000);
   });
 
   it('숫자가 아니거나 빈 값은 무시한다', () => {
