@@ -85,7 +85,10 @@ const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const piece = (id, furnitureRef, x, z, rotationDeg = 0) => ({ id, furnitureRef, kind: 'catalog', x, z, rotationDeg });
 // 방 4 × 3 m. 문은 아래쪽 벽의 왼쪽(x -1.8 ~ -0.9), 창문은 위쪽 벽(x -0.2 ~ 1)
 const GOOD = [piece('f1', 'bed-single', 1.5, 0.5), piece('f2', 'desk', 0.3, -1.2)];
-const BLOCKING = [piece('f1', 'desk', -1.3, -1.2), piece('f2', 'wardrobe', 0.4, 1.2), piece('f3', 'drawer', 1.5, 1.25)];
+// 위쪽 벽(z=1.5)에 붙인 옷장·서랍장은 180° 돌려 앞이 방 안쪽을 보게 한다
+const BLOCKING = [piece('f1', 'desk', -1.3, -1.2), piece('f2', 'wardrobe', 0.4, 1.2, 180), piece('f3', 'drawer', 1.5, 1.25, 180)];
+// 책상을 180° 돌려 앞이 벽을 보게 한 배치
+const FACING_WALL = [piece('f1', 'bed-single', 1.5, 0.5), piece('f2', 'desk', 0.3, -1.2, 180)];
 // 싱글 침대(1.0 × 2.0) 둘을 90° 돌려 방을 가로로 막고(벽에서 벽까지), 그 뒤(창문 쪽)에 의자를 둔다
 const WALLED = [piece('f1', 'bed-single', -1, 0, 90), piece('f2', 'bed-single', 1, 0, 90), piece('f3', 'chair', 0, 1.25)];
 
@@ -160,6 +163,10 @@ try {
   // 5) 문제 없는 배치
   const good = await load(GOOD, [DOOR, WINDOW]);
   check('침대를 오른쪽 벽에, 책상을 문 옆 벽에: 문제 없음', good.ok && !good.doorHint, good.messages);
+
+  // 5-1) 쓰는 쪽: 책상의 앞이 벽에 막히면 경고(노랑), 고쳐야 하는 문제는 아님
+  const facingWall = await load(FACING_WALL, [DOOR, WINDOW]);
+  check('책상의 앞이 벽을 보면: "책상: 앞이 막혀 있습니다"가 경고(노랑)', same(facingWall.messages, ['책상: 앞이 막혀 있습니다 (앞에 70cm 필요)']) && same(facingWall.warnings, facingWall.messages) && facingWall.errors === 0, facingWall.messages);
 
   // 6) 새 가구는 문 앞을 피해 놓인다: 방 가운데를 문 앞으로 만들기 위해 문을 가운데 아래에 둔다
   const centerDoor = { type: 'door', wallIndex: 0, from: 1.2, to: 2.8, widthM: 1.6 };

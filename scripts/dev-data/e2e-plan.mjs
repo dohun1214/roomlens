@@ -154,7 +154,7 @@ try {
   check('문 옆 벽으로 옮기면 문제 없음', (await planItem('f1').getAttribute('data-state')) === 'ok' && (await page.getByTestId('layout-violations').getAttribute('data-count')) === '0', null);
   await panel.getByRole('button', { name: '+ 옷장', exact: true }).click();
   await dragTo('f2', 0.4, 1.2);
-  check('옷장을 창문 앞으로 끌면: 평면도에서 노랑, "옷장: 창문을 가립니다"', (await planItem('f2').getAttribute('data-state')) === 'warning' && (await messages()).join() === '옷장: 창문을 가립니다', await messages());
+  check('옷장을 창문 앞으로 끌면: 평면도에서 노랑, "옷장: 창문을 가립니다"', (await planItem('f2').getAttribute('data-state')) === 'warning' && (await messages()).includes('옷장: 창문을 가립니다'), await messages());
 
   // 5) 선택: 누르면 선택, 빈 곳을 누르면 해제, 선택한 가구를 패널에서 돌리기
   const empty = await toScreen(-1.5, 1.0);

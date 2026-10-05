@@ -128,7 +128,8 @@ try {
   const okIds = [...new Set(glbResponses.filter((r) => r.status === 200).map((r) => r.id))];
   check('모델 파일 9개를 한 번씩만 받음 (모두 200)', okIds.length === 9 && glbResponses.length === 9, glbResponses.map((r) => r.status));
   check('치수·위치는 카탈로그·저장값 그대로 (모델이 가구 크기를 바꾸지 않음)', shown[0].w === 1 && shown[0].d === 2 && shown[2].w === 1.5 && shown[5].name === '책상' && shown[5].w === 1.2 && shown[5].h === 0.73 && shown[5].x === -2.2, shown.slice(0, 3).map((i) => [i.name, i.w, i.d, i.h]));
-  check('배치에 문제 없음, 화면 오류 없음', (await page.getByTestId('layout-violations').getAttribute('data-count')) === '0' && pageErrors.length === 0, pageErrors);
+  // 침대 셋을 나란히 붙여 놓아 "옆으로 들어갈 자리" 경고는 나온다. 고쳐야 하는 문제(겹침·방 밖)는 없어야 한다
+  check('배치에 고쳐야 할 문제 없음, 화면 오류 없음', (await page.getByTestId('layout-violations').getAttribute('data-errors')) === '0' && pageErrors.length === 0, pageErrors);
 
   // 2) 개발 서버: 그려진 모델의 실제 크기를 재고(월드 좌표의 경계 상자), 그림을 남긴다
   const dev = await page.evaluate(() => Boolean(window.__roomlens));

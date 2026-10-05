@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
+import { blocksAccess } from '@/lib/layout/accessSide';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
 import {
   MAX_USER_FURNITURE,
@@ -287,9 +288,11 @@ export default function FurnitureLayer({
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
     const id = `f${nextItemNumber(itemsRef.current)}`;
-    // 방 가운데부터 찾아, 다른 가구와 겹치지 않고 문 앞도 아닌 가장 가까운 빈자리에 놓는다
+    // 방 가운데부터 찾아, 다른 가구와 겹치지 않고 문 앞도 아닌 가장 가까운 빈자리에 놓는다.
+    // 되도록 가구의 쓰는 쪽(책상·수납의 앞 등)이 서로 막히지 않는 자리를 고른다
+    const others = itemsRef.current;
     const doorZones = openings.flatMap((o) => (o.type === 'door' ? [doorZone(o, floorPolygon)] : [])).filter((zone) => zone !== null);
-    const placed = findFreeSpot(entry, [...itemsRef.current, ...doorZones], floorPolygon);
+    const placed = findFreeSpot(entry, [...others, ...doorZones], floorPolygon, (spot) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, others, floorPolygon));
     setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
   };

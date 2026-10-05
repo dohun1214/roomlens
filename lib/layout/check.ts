@@ -1,13 +1,17 @@
-// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고).
+// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
 import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import type { Opening } from '@/lib/rooms/openings';
+import { findBlockedAccess } from './accessSide';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
 import { footprintInsideRoom, footprintsOverlap, interiorPoint } from './geometry';
 
-/** h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다 */
-export type LayoutItem = Footprint & { id: string; name: string; h?: number };
+/**
+ * h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다.
+ * category·clearance(앞에 비워 둘 깊이, m)는 쓰는 쪽 검사에 쓴다. 없으면 그 검사를 하지 않는다.
+ */
+export type LayoutItem = Footprint & { id: string; name: string; h?: number; category?: string; clearance?: number };
 
-export type ViolationType = 'overlap' | 'outside' | 'door' | 'unreachable' | 'window';
+export type ViolationType = 'overlap' | 'outside' | 'door' | 'unreachable' | 'window' | 'access';
 
 export type Violation = {
   itemId: string;
@@ -38,7 +42,15 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       );
     }
   }
-  if (!polygon || openings.length === 0) return violations;
+  // 쓰는 쪽(책상·수납의 앞, 침대의 긴 변 한쪽, 식탁의 긴 변 양쪽)이 벽이나 다른 가구에 막혀 있으면 경고. 다른 문제 뒤에 붙인다
+  const names = new Map(items.map((item) => [item.id, item.name]));
+  const access: Violation[] = findBlockedAccess(items, polygon).map(({ id, message }) => ({
+    itemId: id,
+    type: 'access',
+    severity: 'warning',
+    message: `${names.get(id)}: ${message}`,
+  }));
+  if (!polygon || openings.length === 0) return [...violations, ...access];
 
   // 문 앞: 문 폭 × 문 폭 정사각형을 비워 둔다
   const doors = openings.filter((o) => o.type === 'door');
@@ -69,7 +81,7 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       violations.push({ itemId: item.id, type: 'window', severity: 'warning', message: `${item.name}: 창문을 가립니다` });
     }
   }
-  return violations;
+  return [...violations, ...access];
 }
 
 /** 고쳐야 하는 문제(error)가 있는 가구 id 모음 */
@@ -88,8 +100,14 @@ const SEARCH_RADIUS = 6;
 /**
  * 새 가구를 놓을 빈자리를 찾는다: 방 가운데에서 시작해 바깥으로 넓혀 가며
  * 방 안이고 다른 가구와 겹치지 않는 첫 위치. 못 찾으면 가운데(겹친 채로 두고 검사에서 알린다).
+ * @param prefer 되도록 지키고 싶은 조건(예: 쓰는 쪽을 막지 않기). 이를 지키는 자리가 없으면 조건 없이 다시 찾는다
  */
-export function findFreeSpot(size: Pick<Footprint, 'w' | 'd'>, others: Footprint[], floorPolygon: Point2[] | null): Footprint {
+export function findFreeSpot(
+  size: Pick<Footprint, 'w' | 'd'>,
+  others: Footprint[],
+  floorPolygon: Point2[] | null,
+  prefer?: (spot: Footprint) => boolean,
+): Footprint {
   const polygon = floorPolygon && floorPolygon.length >= 3 ? floorPolygon : null;
   // 사각형 방에서는 방 가운데(보정된 방은 정확히 원점), 오목한 방에서는 벽에서 가장 먼 곳
   const center: Point2 = polygon ? interiorPoint(polygon) : [0, 0];
@@ -97,15 +115,18 @@ export function findFreeSpot(size: Pick<Footprint, 'w' | 'd'>, others: Footprint
   const fits = (f: Footprint) => (!polygon || footprintInsideRoom(f, polygon)) && others.every((o) => !footprintsOverlap(f, o));
 
   const first = at(0, 0);
-  if (fits(first)) return first;
-  // 가운데를 둘러싼 정사각형 고리를 안쪽부터 훑는다
-  for (let ring = 1; ring * SEARCH_STEP <= SEARCH_RADIUS; ring += 1) {
-    for (let i = -ring; i <= ring; i += 1) {
-      for (const [dx, dz] of [[i, -ring], [i, ring], [-ring, i], [ring, i]] as const) {
-        const candidate = at(dx * SEARCH_STEP, dz * SEARCH_STEP);
-        if (fits(candidate)) return candidate;
+  const search = (accept: (f: Footprint) => boolean): Footprint | null => {
+    if (accept(first)) return first;
+    // 가운데를 둘러싼 정사각형 고리를 안쪽부터 훑는다
+    for (let ring = 1; ring * SEARCH_STEP <= SEARCH_RADIUS; ring += 1) {
+      for (let i = -ring; i <= ring; i += 1) {
+        for (const [dx, dz] of [[i, -ring], [i, ring], [-ring, i], [ring, i]] as const) {
+          const candidate = at(dx * SEARCH_STEP, dz * SEARCH_STEP);
+          if (accept(candidate)) return candidate;
+        }
       }
     }
-  }
-  return first;
+    return null;
+  };
+  return (prefer ? search((f) => fits(f) && prefer(f)) : null) ?? search(fits) ?? first;
 }

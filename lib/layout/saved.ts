@@ -29,6 +29,9 @@ export type PlacedItem = Footprint & {
   furnitureRef: string;
   name: string;
   h: number;
+  /** 가구 종류와 앞에 비워 둘 깊이(m): 쓰는 쪽 검사에 쓴다 */
+  category: string;
+  clearance: number;
   color: number;
   /** 3D 모델(GLB) 주소. 없으면 상자로 그린다 */
   modelUrl?: string;
@@ -78,6 +81,8 @@ export function placeCatalogItem(entry: CatalogItem, id: string, at: Pick<Footpr
     w: entry.w,
     d: entry.d,
     h: entry.h,
+    category: entry.category,
+    clearance: entry.clearance,
     color: categoryColor(entry.category),
     x: at.x,
     z: at.z,
