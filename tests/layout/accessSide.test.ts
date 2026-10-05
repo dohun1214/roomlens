@@ -32,7 +32,7 @@ describe('가구 종류별 쓰는 쪽', () => {
   it('책상·수납은 앞, 침대는 긴 변 한쪽, 식탁은 긴 변 양쪽', () => {
     expect(accessRule(desk(0, 0))).toMatchObject({ sides: ['front'], mode: 'all' });
     expect(accessRule(wardrobe(0, 0))).toMatchObject({ sides: ['front'], mode: 'all' });
-    expect(accessRule(bed(0, 0))).toMatchObject({ sides: ['left', 'right'], mode: 'any' });
+    expect(accessRule(bed(0, 0))).toMatchObject({ sides: ['left', 'right'], mode: 'any', footHalf: true });
     expect(accessRule(table(0, 0))).toMatchObject({ sides: ['front', 'back'], mode: 'all' });
   });
 
@@ -62,6 +62,12 @@ describe('가구 옆 구역', () => {
     expect(rounded(sideZone(f, 'back', 0.7))).toEqual([0, -0.65, 1.2, 0.7]);
     expect(rounded(sideZone(f, 'right', 0.6))).toEqual([0.9, 0, 0.6, 0.6]);
     expect(rounded(sideZone(f, 'left', 0.6))).toEqual([-0.9, 0, 0.6, 0.6]);
+  });
+
+  it('발치 절반: 좌우 구역이 앞쪽 절반만 차지한다', () => {
+    const bedShape = { x: 0, z: 0, w: 1.0, d: 2.0, rotationDeg: 0 };
+    const zone = sideZone(bedShape, 'right', 0.6, true);
+    expect([zone.x, zone.z, zone.w, zone.d]).toEqual([0.8, 0.5, 0.6, 1.0]);
   });
 
   it('가구를 돌리면 구역도 같이 돈다 (90°: 앞이 +x)', () => {
@@ -101,6 +107,8 @@ describe('쓰는 쪽이 막혔는지', () => {
     expect(accessBlocked(b, [b], ROOM)).toBe(false);
     // 오른쪽에 옷장을 붙이면 양쪽이 다 막힌다
     expect(accessBlocked(b, [b, wardrobe(-0.55, -0.5)], ROOM)).toBe(true);
+    // 머리맡(뒤쪽 절반)에 붙인 협탁은 막지 않는다
+    expect(accessBlocked(b, [b, wardrobe(-0.55, -1.2)], ROOM)).toBe(false);
   });
 
   it('식탁은 긴 변 양쪽이 다 비어야 한다', () => {

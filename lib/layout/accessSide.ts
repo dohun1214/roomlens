@@ -6,15 +6,18 @@ import { footprintInsideRoom, footprintsOverlap } from './geometry';
 
 export type Side = 'front' | 'back' | 'left' | 'right';
 
-/** sides 가운데 하나만 비면 되는지(any), 모두 비어야 하는지(all) */
-export type AccessRule = { sides: Side[]; mode: 'any' | 'all'; message: string };
+/**
+ * sides 가운데 하나만 비면 되는지(any), 모두 비어야 하는지(all).
+ * footHalf면 좌우 면의 앞쪽(발치) 절반만 본다: 침대 머리맡에 협탁을 붙여도 들어갈 수 있다.
+ */
+export type AccessRule = { sides: Side[]; mode: 'any' | 'all'; message: string; footHalf?: boolean };
 
 /** category·clearance가 없으면 쓰는 쪽을 따지지 않는 가구로 본다 */
 export type AccessItem = Footprint & { id: string; category?: string; clearance?: number };
 
 /**
  * 가구 종류별로 비어 있어야 하는 쪽. 비워 둘 깊이는 카탈로그의 clearance(m)이고 0이면 검사하지 않는다.
- * - 침대: 긴 변 한쪽 (들어갈 자리)
+ * - 침대: 긴 변 한쪽 (들어갈 자리). 머리(뒤)에서 먼 절반만 비면 된다
  * - 식탁: 긴 변 양쪽 (마주 앉는 자리)
  * - 책상·수납(옷장·행거·서랍장·책장): 앞
  * - 의자·내 가구: 검사하지 않음 (내 가구는 어느 쪽이 앞인지 모른다)
@@ -26,7 +29,7 @@ export function accessRule(item: Pick<AccessItem, 'category' | 'clearance' | 'w'
   const longSides: Side[] = item.d >= item.w ? ['left', 'right'] : ['front', 'back'];
   switch (item.category) {
     case 'bed':
-      return { sides: longSides, mode: 'any', message: `옆으로 들어갈 자리가 없습니다 (긴 변 한쪽에 ${cm}cm 필요)` };
+      return { sides: longSides, mode: 'any', footHalf: true, message: `옆으로 들어갈 자리가 없습니다 (긴 변 한쪽에 ${cm}cm 필요)` };
     case 'table':
       return { sides: longSides, mode: 'all', message: `양쪽에 앉을 자리가 없습니다 (긴 변 양쪽에 ${cm}cm 필요)` };
     case 'desk':
@@ -37,8 +40,11 @@ export function accessRule(item: Pick<AccessItem, 'category' | 'clearance' | 'w'
   }
 }
 
-/** 가구의 한쪽 면 바로 바깥으로 depth만큼 뻗은 직사각형 구역 */
-export function sideZone(f: Footprint, side: Side, depth: number): Footprint {
+/**
+ * 가구의 한쪽 면 바로 바깥으로 depth만큼 뻗은 직사각형 구역.
+ * @param footHalf 좌우 면일 때 앞쪽(+z, 침대의 발치) 절반만
+ */
+export function sideZone(f: Footprint, side: Side, depth: number, footHalf = false): Footprint {
   const r = (f.rotationDeg * Math.PI) / 180;
   const c = Math.cos(r);
   const s = Math.sin(r);
@@ -50,7 +56,9 @@ export function sideZone(f: Footprint, side: Side, depth: number): Footprint {
     return { x: f.x + uz[0] * k, z: f.z + uz[1] * k, w: f.w, d: depth, rotationDeg: f.rotationDeg };
   }
   const k = (side === 'right' ? 1 : -1) * (f.w / 2 + depth / 2);
-  return { x: f.x + ux[0] * k, z: f.z + ux[1] * k, w: depth, d: f.d, rotationDeg: f.rotationDeg };
+  const length = footHalf ? f.d / 2 : f.d;
+  const forward = footHalf ? f.d / 4 : 0;
+  return { x: f.x + ux[0] * k + uz[0] * forward, z: f.z + ux[1] * k + uz[1] * forward, w: depth, d: length, rotationDeg: f.rotationDeg };
 }
 
 /** 가구가 앞(+z)으로 보는 방향의 단위 벡터 [x, z] */
@@ -68,7 +76,7 @@ export function accessBlocked(item: AccessItem, others: AccessItem[], polygon: P
   if (!rule) return false;
   const clearance = item.clearance ?? 0;
   const free = (side: Side) => {
-    const zone = sideZone(item, side, clearance);
+    const zone = sideZone(item, side, clearance, rule.footHalf);
     if (polygon && !footprintInsideRoom(zone, polygon)) return false;
     return others.every((o) => o.id === item.id || o.category === 'chair' || !footprintsOverlap(zone, o));
   };
