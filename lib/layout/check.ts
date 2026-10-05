@@ -1,13 +1,17 @@
-// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고).
+// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
 import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import type { Opening } from '@/lib/rooms/openings';
+import { findBlockedAccess } from './accessSide';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
 import { footprintInsideRoom, footprintsOverlap, interiorPoint } from './geometry';
 
-/** h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다 */
-export type LayoutItem = Footprint & { id: string; name: string; h?: number };
+/**
+ * h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다.
+ * category·clearance(앞에 비워 둘 깊이, m)는 쓰는 쪽 검사에 쓴다. 없으면 그 검사를 하지 않는다.
+ */
+export type LayoutItem = Footprint & { id: string; name: string; h?: number; category?: string; clearance?: number };
 
-export type ViolationType = 'overlap' | 'outside' | 'door' | 'unreachable' | 'window';
+export type ViolationType = 'overlap' | 'outside' | 'door' | 'unreachable' | 'window' | 'access';
 
 export type Violation = {
   itemId: string;
@@ -38,7 +42,15 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       );
     }
   }
-  if (!polygon || openings.length === 0) return violations;
+  // 쓰는 쪽(책상·수납의 앞, 침대의 긴 변 한쪽, 식탁의 긴 변 양쪽)이 벽이나 다른 가구에 막혀 있으면 경고. 다른 문제 뒤에 붙인다
+  const names = new Map(items.map((item) => [item.id, item.name]));
+  const access: Violation[] = findBlockedAccess(items, polygon).map(({ id, message }) => ({
+    itemId: id,
+    type: 'access',
+    severity: 'warning',
+    message: `${names.get(id)}: ${message}`,
+  }));
+  if (!polygon || openings.length === 0) return [...violations, ...access];
 
   // 문 앞: 문 폭 × 문 폭 정사각형을 비워 둔다
   const doors = openings.filter((o) => o.type === 'door');
@@ -69,7 +81,7 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       violations.push({ itemId: item.id, type: 'window', severity: 'warning', message: `${item.name}: 창문을 가립니다` });
     }
   }
-  return violations;
+  return [...violations, ...access];
 }
 
 /** 고쳐야 하는 문제(error)가 있는 가구 id 모음 */
