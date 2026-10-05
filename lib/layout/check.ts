@@ -100,8 +100,14 @@ const SEARCH_RADIUS = 6;
 /**
  * 새 가구를 놓을 빈자리를 찾는다: 방 가운데에서 시작해 바깥으로 넓혀 가며
  * 방 안이고 다른 가구와 겹치지 않는 첫 위치. 못 찾으면 가운데(겹친 채로 두고 검사에서 알린다).
+ * @param prefer 되도록 지키고 싶은 조건(예: 쓰는 쪽을 막지 않기). 이를 지키는 자리가 없으면 조건 없이 다시 찾는다
  */
-export function findFreeSpot(size: Pick<Footprint, 'w' | 'd'>, others: Footprint[], floorPolygon: Point2[] | null): Footprint {
+export function findFreeSpot(
+  size: Pick<Footprint, 'w' | 'd'>,
+  others: Footprint[],
+  floorPolygon: Point2[] | null,
+  prefer?: (spot: Footprint) => boolean,
+): Footprint {
   const polygon = floorPolygon && floorPolygon.length >= 3 ? floorPolygon : null;
   // 사각형 방에서는 방 가운데(보정된 방은 정확히 원점), 오목한 방에서는 벽에서 가장 먼 곳
   const center: Point2 = polygon ? interiorPoint(polygon) : [0, 0];
@@ -109,15 +115,18 @@ export function findFreeSpot(size: Pick<Footprint, 'w' | 'd'>, others: Footprint
   const fits = (f: Footprint) => (!polygon || footprintInsideRoom(f, polygon)) && others.every((o) => !footprintsOverlap(f, o));
 
   const first = at(0, 0);
-  if (fits(first)) return first;
-  // 가운데를 둘러싼 정사각형 고리를 안쪽부터 훑는다
-  for (let ring = 1; ring * SEARCH_STEP <= SEARCH_RADIUS; ring += 1) {
-    for (let i = -ring; i <= ring; i += 1) {
-      for (const [dx, dz] of [[i, -ring], [i, ring], [-ring, i], [ring, i]] as const) {
-        const candidate = at(dx * SEARCH_STEP, dz * SEARCH_STEP);
-        if (fits(candidate)) return candidate;
+  const search = (accept: (f: Footprint) => boolean): Footprint | null => {
+    if (accept(first)) return first;
+    // 가운데를 둘러싼 정사각형 고리를 안쪽부터 훑는다
+    for (let ring = 1; ring * SEARCH_STEP <= SEARCH_RADIUS; ring += 1) {
+      for (let i = -ring; i <= ring; i += 1) {
+        for (const [dx, dz] of [[i, -ring], [i, ring], [-ring, i], [ring, i]] as const) {
+          const candidate = at(dx * SEARCH_STEP, dz * SEARCH_STEP);
+          if (accept(candidate)) return candidate;
+        }
       }
     }
-  }
-  return first;
+    return null;
+  };
+  return (prefer ? search((f) => fits(f) && prefer(f)) : null) ?? search(fits) ?? first;
 }

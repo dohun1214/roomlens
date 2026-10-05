@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { accessBlocked, accessRule, findBlockedAccess, frontDirection, sideZone, type AccessItem } from '@/lib/layout/accessSide';
-import { checkLayout, violatingIds, warningIds, type LayoutItem } from '@/lib/layout/check';
+import { accessBlocked, accessRule, blocksAccess, findBlockedAccess, frontDirection, sideZone, type AccessItem } from '@/lib/layout/accessSide';
+import { checkLayout, findFreeSpot, violatingIds, warningIds, type LayoutItem } from '@/lib/layout/check';
 import type { Point2 } from '@/lib/three/floorDrag';
 
 // 4 × 3 m 방. x -2~2, z -1.5~1.5
@@ -123,6 +123,30 @@ describe('쓰는 쪽이 막혔는지', () => {
   it('막힌 가구와 이유를 모아 준다', () => {
     const items = [desk(0, -1.2, 180), wardrobe(-1.5, -1.2), chair(1.5, 1)];
     expect(findBlockedAccess(items, ROOM)).toEqual([{ id: 'desk', message: '앞이 막혀 있습니다 (앞에 70cm 필요)' }]);
+  });
+});
+
+describe('새 가구를 놓을 자리', () => {
+  it('새 가구가 막히거나 다른 가구를 새로 막으면 알려 준다', () => {
+    const w = wardrobe(0, -1.2);
+    // 옷장 앞(z -0.9~-0.3)에 놓는 서랍장
+    expect(blocksAccess({ ...make('drawer', 'storage', 0.8, 0.45, 0.6)(0, -0.6) }, [w], ROOM)).toBe(true);
+    // 옷장 옆에 나란히 놓는 서랍장
+    expect(blocksAccess({ ...make('drawer', 'storage', 0.8, 0.45, 0.6)(1.0, -1.25) }, [w], ROOM)).toBe(false);
+    // 이미 막혀 있던 가구는 새 가구 탓이 아니다
+    const stuck = desk(0, -1.2, 180);
+    expect(blocksAccess(chair(1.5, 1), [stuck], ROOM)).toBe(false);
+  });
+
+  it('빈자리 찾기: 쓰는 쪽을 막지 않는 자리를 먼저 고르고, 없으면 조건 없이 고른다', () => {
+    const d = desk(0, 0);
+    const size = { w: 0.9, d: 0.6 };
+    const plain = findFreeSpot(size, [d], ROOM);
+    const careful = findFreeSpot(size, [d], ROOM, (spot) => !blocksAccess({ ...spot, id: 'new', category: 'storage', clearance: 0.6 }, [d], ROOM));
+    expect(blocksAccess({ ...careful, id: 'new', category: 'storage', clearance: 0.6 }, [d], ROOM)).toBe(false);
+    expect(checkLayout([d, { ...careful, id: 'new', name: 'new', category: 'storage', clearance: 0.6 }] as LayoutItem[], ROOM)).toEqual([]);
+    // 지킬 수 없는 조건이면 조건이 없을 때와 같은 자리
+    expect(findFreeSpot(size, [d], ROOM, () => false)).toEqual(plain);
   });
 });
 

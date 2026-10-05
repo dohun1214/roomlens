@@ -83,6 +83,16 @@ export function accessBlocked(item: AccessItem, others: AccessItem[], polygon: P
   return rule.mode === 'any' ? !rule.sides.some(free) : !rule.sides.every(free);
 }
 
+/**
+ * 새 가구를 이 자리에 놓으면 쓰는 쪽 문제가 새로 생기는지:
+ * 새 가구의 쓰는 쪽이 막히거나, 지금까지 괜찮던 다른 가구의 쓰는 쪽을 새 가구가 막는 경우.
+ */
+export function blocksAccess(added: AccessItem, others: AccessItem[], polygon: Point2[] | null): boolean {
+  const all = [...others, added];
+  if (accessBlocked(added, all, polygon)) return true;
+  return others.some((o) => !accessBlocked(o, others, polygon) && accessBlocked(o, all, polygon));
+}
+
 /** 쓰는 쪽이 막힌 가구와 화면에 보여줄 이유 */
 export function findBlockedAccess(items: AccessItem[], polygon: Point2[] | null): { id: string; message: string }[] {
   const blocked: { id: string; message: string }[] = [];
