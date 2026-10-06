@@ -6,6 +6,9 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { blocksAccess } from '@/lib/layout/accessSide';
+import type { AiResultView } from '@/lib/ai/suggestClient';
+import { MAX_SUGGEST_ITEMS } from '@/lib/ai/layoutSuggest';
+import { MAX_REQUEST_LENGTH } from '@/lib/ai/roomSummary';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
 import {
   MAX_USER_FURNITURE,
@@ -41,6 +44,10 @@ const WARNING_EDGE_COLOR = 0xffc233;
 const WARNING_EMISSIVE = 0x4a3800;
 const NO_OPENINGS: Opening[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
+const NO_LAYOUTS: LayoutChoice[] = [];
+
+/** 배치를 고르는 칸에 보여줄 것 */
+export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai' };
 const EMPTY_MINE_FORM: UserFurnitureForm = { name: '', width: '', depth: '', height: '' };
 
 type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
@@ -50,6 +57,7 @@ type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint 
  * 가구는 roomGroup이 아니라 scene에 직접 넣는다 (방 좌표 = 월드 좌표).
  * 겹치거나 방 밖으로 나갔거나 문 앞·통로를 막는 가구는 빨갛게, 창문을 가리는 가구는 노랗게 표시하고 이유를 알려준다.
  * onSave가 있으면 저장 버튼을 보여주고, initialItems(저장된 배치)로 시작한다.
+ * 배치를 바꾸거나(내 배치 ↔ AI 배치) 새로 추천받으면 부모가 key를 바꿔 이 층을 새로 만든다.
  */
 export default function FurnitureLayer({
   engineRef,
@@ -62,6 +70,15 @@ export default function FurnitureLayer({
   initialItems,
   onSave,
   loginHint = false,
+  layouts = NO_LAYOUTS,
+  currentLayoutId = null,
+  onSelectLayout,
+  onDeleteLayout,
+  onSuggest,
+  aiRemaining = null,
+  aiBlocked = null,
+  aiResult = null,
+  aiSummary = null,
 }: {
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
@@ -81,6 +98,23 @@ export default function FurnitureLayer({
   onSave?: (items: SavedItem[]) => Promise<boolean>;
   /** 로그인하면 저장할 수 있다는 안내를 보여줄지 */
   loginHint?: boolean;
+  /** 이 방의 내 배치들 (내 배치, AI 배치). 둘 이상이면 고르는 칸이 생긴다 */
+  layouts?: LayoutChoice[];
+  /** 지금 보고 있는 배치. null이면 아직 저장하지 않은 새 배치 */
+  currentLayoutId?: string | null;
+  onSelectLayout?: (id: string | null) => void;
+  /** 배치를 지운다. 지웠으면 true */
+  onDeleteLayout?: (id: string) => Promise<boolean>;
+  /** AI 배치 추천을 받는다 (주면 "AI 추천" 칸이 생긴다). 성공하면 부모가 새 AI 배치로 바꾼다 */
+  onSuggest?: (items: SavedItem[], request: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** 오늘 남은 AI 횟수 (모르면 null) */
+  aiRemaining?: number | null;
+  /** AI 추천을 지금 쓸 수 없는 이유 (예: 보정을 저장하지 않음) */
+  aiBlocked?: string | null;
+  /** 방금 받은 추천의 결과 (지금 보고 있는 배치의 것일 때만) */
+  aiResult?: AiResultView | null;
+  /** 저장된 AI 배치에 붙어 있는 글 (전체 의도와 가구별 이유) */
+  aiSummary?: string | null;
 }) {
   const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, userFurniture));
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
@@ -101,6 +135,13 @@ export default function FurnitureLayer({
   const [modelCache] = useState(() => new Map<string, ModelTemplate | null>());
   const [modelVersion, setModelVersion] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // AI 추천: 요청 글 입력칸을 펼쳤는지, 요청 글, 진행 상태, 실패 이유
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiRequest, setAiRequest] = useState('');
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const [layoutBusy, setLayoutBusy] = useState(false);
+  const [confirmLayoutDelete, setConfirmLayoutDelete] = useState(false);
   const itemsRef = useRef<Item[]>([]);
   const groupRef = useRef<THREE.Group | null>(null);
 
@@ -312,13 +353,48 @@ export default function FurnitureLayer({
     setSelectedId(null);
   };
 
-  const save = async () => {
-    if (!onSave || savePhase === 'saving') return;
+  const save = async (): Promise<boolean> => {
+    if (!onSave || savePhase === 'saving') return false;
     const snapshot = currentSaved;
     setSavePhase('saving');
     const ok = await onSave(snapshot);
     if (ok) setSavedItems(snapshot);
     setSavePhase(ok ? 'idle' : 'error');
+    return ok;
+  };
+
+  /** 다른 배치로 바꾸기 전에, 저장하지 않은 것이 있으면 먼저 저장한다 (잃지 않게) */
+  const saveIfDirty = async (): Promise<boolean> => !dirty || !onSave || (await save());
+
+  const selectLayout = async (id: string | null) => {
+    if (!onSelectLayout || layoutBusy || id === currentLayoutId) return;
+    setLayoutBusy(true);
+    const ok = await saveIfDirty();
+    setLayoutBusy(false);
+    if (ok) onSelectLayout(id);
+  };
+
+  const deleteLayout = async () => {
+    if (!onDeleteLayout || !currentLayoutId || layoutBusy) return;
+    setLayoutBusy(true);
+    await onDeleteLayout(currentLayoutId);
+    setLayoutBusy(false);
+    setConfirmLayoutDelete(false);
+  };
+
+  const suggest = async () => {
+    if (!onSuggest || aiBusy) return;
+    setAiBusy(true);
+    setAiMessage(null);
+    if (!(await saveIfDirty())) {
+      setAiBusy(false);
+      setAiMessage('지금 배치를 저장하지 못해 추천을 시작하지 않았습니다. 다시 해 주세요.');
+      return;
+    }
+    const result = await onSuggest(currentSaved, aiRequest);
+    // 성공하면 부모가 새 AI 배치로 바꾸면서 이 층을 새로 만든다
+    setAiBusy(false);
+    if (!result.ok) setAiMessage(result.message);
   };
 
   const createMine = async () => {
@@ -358,6 +434,11 @@ export default function FurnitureLayer({
   };
 
   const selected = items.find((i) => i.id === selectedId) ?? null;
+  const currentLayout = layouts.find((l) => l.id === currentLayoutId) ?? null;
+  const hasOwnLayout = layouts.some((l) => l.createdBy === 'user');
+  const aiHint =
+    aiBlocked ??
+    (items.length === 0 ? '가구를 먼저 놓으면 AI가 다시 배치해 줍니다.' : items.length > MAX_SUGGEST_ITEMS ? `가구가 ${MAX_SUGGEST_ITEMS}개를 넘으면 추천받을 수 없습니다.` : aiRemaining === 0 ? '오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.' : null);
 
   return (
     <>
@@ -407,6 +488,48 @@ export default function FurnitureLayer({
             {compact ? '펼치기' : '접기'}
           </button>
         </div>
+        {onSelectLayout && layouts.length > 0 && (
+          <div className="space-y-1" data-testid="layout-chooser" data-current={currentLayoutId ?? ''} data-count={layouts.length}>
+            <div className="flex items-center gap-1">
+              <select
+                className="w-0 flex-1 rounded bg-white/10 px-1 py-1 disabled:opacity-50"
+                aria-label="배치 고르기"
+                data-testid="layout-select"
+                disabled={layoutBusy || aiBusy}
+                value={currentLayoutId ?? ''}
+                onChange={(e) => selectLayout(e.target.value === '' ? null : e.target.value)}
+              >
+                {/* 직접 만든 배치가 아직 없으면 새로 시작할 수 있게 빈 배치를 둔다 */}
+                {(!hasOwnLayout || currentLayoutId === null) && (
+                  <option className="text-black" value="">
+                    내 배치 (새로 만들기)
+                  </option>
+                )}
+                {layouts.map((l) => (
+                  <option key={l.id} className="text-black" value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </select>
+              {onDeleteLayout && currentLayout && !confirmLayoutDelete && (
+                <button className="rounded bg-white/20 px-2 py-1 disabled:opacity-50" disabled={layoutBusy || aiBusy} onClick={() => setConfirmLayoutDelete(true)} data-testid="layout-delete">
+                  지우기
+                </button>
+              )}
+            </div>
+            {confirmLayoutDelete && currentLayout && (
+              <div className="flex flex-wrap items-center gap-1 text-amber-300" data-testid="layout-delete-confirm">
+                <span>&ldquo;{currentLayout.name}&rdquo;을(를) 지울까요?</span>
+                <button className="rounded bg-red-600 px-2 py-0.5 text-white disabled:opacity-50" disabled={layoutBusy} onClick={deleteLayout} data-testid="layout-delete-yes">
+                  지우기
+                </button>
+                <button className="rounded bg-white/20 px-2 py-0.5 text-white" onClick={() => setConfirmLayoutDelete(false)}>
+                  취소
+                </button>
+              </div>
+            )}
+          </div>
+        )}
         <div className={compact ? 'hidden' : 'flex flex-wrap gap-1'} data-testid="furniture-catalog">
           {catalog.map((entry) => (
             <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
@@ -502,6 +625,97 @@ export default function FurnitureLayer({
             로그인하면 치수를 넣어 내 가구를 만들 수 있습니다.
           </p>
         )}
+        {onSuggest && (
+          <div className={compact ? 'hidden' : 'space-y-1 border-t border-white/20 pt-2'} data-testid="ai-suggest" data-remaining={aiRemaining ?? ''} data-busy={aiBusy}>
+            <div className="flex items-center justify-between gap-1">
+              <span className="opacity-80">AI 배치 추천{aiRemaining !== null ? ` · 오늘 ${aiRemaining}회 남음` : ''}</span>
+              {!aiOpen && (
+                <button className="rounded bg-violet-600 px-2 py-0.5 disabled:opacity-40" disabled={aiHint !== null} onClick={() => setAiOpen(true)} data-testid="ai-open">
+                  AI 추천
+                </button>
+              )}
+            </div>
+            {aiHint && (
+              <p className="opacity-80" data-testid="ai-hint">
+                {aiHint}
+              </p>
+            )}
+            {aiOpen && !aiHint && (
+              <div className="space-y-1" data-testid="ai-form">
+                <textarea
+                  className="h-14 w-full resize-none rounded bg-white/10 px-2 py-1"
+                  placeholder="바라는 점이 있으면 적어 주세요 (예: 책상은 창가에). 비워 두어도 됩니다"
+                  maxLength={MAX_REQUEST_LENGTH}
+                  value={aiRequest}
+                  disabled={aiBusy}
+                  onChange={(e) => setAiRequest(e.target.value)}
+                  data-testid="ai-request"
+                />
+                <p className="opacity-70">지금 놓인 가구 {items.length}개를 AI가 다시 배치합니다. 결과는 &ldquo;AI 배치&rdquo;로 따로 저장되고, 지금 배치는 그대로 남습니다.</p>
+                <div className="flex gap-1">
+                  <button className="rounded bg-violet-600 px-2 py-1 disabled:opacity-50" disabled={aiBusy} onClick={suggest} data-testid="ai-run">
+                    {aiBusy ? 'AI가 배치하는 중… (5~30초)' : '추천받기'}
+                  </button>
+                  {!aiBusy && (
+                    <button className="rounded bg-white/20 px-2 py-1" onClick={() => setAiOpen(false)}>
+                      닫기
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
+            {aiMessage && (
+              <p className="text-amber-300" data-testid="ai-message">
+                {aiMessage}
+              </p>
+            )}
+          </div>
+        )}
+        {!onSuggest && loginHint && (
+          <p className={compact ? 'hidden' : 'opacity-80'} data-testid="ai-login-hint">
+            로그인하면 AI에게 가구 배치를 추천받을 수 있습니다.
+          </p>
+        )}
+        {aiResult ? (
+          <div className={compact ? 'hidden' : 'space-y-1 rounded bg-violet-950/70 p-2'} data-testid="ai-result" data-layout-id={aiResult.layoutId}>
+            <p className="font-semibold">AI 추천 결과</p>
+            {aiResult.summary && <p data-testid="ai-result-summary">{aiResult.summary}</p>}
+            {aiResult.reasons.length > 0 && (
+              <ul className="list-disc space-y-0.5 pl-4" data-testid="ai-result-reasons">
+                {aiResult.reasons.map((r) => (
+                  <li key={r.itemId}>
+                    <button className="underline decoration-dotted" onClick={() => setSelectedId(r.itemId)}>
+                      {r.name}
+                    </button>
+                    : {r.reason}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {aiResult.failures.length > 0 && (
+              <ul className="space-y-0.5 text-red-300" data-testid="ai-result-failures">
+                {aiResult.failures.map((f) => (
+                  <li key={f.itemId}>놓지 못함 — {f.message}</li>
+                ))}
+              </ul>
+            )}
+            {aiResult.unmet.length > 0 && (
+              <ul className="space-y-0.5 text-amber-300" data-testid="ai-result-unmet">
+                {aiResult.unmet.map((u, index) => (
+                  <li key={`${u.itemId}|${index}`}>{u.message}</li>
+                ))}
+              </ul>
+            )}
+            <p className="opacity-70">가구를 끌어서 고칠 수 있습니다. AI의 추천은 참고용입니다.</p>
+          </div>
+        ) : (
+          aiSummary && (
+            <div className={compact ? 'hidden' : 'rounded bg-violet-950/70 p-2'} data-testid="ai-saved-summary">
+              <p className="font-semibold">AI가 추천한 배치</p>
+              <p className="whitespace-pre-line">{aiSummary}</p>
+            </div>
+          )
+        )}
         {selected ? (
           <div className="space-y-1">
             <div className="font-mono">
@@ -564,7 +778,7 @@ export default function FurnitureLayer({
                 className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50"
                 data-testid="layout-save"
                 disabled={saveState === 'saving'}
-                onClick={save}
+                onClick={() => void save()}
               >
                 {saveState === 'error' ? '다시 저장' : '배치 저장'}
               </button>

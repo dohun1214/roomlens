@@ -10,7 +10,8 @@ import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
 import type { SavedItem } from '@/lib/layout/saved';
-import { saveMyLayout, type SavedLayout } from '@/lib/layout/store';
+import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/lib/layout/store';
+import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
 import { pickPoint } from '@/lib/three/pickPoint';
@@ -54,8 +55,10 @@ type Props = {
   catalog?: CatalogItem[];
   /** 로그인했는지. 로그인한 사람만 배치를 저장할 수 있다 (방 주인이 아니어도 된다) */
   signedIn?: boolean;
-  /** 이 방에 내가 저장해 둔 배치 */
-  initialLayout?: SavedLayout | null;
+  /** 이 방에 내가 저장해 둔 배치들 (내 배치, AI 배치). 맨 앞의 것으로 시작한다 */
+  initialLayouts?: MyLayout[];
+  /** 오늘 남은 AI 호출 횟수 (모르면 null) */
+  aiRemaining?: number | null;
   /** 내가 만들어 둔 가구 */
   userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
@@ -63,6 +66,7 @@ type Props = {
 };
 
 const NO_OPENINGS: Opening[] = [];
+const NO_LAYOUTS: MyLayout[] = [];
 
 export default function SplatViewer({
   url,
@@ -72,7 +76,8 @@ export default function SplatViewer({
   canEdit = false,
   catalog,
   signedIn = false,
-  initialLayout = null,
+  initialLayouts = NO_LAYOUTS,
+  aiRemaining: initialAiRemaining = null,
   userFurniture,
   initialOpenings = NO_OPENINGS,
 }: Props) {
@@ -81,9 +86,15 @@ export default function SplatViewer({
   const loadSeq = useRef(0);
   const flippedRef = useRef(calibration?.flipX ?? false);
   const calibrationRef = useRef(calibration);
-  // 저장된 배치. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
-  const [layout, setLayout] = useState<SavedLayout | null>(initialLayout);
-  const layoutIdRef = useRef(initialLayout?.id ?? null);
+  // 저장된 배치들. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
+  const [layouts, setLayouts] = useState<MyLayout[]>(initialLayouts);
+  // 지금 보고 있는 배치 (null이면 아직 저장하지 않은 새 배치)
+  const [layoutId, setLayoutId] = useState<string | null>(initialLayouts[0]?.id ?? null);
+  const layoutIdRef = useRef(layoutId);
+  // 다른 배치로 바꿀 때마다 올려서 가구 층을 새로 만든다 (저장만 할 때는 그대로)
+  const [layoutNonce, setLayoutNonce] = useState(0);
+  const [aiRemaining, setAiRemaining] = useState<number | null>(initialAiRemaining);
+  const [aiResult, setAiResult] = useState<AiResultView | null>(null);
   // 문·창문은 벽 번호로 저장하므로 "어느 평면도 기준인지"를 함께 기억한다. 보정을 새로 저장하면 비운다
   const [savedPolygonKey, setSavedPolygonKey] = useState(calibration ? JSON.stringify(calibration.floorPolygon) : null);
   const savedPolygonKeyRef = useRef(savedPolygonKey);
@@ -332,18 +343,66 @@ export default function SplatViewer({
   const createFurniture = useCallback((value: UserFurnitureValue) => createUserFurniture(createClient(), value), []);
   const deleteFurniture = useCallback((id: string) => deleteUserFurniture(createClient(), id), []);
 
-  // 내 배치를 저장한다 (처음이면 새로 만들고, 그다음부터는 같은 배치를 고친다)
+  // 지금 보고 있는 배치를 저장한다 (새 배치면 "내 배치"를 만들고, 그다음부터는 같은 배치를 고친다)
   const saveLayout = useCallback(
     async (items: SavedItem[]) => {
       if (!roomId) return false;
       const id = await saveMyLayout(createClient(), roomId, layoutIdRef.current, items);
       if (!id) return false;
       layoutIdRef.current = id;
-      setLayout({ id, items });
+      setLayoutId(id);
+      setLayouts((prev) =>
+        prev.some((l) => l.id === id)
+          ? prev.map((l) => (l.id === id ? { ...l, items } : l))
+          : [{ id, name: MY_LAYOUT_NAME, createdBy: 'user', aiSummary: null, items }, ...prev],
+      );
       return true;
     },
     [roomId],
   );
+
+  // 다른 배치를 연다 (가구 층이 저장하지 않은 것을 먼저 저장한 뒤 부른다)
+  const selectLayout = useCallback((id: string | null) => {
+    layoutIdRef.current = id;
+    setLayoutId(id);
+    setLayoutNonce((n) => n + 1);
+  }, []);
+
+  // 지금 보고 있는 배치를 지우고, 남은 것 가운데 첫 배치(없으면 새 배치)를 연다
+  const deleteLayout = useCallback(
+    async (id: string) => {
+      if (!(await deleteMyLayout(createClient(), id))) return false;
+      const rest = layouts.filter((l) => l.id !== id);
+      setLayouts(rest);
+      setAiResult((prev) => (prev?.layoutId === id ? null : prev));
+      if (layoutIdRef.current === id) selectLayout(rest[0]?.id ?? null);
+      return true;
+    },
+    [layouts, selectLayout],
+  );
+
+  // AI 배치 추천: 성공하면 새로 저장된 AI 배치를 목록에 넣고 그 배치를 연다
+  const suggestLayout = useCallback(
+    async (items: SavedItem[], request: string): Promise<{ ok: true } | { ok: false; message: string }> => {
+      if (!roomId) return { ok: false, message: '방을 찾을 수 없습니다.' };
+      const outcome = await requestLayoutSuggestion(roomId, items, request);
+      if (!outcome.ok) {
+        if (outcome.code === 'AI_LIMIT') setAiRemaining(0);
+        return { ok: false, message: outcome.message };
+      }
+      const removed = new Set(outcome.removedLayoutIds);
+      setLayouts((prev) => [outcome.layout, ...prev.filter((l) => !removed.has(l.id) && l.id !== outcome.layout.id)]);
+      setAiRemaining(outcome.remaining);
+      setAiResult(outcome.result);
+      selectLayout(outcome.layout.id);
+      return { ok: true };
+    },
+    [roomId, selectLayout],
+  );
+
+  const currentLayout = layouts.find((l) => l.id === layoutId) ?? null;
+  // 저장하지 않은 보정 위에서는 추천할 수 없다 (서버는 저장된 평면도로 계산한다)
+  const aiBlocked = roomPolygonKey !== savedPolygonKey ? '보정을 저장한 뒤에 AI 추천을 쓸 수 있습니다.' : null;
 
   return (
     <div className="relative h-full w-full">
@@ -430,7 +489,7 @@ export default function SplatViewer({
 
       {stats.status === 'ready' && room?.key === sceneKey && (
         <FurnitureLayer
-          key={`furniture|${sceneKey}`}
+          key={`furniture|${sceneKey}|${layoutNonce}`}
           engineRef={engineRef}
           floorPolygon={room.polygon}
           catalog={catalog}
@@ -438,9 +497,18 @@ export default function SplatViewer({
           userFurniture={userFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
-          initialItems={layout?.items}
+          initialItems={currentLayout?.items}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
+          layouts={layouts}
+          currentLayoutId={layoutId}
+          onSelectLayout={roomId && signedIn ? selectLayout : undefined}
+          onDeleteLayout={roomId && signedIn ? deleteLayout : undefined}
+          onSuggest={roomId && signedIn ? suggestLayout : undefined}
+          aiRemaining={aiRemaining}
+          aiBlocked={aiBlocked}
+          aiResult={aiResult && aiResult.layoutId === layoutId ? aiResult : null}
+          aiSummary={currentLayout?.aiSummary ?? null}
         />
       )}
       {stats.status === 'ready' && room?.key === sceneKey && (
