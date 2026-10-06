@@ -1,26 +1,110 @@
 @import "tailwindcss";
 
+/*
+ * 디자인 토큰 (2차 시안 "라이트").
+ * 색은 여기서만 정하고 화면에서는 bg-ground, text-ink 같은 이름으로 쓴다.
+ */
+@theme {
+  --font-sans: var(--font-plex-kr), "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, "Cascadia Mono", monospace;
+
+  /* 바탕과 면 */
+  --color-ground: #f4f5f8;
+  --color-surface: #ffffff;
+  --color-soft: #f0f2f6;
+  --color-chip: #eef0f4;
+
+  /* 선 */
+  --color-line: #e4e8ef;
+  --color-line-strong: #cbd2dd;
+  --color-field: #9aa4b5;
+
+  /* 글 */
+  --color-ink: #141a2a;
+  --color-ink-2: #2b3445;
+  --color-body: #414b5e;
+  --color-sub: #566074;
+  --color-mute: #6b7588;
+
+  /* 강조 (코발트) */
+  --color-accent: #3350e8;
+  --color-accent-strong: #2438b8;
+  --color-accent-deep: #1b2a8a;
+  --color-accent-soft: #eef1ff;
+  --color-accent-tint: #f7f8ff;
+  --color-accent-line: #b9c4f5;
+
+  /* 상태 */
+  --color-ok: #0e6b4c;
+  --color-ok-dot: #12805c;
+  --color-ok-soft: #e5f6ef;
+  --color-warn: #7a4f00;
+  --color-warn-dot: #c98500;
+  --color-warn-soft: #fff3d6;
+  --color-warn-tint: #fff8e6;
+  --color-danger: #a82a20;
+  --color-danger-soft: #fdecea;
+  --color-danger-tint: #fdf1ef;
+
+  /* 문·창문 */
+  --color-door: #f08a24;
+  --color-door-line: #d9761a;
+  --color-window: #2ba3e0;
+
+  --shadow-card: 0 1px 2px rgb(20 26 42 / 0.04), 0 8px 28px rgb(20 26 42 / 0.06);
+  --shadow-panel: 0 1px 2px rgb(20 26 42 / 0.05), 0 4px 16px rgb(20 26 42 / 0.06);
+  --shadow-float: 0 2px 6px rgb(20 26 42 / 0.08), 0 12px 32px rgb(20 26 42 / 0.14);
+  --shadow-accent: 0 6px 16px rgb(51 80 232 / 0.28);
+}
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  /* 상단 메뉴 높이. 방 화면이 남은 높이를 계산할 때 쓴다 */
+  --header-h: 4rem;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  /* 한글은 낱말 가운데에서 줄을 바꾸지 않는다 */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+@layer components {
+  /* 글자 입력 칸 */
+  .field {
+    @apply w-full rounded-xl border border-field bg-surface px-4 text-ink placeholder:text-mute disabled:bg-soft disabled:text-mute;
+  }
+  .field:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 1px;
+  }
+  /* 버튼: btn + btn-primary 처럼 함께 쓴다 */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-[10px] font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply bg-accent text-white hover:bg-accent-strong;
+  }
+  .btn-soft {
+    @apply bg-chip text-ink hover:bg-line;
+  }
+  .btn-outline {
+    @apply border border-line-strong bg-surface text-ink hover:bg-soft;
+  }
+  .btn-danger {
+    @apply bg-danger-soft text-danger hover:bg-[#fbdcd8];
+  }
+  /* 알약 모양 상태 표시 */
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs whitespace-nowrap;
+  }
+}
+
+a:focus-visible,
+button:focus-visible,
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
