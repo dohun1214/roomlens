@@ -7,7 +7,7 @@ export const metadata: Metadata = {
 
 export default function ViewerPage() {
   return (
-    <main className="h-[calc(100dvh-3rem)] w-full bg-neutral-900">
+    <main className="h-[calc(100dvh-var(--header-h))] w-full bg-neutral-900">
       <SplatViewer />
     </main>
   );
