@@ -14,7 +14,26 @@ export type CaptureEngine = {
   spark: THREE.Object3D;
 };
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * ms만큼 기다린다. 탭이 뒤에 있으면 브라우저가 setTimeout을 1초~1분에 한 번으로 늦추므로
+ * (그대로 두면 캡처 한 장에 몇 분이 걸린다), 그때는 늦춰지지 않는 MessageChannel로 시간을 잰다.
+ */
+function wait(ms: number): Promise<void> {
+  if (typeof document === 'undefined' || !document.hidden) return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    const until = performance.now() + ms;
+    const channel = new MessageChannel();
+    channel.port1.onmessage = () => {
+      if (performance.now() >= until) {
+        channel.port1.close();
+        resolve();
+      } else {
+        channel.port2.postMessage(null);
+      }
+    };
+    channel.port2.postMessage(null);
+  });
+}
 
 /** canvas를 긴 변 longSide 이하의 JPEG로 줄여 base64(머리말 없이)로 돌려준다 */
 export function canvasToJpegBase64(source: HTMLCanvasElement | ImageBitmap, longSide: number, quality: number): string {
