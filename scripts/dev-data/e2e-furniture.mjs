@@ -49,6 +49,7 @@ function gapToFarWall(item, polygon) {
 try {
   const { result } = await calibrate(page, scene);
   await page.getByTestId('calibration-apply').click();
+  await page.getByTestId('tool-furniture').click();
   const polygon = result.floorPolygon;
   const minZ = Math.min(...polygon.map((p) => p[1])); // 카메라 맞은편 벽
 
@@ -92,7 +93,10 @@ try {
 
   // 4) 빈 곳을 끌면 화면이 돈다 (OrbitControls가 살아 있다)
   const camIdle = await camera();
-  await drag({ x: 300, y: 500 }, { x: 420, y: 520 });
+  // 3D 화면(패널 오른쪽)의 왼쪽 아래: 가구가 없는 바닥
+  const stage = await page.getByTestId('stage').boundingBox();
+  const empty = { x: stage.x + stage.width * 0.2, y: stage.y + stage.height * 0.65 };
+  await drag(empty, { x: empty.x + 120, y: empty.y + 20 });
   const camOrbit = await camera();
   check('빈 곳을 끌면 화면이 돈다', camIdle.some((v, i) => Math.abs(v - camOrbit[i]) > 0.01), null);
   const [same] = await items();
@@ -119,7 +123,8 @@ try {
   check('옷장을 책상 위로 끌면 두 가구 모두 겹침 표시', overlapping.filter((v) => v.type === 'overlap').length === 2 && (await page.getByTestId('layout-violations').innerText()).includes('겹칩니다'), overlapping.map((v) => v.message));
   await moveCamera(page, [desk.x + 0.4, 2.3, desk.z + 2.6], [desk.x, 0.6, desk.z]); // 방 안에서 비스듬히 (빨간 표시 확인용)
   await page.screenshot({ path: path.join(shotDir, `furniture-${scene}-overlap.png`) });
-  await moveCamera(page, [0.01, 6, 0.01], [0, 0, 0]);
+  // 두 가구와 옮길 자리가 화면 가운데쯤에 오게 위에서 내려다본다 (/viewer는 오른쪽 위에 상태 상자가 있다)
+  await moveCamera(page, [(desk.x + 0) / 2 + 0.01, 8, (desk.z + 0.8) / 2 + 0.01], [(desk.x + 0) / 2, 0, (desk.z + 0.8) / 2]);
 
   // 7) 다시 떼어 놓으면 사라진다
   await moveItemTo(ward, 0, 0.8);

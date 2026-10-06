@@ -159,7 +159,7 @@ try {
 
   // 5) 다시 열어도 리포트가 보인다
   await openRoom();
-  check('새로고침하면: "방 분석 ✓"', (await page.getByTestId('analysis-toggle').innerText()).includes('✓'), await page.getByTestId('analysis-toggle').innerText());
+  check('새로고침하면: 도구 줄의 "방 분석"에 리포트가 있다는 점 표시', (await page.getByTestId('analysis-toggle').getAttribute('data-mark')) === 'ok', await page.getByTestId('analysis-toggle').getAttribute('data-mark'));
   await page.getByTestId('analysis-toggle').click();
   check('다시 열어도 저장된 리포트가 보임 ("다시 분석" 버튼)', (await report.getAttribute('data-report-id')) === second[0].id && (await page.getByTestId('analysis-run').innerText()) === '다시 분석', await report.getAttribute('data-report-id'));
 

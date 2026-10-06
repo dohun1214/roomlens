@@ -115,8 +115,8 @@ export async function calibrate(page, scene, { shots = false, alreadyOpen = fals
     if (shots) await page.screenshot({ path: path.join(shotDir, shot) });
   };
 
-  // "다시 찍기" 직후처럼 보정 패널이 이미 열려 있으면 여는 버튼이 없다
-  if (!alreadyOpen) await page.getByRole('button', { name: '크기·바닥 보정' }).click();
+  // 도구 줄에서 "크기 보정"을 고른다 ("다시 찍기" 직후처럼 이미 골라져 있으면 그대로 둔다)
+  if (!alreadyOpen && (await page.getByTestId('calibration-toggle').getAttribute('aria-pressed')) !== 'true') await page.getByTestId('calibration-toggle').click();
   // 1) 바닥 세 곳: 바로 위 2.2m에서 내려다보고 탭
   for (const [i, [x, z]] of floorPoints.entries()) {
     await tap([x + 0.01, 2.2, z + 0.01], [x, 0, z], `cal-${scene}-floor${i + 1}.png`);

@@ -104,9 +104,9 @@ try {
   const { error: calibrationError } = await admin.from('rooms').update({ transform: TRANSFORM, floor_polygon: FLOOR }).eq('id', roomId);
   check('준비: 방 업로드 완료, 보정 값 넣음', putStatus === 200 && done.status === 200 && !calibrationError, [putStatus, done.status]);
 
-  // 1) 처음: 접힌 버튼, 0개
+  // 1) 처음: 도구 줄에 "문·창문", 0개
   await openRoom(owner, roomId);
-  check('처음 연 방: "문·창문 (0)" 버튼', (await owner.getByTestId('openings-toggle').innerText()) === '문·창문 (0)', null);
+  check('처음 연 방: 도구 줄에 "문·창문", 0개', (await owner.getByTestId('openings-toggle').innerText()).trim() === '문·창문' && (await owner.getByTestId('openings').getAttribute('data-count')) === '0', null);
   await owner.getByTestId('openings-toggle').click();
   const wallOptions = await owner.getByTestId('openings-wall').locator('option').allInnerTexts();
   check('벽 목록에 길이가 나옴', same(wallOptions, ['벽 1 (4.00 m)', '벽 2 (3.00 m)', '벽 3 (4.00 m)', '벽 4 (3.00 m)']), wallOptions);
@@ -143,14 +143,14 @@ try {
   // 5) 다시 열기
   await owner.reload();
   await owner.getByTestId('furniture-panel').waitFor({ timeout: 120000 });
-  check('다시 열면: "문·창문 (2)", 값이 그대로', (await owner.getByTestId('openings-toggle').innerText()) === '문·창문 (2)' && same(await openingsOf(owner), [DOOR, WINDOW]), null);
+  check('다시 열면: 2개, 값이 그대로', (await owner.getByTestId('openings').getAttribute('data-count')) === '2' && same(await openingsOf(owner), [DOOR, WINDOW]), null);
 
   // 6) 지우기
   await owner.getByTestId('openings-toggle').click();
   await owner.getByRole('button', { name: /^문 · 벽 1 .* 삭제$/ }).click();
   check('문을 지우면 "저장 안 됨", DB는 아직 그대로', (await saveState(owner)) === 'dirty' && same(await dbOpenings(roomId), [DOOR, WINDOW]), null);
-  await owner.getByRole('button', { name: '닫기', exact: true }).click();
-  check('접어도 저장 안 된 것이 버튼에 보임', (await owner.getByTestId('openings-toggle').innerText()) === '문·창문 (1) · 저장 안 됨', await owner.getByTestId('openings-toggle').innerText());
+  await owner.getByTestId('tool-furniture').click();
+  check('다른 도구로 가도 저장 안 된 것이 도구 줄에 점으로 보이고, 넣던 것은 그대로', (await owner.getByTestId('openings-toggle').getAttribute('data-mark')) === 'warn' && (await owner.getByTestId('openings').getAttribute('data-count')) === '1', await owner.getByTestId('openings-toggle').getAttribute('data-mark'));
   await owner.getByTestId('openings-toggle').click();
   await owner.getByTestId('openings-save').click();
   await owner.waitForFunction(() => document.querySelector('[data-testid=openings-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
@@ -162,12 +162,22 @@ try {
   await owner.getByTestId('furniture-panel').waitFor({ timeout: 120000 });
   check('틀린 항목(없는 벽, 모르는 종류, 벽을 넘음)은 버리고 읽음', same(await openingsOf(owner), [WINDOW, DOOR]), await openingsOf(owner));
 
-  // 8) 공개 방에서 방 주인이 아닌 사람: 개수만 보이고 고칠 수 없다
+  // 8) 공개 방에서 방 주인이 아닌 사람: 목록만 보이고 고칠 수 없다
   await admin.from('rooms').update({ is_public: true }).eq('id', roomId);
   const guest = await newPage();
   await openRoom(guest, roomId);
-  const guestText = await guest.getByTestId('openings').innerText();
-  check('다른 사람: "문 1 · 창문 1"만 보이고 넣는 버튼은 없음', guestText === '문 1 · 창문 1' && (await guest.getByTestId('openings-toggle').count()) === 0 && same(await openingsOf(guest), [WINDOW, DOOR]), guestText);
+  await guest.getByTestId('openings-toggle').click();
+  const guestText = (await guest.getByTestId('openings').innerText()).replace(/\s+/g, ' ');
+  check(
+    '다른 사람: "문 1개, 창문 1개"와 목록만 보이고 넣기·지우기·저장은 없음',
+    guestText.includes('문 1개, 창문 1개') &&
+      (await guest.getByTestId('openings-list').locator('li').count()) === 2 &&
+      (await guest.getByTestId('openings-add').count()) === 0 &&
+      (await guest.getByTestId('openings-save').count()) === 0 &&
+      (await guest.getByRole('button', { name: /삭제$/ }).count()) === 0 &&
+      same(await openingsOf(guest), [WINDOW, DOOR]),
+    guestText,
+  );
   await guest.waitForTimeout(1500);
   await guest.screenshot({ path: path.join(dataDir, '_e2e', 'openings-guest.png') });
 
