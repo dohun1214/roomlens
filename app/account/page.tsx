@@ -18,19 +18,25 @@ export default async function AccountPage() {
     .maybeSingle();
 
   return (
-    <main className="mx-auto w-full max-w-md flex-1 space-y-6 px-6 py-10">
-      <h1 className="text-2xl font-bold">내 정보</h1>
-      <dl className="space-y-1 text-sm">
-        <div className="flex gap-2">
-          <dt className="w-24 text-neutral-500">이메일</dt>
-          <dd data-testid="account-email">{user.email}</dd>
+    <main className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-6 px-4 pt-6 pb-16 sm:px-6">
+      <h1 className="text-[34px] font-bold tracking-[-0.02em]">내 정보</h1>
+      <section className="flex flex-col gap-6 rounded-3xl bg-surface p-6 shadow-card sm:p-8">
+        <dl className="flex flex-col gap-3 text-[15px]">
+          <div className="flex flex-wrap gap-x-3">
+            <dt className="w-28 font-semibold text-body">이메일</dt>
+            <dd className="break-all" data-testid="account-email">
+              {user.email}
+            </dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3">
+            <dt className="w-28 font-semibold text-body">만 18세 이상</dt>
+            <dd data-testid="account-adult">{profile?.is_adult_confirmed ? '확인함' : '확인 안 됨'}</dd>
+          </div>
+        </dl>
+        <div className="border-t border-line pt-6">
+          <NicknameForm userId={user.id} initial={profile?.nickname ?? ''} />
         </div>
-        <div className="flex gap-2">
-          <dt className="w-24 text-neutral-500">만 18세 이상</dt>
-          <dd data-testid="account-adult">{profile?.is_adult_confirmed ? '확인함' : '확인 안 됨'}</dd>
-        </div>
-      </dl>
-      <NicknameForm userId={user.id} initial={profile?.nickname ?? ''} />
+      </section>
     </main>
   );
 }
