@@ -4,6 +4,7 @@ import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
+import { parseReport } from '@/lib/ai/analysis';
 import { remainingToday } from '@/lib/ai/usage';
 import { loadMyLayouts } from '@/lib/layout/store';
 import { loadUserFurniture } from '@/lib/layout/userFurniture';
@@ -36,7 +37,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   // 파일을 아직 올리지 않은 방은 주인에게만 보인다 (지울 수 있게)
   if (!ready && !isOwner) notFound();
 
-  const [splatUrl, { data: owner }, { data: catalogRows }, myLayouts, myFurniture, aiRemaining] = await Promise.all([
+  const [splatUrl, { data: owner }, { data: catalogRows }, myLayouts, myFurniture, aiRemaining, { data: reportRow }] = await Promise.all([
     ready && room.splat_key ? presignGet(room.splat_key) : null,
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
@@ -48,7 +49,10 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     ready && user ? loadUserFurniture(supabase, user.id) : undefined,
     // 오늘 남은 AI 호출 횟수
     ready && user ? remainingToday(user.id) : null,
+    // 가장 최근의 방 분석 리포트 (방을 볼 수 있으면 누구나 읽을 수 있다)
+    supabase.from('room_reports').select('id, model, report, created_at').eq('room_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
   ]);
+  const report = reportRow ? parseReport(reportRow.report) : null;
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   // 모델 파일도 비공개 버킷에 있어 가구마다 읽기 주소를 만든다 (서명은 서버 안에서 계산하므로 요청이 나가지 않는다)
   const catalog = catalogRows?.length
@@ -88,6 +92,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             signedIn={Boolean(user)}
             initialLayouts={myLayouts}
             aiRemaining={aiRemaining}
+            initialReport={report && reportRow ? { id: reportRow.id, model: reportRow.model, createdAt: reportRow.created_at, report } : null}
             userFurniture={myFurniture}
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
           />

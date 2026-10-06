@@ -6,6 +6,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import OpeningsTool from './OpeningsTool';
+import AnalysisPanel from './AnalysisPanel';
+import type { SavedReport } from '@/components/rooms/RoomReportView';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
 import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
@@ -59,6 +61,8 @@ type Props = {
   initialLayouts?: MyLayout[];
   /** 오늘 남은 AI 호출 횟수 (모르면 null) */
   aiRemaining?: number | null;
+  /** 이 방의 가장 최근 분석 리포트 */
+  initialReport?: SavedReport | null;
   /** 내가 만들어 둔 가구 */
   userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
@@ -78,6 +82,7 @@ export default function SplatViewer({
   signedIn = false,
   initialLayouts = NO_LAYOUTS,
   aiRemaining: initialAiRemaining = null,
+  initialReport = null,
   userFurniture,
   initialOpenings = NO_OPENINGS,
 }: Props) {
@@ -521,6 +526,18 @@ export default function SplatViewer({
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
+        />
+      )}
+      {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
+      {stats.status === 'ready' && roomId && (
+        <AnalysisPanel
+          engineRef={engineRef}
+          roomId={roomId}
+          floorPolygon={room?.key === sceneKey ? room.polygon : null}
+          canAnalyze={canEdit && signedIn}
+          initialReport={initialReport}
+          aiRemaining={aiRemaining}
+          onRemaining={setAiRemaining}
         />
       )}
       {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}
