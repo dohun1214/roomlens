@@ -7,6 +7,7 @@ import {
   MAX_OPENINGS,
   openingFromPoints,
   openingSegment,
+  openingViewpoint,
   overlapsExisting,
   parseOpenings,
   sameOpenings,
@@ -182,5 +183,35 @@ describe('표시 문구 · 비교', () => {
     expect(sameOpenings([door], [{ ...door }])).toBe(true);
     expect(sameOpenings([door], [{ ...door, to: 1.2 }])).toBe(false);
     expect(sameOpenings([door], [])).toBe(false);
+  });
+});
+
+describe('openingViewpoint', () => {
+  it('문의 가운데를 방 안쪽에서 정면으로 본다', () => {
+    const view = openingViewpoint(door, ROOM);
+    // 벽 1은 z=-1.5, 문 가운데는 x=-1.35. 방 안쪽은 +z
+    expect(view?.target[0]).toBeCloseTo(-1.35, 6);
+    expect(view?.target[2]).toBeCloseTo(-1.5, 6);
+    expect(view?.target[1]).toBeCloseTo(1.0, 6);
+    expect(view?.position[0]).toBeCloseTo(-1.35, 6);
+    expect(view?.position[1]).toBe(1.5);
+    // 방 깊이가 3 m이므로 2.6 m 물러난다 (z = -1.5 + 2.6)
+    expect(view?.position[2]).toBeCloseTo(1.1, 6);
+  });
+
+  it('좁은 방에서는 방을 벗어나지 않을 만큼만 물러난다', () => {
+    const narrow: Point2[] = [
+      [-2, -0.6],
+      [2, -0.6],
+      [2, 0.6],
+      [-2, 0.6],
+    ];
+    const view = openingViewpoint({ type: 'window', wallIndex: 0, from: 1, to: 2, widthM: 1 }, narrow);
+    expect(view?.position[2]).toBeCloseTo(0.4, 6); // 1.0 m 물러남
+    expect(view?.target[1]).toBeCloseTo(1.45, 6);
+  });
+
+  it('없는 벽이면 null', () => {
+    expect(openingViewpoint({ ...door, wallIndex: 9 }, ROOM)).toBeNull();
   });
 });

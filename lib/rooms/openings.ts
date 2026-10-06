@@ -3,7 +3,7 @@
 //   from, to : 그 벽의 시작 꼭짓점에서 잰 거리 (m)
 // 방 주인이 브라우저에서 바로 저장하므로, 읽을 때 반드시 검증한다.
 import { z } from 'zod';
-import type { Point2 } from '@/lib/three/floorDrag';
+import { pointInPolygon, type Point2 } from '@/lib/three/floorDrag';
 
 /** DB의 rooms_openings_check 와 같은 값 */
 export const MAX_OPENINGS = 20;
@@ -137,6 +137,28 @@ export function addOpening(openings: Opening[], opening: Opening): { ok: true; o
 /** "문 · 벽 1 · 0.20~1.10 m (폭 0.90 m)" */
 export function describeOpening(o: Opening): string {
   return `${OPENING_LABEL[o.type]} · 벽 ${o.wallIndex + 1} · ${o.from.toFixed(2)}~${o.to.toFixed(2)} m (폭 ${o.widthM.toFixed(2)} m)`;
+}
+
+/** 문·창문을 방 안에서 정면으로 바라보는 자리 (3D 화면에서 위치를 확인할 때 쓴다) */
+export function openingViewpoint(
+  opening: Opening,
+  polygon: Point2[],
+): { position: [number, number, number]; target: [number, number, number] } | null {
+  const segment = openingSegment(opening, polygon);
+  if (!segment) return null;
+  const [a, b] = segment;
+  const middle: Point2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  // 벽에 수직인 두 방향 가운데 방 안쪽을 고른다
+  let normal: Point2 = [-(b[1] - a[1]) / length, (b[0] - a[0]) / length];
+  if (!pointInPolygon([middle[0] + normal[0] * 0.1, middle[1] + normal[1] * 0.1], polygon)) normal = [-normal[0], -normal[1]];
+  // 넓게 보이도록 물러나되, 방을 벗어나지 않는 가장 먼 거리
+  const back = [2.6, 2.2, 1.8, 1.4, 1.0, 0.6].find((d) => pointInPolygon([middle[0] + normal[0] * d, middle[1] + normal[1] * d], polygon)) ?? 0.6;
+  const [low, high] = OPENING_HEIGHTS[opening.type];
+  return {
+    position: [middle[0] + normal[0] * back, 1.5, middle[1] + normal[1] * back],
+    target: [middle[0], (low + high) / 2, middle[1]],
+  };
 }
 
 /** "문 1 · 창문 2" */
