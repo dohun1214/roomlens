@@ -20,6 +20,7 @@ import {
   type Opening,
   type OpeningType,
 } from '@/lib/rooms/openings';
+import { requestOpeningsDetection } from '@/lib/ai/openingsClient';
 import type { Engine } from './engine';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다. */
@@ -27,10 +28,11 @@ const TAP_MOVE_PX = 6;
 const OPENING_COLORS: Record<OpeningType, number> = { door: 0xffa63d, window: 0x4cc9ff };
 const WALL_HIGHLIGHT_COLOR = 0xffe14d;
 const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
+const keyOf = (o: Opening) => `${o.wallIndex}|${o.from}`;
 
 /**
  * 보정된 방의 문·창문을 3D에 표시하고, 방 주인이면 넣고 지우고 저장할 수 있게 한다.
- * 넣는 방법: 화면에서 양 끝 두 점을 찍거나, 벽·시작 위치·폭을 숫자로 넣는다.
+ * 넣는 방법: 화면에서 양 끝 두 점을 찍거나, 벽·시작 위치·폭을 숫자로 넣거나, AI가 찾은 후보를 받아 확인한다.
  * 좌표는 방 좌표(바닥 y=0, m)이고 보정 후에는 월드 좌표와 같다.
  */
 export default function OpeningsTool({
@@ -41,6 +43,7 @@ export default function OpeningsTool({
   locked = false,
   onSave,
   onChange,
+  detect,
 }: {
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
@@ -54,6 +57,8 @@ export default function OpeningsTool({
   onSave?: (openings: Opening[]) => Promise<boolean>;
   /** 넣거나 지울 때마다 알린다 (저장 전이라도 가구 검사에 바로 반영하려고) */
   onChange?: (openings: Opening[]) => void;
+  /** AI로 문·창문 후보 찾기 (주면 버튼이 생긴다). remaining은 오늘 남은 AI 횟수 */
+  detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
 }) {
   const [openings, setOpenings] = useState<Opening[]>(initial);
   const [savedOpenings, setSavedOpenings] = useState<Opening[]>(initial);
@@ -66,6 +71,9 @@ export default function OpeningsTool({
   const [picking, setPicking] = useState(false);
   const [firstPoint, setFirstPoint] = useState<[number, number, number] | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // AI로 찾는 중이면 캡처 진행 상황, 그리고 AI가 넣은 것들(저장하거나 지울 때까지 "AI" 표시)
+  const [detecting, setDetecting] = useState<{ done: number; total: number } | null>(null);
+  const [aiKeys, setAiKeys] = useState<string[]>([]);
 
   const walls = useMemo(() => wallsOf(floorPolygon), [floorPolygon]);
   const dirty = !sameOpenings(openings, savedOpenings);
@@ -222,12 +230,64 @@ export default function OpeningsTool({
     setMessage(null);
   };
 
+  /** AI가 찾은 후보를 목록에 넣는다. 이미 있는 것과 겹치는 후보는 뺀다. 저장은 사용자가 확인한 뒤 직접 한다 */
+  const detectOpenings = async () => {
+    const engine = engineRef.current;
+    if (!engine || !detect || detecting) return;
+    setMessage(null);
+    setPicking(false);
+    setFirstPoint(null);
+    setDetecting({ done: 0, total: 0 });
+    const outcome = await requestOpeningsDetection(engine, detect.roomId, floorPolygon, (done, total) => setDetecting({ done, total }));
+    setDetecting(null);
+    if (!outcome.ok) {
+      if (outcome.code === 'AI_LIMIT') detect.onRemaining(0);
+      setMessage(outcome.message);
+      return;
+    }
+    if (outcome.remaining !== null) detect.onRemaining(outcome.remaining);
+    let next = openings;
+    const added: Opening[] = [];
+    for (const candidate of outcome.candidates) {
+      const result = addOpening(next, candidate);
+      if (!result.ok) continue;
+      next = result.openings;
+      added.push(candidate);
+    }
+    const skipped = outcome.candidates.length - added.length;
+    if (added.length === 0) {
+      setMessage(skipped > 0 ? 'AI가 찾은 것은 모두 이미 넣은 것과 겹칩니다.' : 'AI가 문·창문을 찾지 못했습니다. 직접 넣어 주세요.');
+      return;
+    }
+    setOpenings(next);
+    onChange?.(next);
+    setAiKeys((prev) => [...prev, ...added.map(keyOf)]);
+    const doors = added.filter((o) => o.type === 'door').length;
+    setMessage(
+      `AI가 문 ${doors}개, 창문 ${added.length - doors}개를 찾아 넣었습니다${skipped > 0 ? ` (이미 있는 것과 겹치는 ${skipped}개는 뺌)` : ''}. 3D 화면에서 위치를 확인하고, 틀린 것은 지우거나 종류를 바꾼 뒤 저장하세요.`,
+    );
+  };
+
+  /** 문 ↔ 창문 (유리문을 창문으로 잘못 넣었을 때 등) */
+  const switchType = (index: number) => {
+    const current = openings[index];
+    const made = makeOpening(current.type === 'door' ? 'window' : 'door', current.wallIndex, current.from, current.to - current.from, floorPolygon);
+    if (!made.ok) return;
+    const next = openings.map((o, i) => (i === index ? made.opening : o));
+    setOpenings(next);
+    onChange?.(next);
+    setMessage(null);
+  };
+
   const save = async () => {
     if (!onSave || savePhase === 'saving') return;
     const snapshot = openings;
     setSavePhase('saving');
     const ok = await onSave(snapshot);
-    if (ok) setSavedOpenings(snapshot);
+    if (ok) {
+      setSavedOpenings(snapshot);
+      setAiKeys([]);
+    }
     setSavePhase(ok ? 'idle' : 'error');
   };
 
@@ -280,13 +340,23 @@ export default function OpeningsTool({
           ) : (
             <ul className="space-y-1" data-testid="openings-list">
               {openings.map((o, i) => (
-                <li key={`${o.wallIndex}|${o.from}`} className="flex items-center justify-between gap-2">
+                <li key={keyOf(o)} className="flex items-center justify-between gap-1" data-ai={aiKeys.includes(keyOf(o))}>
                   <span>
                     <span style={{ color: hex(OPENING_COLORS[o.type]) }}>■</span> {describeOpening(o)}
+                    {aiKeys.includes(keyOf(o)) && (
+                      <span className="ml-1 rounded bg-violet-600 px-1" data-testid="openings-ai-tag">
+                        AI
+                      </span>
+                    )}
                   </span>
-                  <button className="shrink-0 rounded bg-white/20 px-2 py-0.5" onClick={() => remove(i)} aria-label={`${describeOpening(o)} 삭제`}>
-                    삭제
-                  </button>
+                  <span className="flex shrink-0 gap-1">
+                    <button className="rounded bg-white/20 px-1.5 py-0.5" onClick={() => switchType(i)} aria-label={`${describeOpening(o)} 종류 바꾸기`}>
+                      {o.type === 'door' ? '창문으로' : '문으로'}
+                    </button>
+                    <button className="rounded bg-white/20 px-1.5 py-0.5" onClick={() => remove(i)} aria-label={`${describeOpening(o)} 삭제`}>
+                      삭제
+                    </button>
+                  </span>
                 </li>
               ))}
             </ul>
@@ -335,6 +405,20 @@ export default function OpeningsTool({
               </p>
             )}
           </div>
+
+          {detect && (
+            <div className="space-y-1 border-t border-white/20 pt-2" data-testid="openings-detect" data-remaining={detect.remaining ?? ''} data-busy={detecting !== null}>
+              <button className="rounded bg-violet-600 px-2 py-1 disabled:opacity-50" disabled={detecting !== null || detect.remaining === 0} onClick={detectOpenings} data-testid="openings-detect-run">
+                {detecting === null && 'AI로 찾기'}
+                {detecting !== null && detecting.done < detecting.total && `화면 캡처 중 (${detecting.done}/${detecting.total})`}
+                {detecting !== null && detecting.done >= detecting.total && (detecting.total === 0 ? '준비 중…' : 'AI가 찾는 중… (10~40초)')}
+              </button>
+              <p className="opacity-80">
+                방 안을 여러 방향에서 캡처한 그림을 Google Gemini로 보내 문·창문 후보를 찾습니다. 틀리거나 빠뜨릴 수 있으니 꼭 확인하세요.
+                {detect.remaining !== null ? ` 오늘 ${detect.remaining}회 남음.` : ''}
+              </p>
+            </div>
+          )}
 
           {message && (
             <p className="text-amber-300" data-testid="openings-message">

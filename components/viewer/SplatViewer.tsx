@@ -526,6 +526,7 @@ export default function SplatViewer({
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
+          detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
