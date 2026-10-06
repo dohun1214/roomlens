@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatRoomDate, roomBadges, toRoomCards, type RoomListRow } from '@/lib/rooms/list';
+import { countByRoom, formatRoomDate, roomBadges, roomOutline, toRoomCards, type RoomListRow } from '@/lib/rooms/list';
 
 const row = (over: Partial<RoomListRow> = {}): RoomListRow => ({
   id: 'r1',
@@ -52,3 +52,70 @@ describe('toRoomCards', () => {
     expect(cards.map((c) => c.id)).toEqual(['b', 'a']);
   });
 });
+
+const SQUARE = [
+  [-2, -1.5],
+  [2, -1.5],
+  [2, 1.5],
+  [-2, 1.5],
+];
+const TRANSFORM = { s: 1, q: [0, 0, 0, 1], t: [0, 0, 0], flipX: false };
+
+describe('roomOutline', () => {
+  it('보정하지 않은 방은 null', () => {
+    expect(roomOutline(row())).toBeNull();
+    expect(roomOutline(row({ transform: TRANSFORM, floor_polygon: [[0, 0]] }))).toBeNull();
+  });
+
+  it('보정한 방: 바닥 모양과 문·창문의 양 끝점', () => {
+    const outline = roomOutline(
+      row({
+        transform: TRANSFORM,
+        floor_polygon: SQUARE,
+        openings: [
+          { type: 'door', wallIndex: 0, from: 0.5, to: 1.4, widthM: 0.9 },
+          { type: 'window', wallIndex: 9, from: 0, to: 1, widthM: 1 }, // 없는 벽 → 버림
+        ],
+      }),
+    );
+    expect(outline?.polygon).toEqual(SQUARE);
+    expect(outline?.openings.length).toBe(1);
+    const [door] = outline?.openings ?? [];
+    expect(door.type).toBe('door');
+    expect(door.a).toEqual([-1.5, -1.5]);
+    expect(door.b[0]).toBeCloseTo(-0.6, 9);
+    expect(door.b[1]).toBe(-1.5);
+  });
+});
+
+describe('toRoomCards: 내 방의 상태', () => {
+  it('공개 목록에는 상태가 없고 바닥 모양만 있다', () => {
+    const [card] = toRoomCards([row({ transform: TRANSFORM, floor_polygon: SQUARE })], new Map(), false);
+    expect(card.stats).toBeNull();
+    expect(card.outline?.polygon.length).toBe(4);
+  });
+
+  it('내 방: 보정 여부, 문·창문 수, 배치 수, 리포트', () => {
+    const rows = [
+      row({ id: 'a', transform: TRANSFORM, floor_polygon: SQUARE, openings: [{ type: 'door', wallIndex: 0, from: 0.5, to: 1.4, widthM: 0.9 }] }),
+      row({ id: 'b' }),
+      row({ id: 'c', status: 'uploading' }),
+    ];
+    const cards = toRoomCards(rows, new Map(), true, { layoutCounts: new Map([['a', 2]]), reportRoomIds: new Set(['a']) });
+    expect(cards[0].stats).toEqual({ calibrated: true, openings: 1, layouts: 2, hasReport: true });
+    expect(cards[1].stats).toEqual({ calibrated: false, openings: 0, layouts: 0, hasReport: false });
+    // 올리다 만 방은 상태를 보여주지 않는다
+    expect(cards[2].stats).toBeNull();
+  });
+});
+
+describe('countByRoom', () => {
+  it('방 id별로 센다', () => {
+    expect([...countByRoom([{ room_id: 'a' }, { room_id: 'b' }, { room_id: 'a' }])]).toEqual([
+      ['a', 2],
+      ['b', 1],
+    ]);
+    expect(countByRoom(null).size).toBe(0);
+  });
+});
+
