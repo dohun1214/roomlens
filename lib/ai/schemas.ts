@@ -22,6 +22,22 @@ export const LayoutIntent = z.object({
 });
 export type LayoutIntent = z.infer<typeof LayoutIntent>;
 
+/** 배치 추천 요청: 지금 놓인 가구(어떤 가구인지만. 치수는 서버가 DB에서 읽는다)와 사용자의 요청 글 */
+export const LayoutSuggestInput = z.object({
+  items: z
+    .array(
+      z.object({
+        id: z.string().min(1).max(40),
+        furnitureRef: z.string().min(1).max(64),
+        kind: z.enum(['catalog', 'user']),
+      }),
+    )
+    .min(1, '가구를 먼저 놓아 주세요.')
+    .max(20, '한 번에 20개까지 추천받을 수 있습니다.'),
+  request: z.string().max(1000, '요청은 1000자까지 적을 수 있습니다.').default(''),
+});
+export type LayoutSuggestInput = z.infer<typeof LayoutSuggestInput>;
+
 /** 방 사진 분석 리포트 */
 export const RoomReport = z.object({
   options: z.array(

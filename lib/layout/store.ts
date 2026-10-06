@@ -6,6 +6,9 @@ import { parseSavedItems, type SavedItem } from './saved';
 
 export type SavedLayout = { id: string; items: SavedItem[] };
 
+/** 한 방에 남겨 두는 내 AI 배치의 수 (새로 추천받으면 오래된 것부터 지운다) */
+export const MAX_AI_LAYOUTS = 5;
+
 type Client = SupabaseClient<Database>;
 
 /** 이 방에서 내가 가장 최근에 저장한 배치. 없으면 null */

@@ -9,6 +9,59 @@ export type Database = {
   };
   public: {
     Tables: {
+      ai_calls: {
+        Row: {
+          attempts: number;
+          created_at: string;
+          error: string | null;
+          finished_at: string | null;
+          id: string;
+          input_tokens: number;
+          kind: string;
+          model: string | null;
+          output_tokens: number;
+          owner_id: string;
+          room_id: string | null;
+          status: string;
+        };
+        Insert: {
+          attempts?: number;
+          created_at?: string;
+          error?: string | null;
+          finished_at?: string | null;
+          id?: string;
+          input_tokens?: number;
+          kind: string;
+          model?: string | null;
+          output_tokens?: number;
+          owner_id: string;
+          room_id?: string | null;
+          status?: string;
+        };
+        Update: {
+          attempts?: number;
+          created_at?: string;
+          error?: string | null;
+          finished_at?: string | null;
+          id?: string;
+          input_tokens?: number;
+          kind?: string;
+          model?: string | null;
+          output_tokens?: number;
+          owner_id?: string;
+          room_id?: string | null;
+          status?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'ai_calls_room_id_fkey';
+            columns: ['room_id'];
+            isOneToOne: false;
+            referencedRelation: 'rooms';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       comments: {
         Row: {
           author_id: string;
