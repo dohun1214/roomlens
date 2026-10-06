@@ -1,5 +1,10 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { Avatar } from '@/components/SiteHeader';
+import Icon from '@/components/ui/Icon';
+import { LogoMark } from '@/components/ui/Logo';
+import { loginUrlFor } from '@/lib/auth/paths';
 import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
@@ -37,7 +42,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   // 파일을 아직 올리지 않은 방은 주인에게만 보인다 (지울 수 있게)
   if (!ready && !isOwner) notFound();
 
-  const [splatUrl, { data: owner }, { data: catalogRows }, myLayouts, myFurniture, aiRemaining, { data: reportRow }] = await Promise.all([
+  const [splatUrl, { data: owner }, { data: catalogRows }, myLayouts, myFurniture, aiRemaining, { data: reportRow }, { data: me }] = await Promise.all([
     ready && room.splat_key ? presignGet(room.splat_key) : null,
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
@@ -51,6 +56,8 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     ready && user ? remainingToday(user.id) : null,
     // 가장 최근의 방 분석 리포트 (방을 볼 수 있으면 누구나 읽을 수 있다)
     supabase.from('room_reports').select('id, model, report, created_at').eq('room_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
+    // 머리말에 보여줄 내 닉네임 (방 주인이면 위에서 읽은 것을 쓴다)
+    user && !isOwner ? supabase.from('profiles').select('nickname').eq('id', user.id).maybeSingle() : Promise.resolve({ data: null }),
   ]);
   const report = reportRow ? parseReport(reportRow.report) : null;
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
@@ -60,27 +67,51 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     : undefined;
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
 
+  const ownerName = owner?.nickname ?? '알 수 없음';
+  const myName = isOwner ? ownerName : (me?.nickname ?? user?.email ?? '내 정보');
+
   return (
-    <main className="flex h-[calc(100dvh-var(--header-h))] w-full flex-col">
-      <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-neutral-200 px-4 py-2 text-sm">
-        <div className="min-w-0">
-          <h1 className="truncate font-semibold" data-testid="room-title">
-            {room.title}
-          </h1>
-          <p className="truncate text-neutral-500">
-            <span data-testid="room-owner">{owner?.nickname ?? '알 수 없음'}</span>
-            {room.description ? ` · ${room.description}` : ''}
-          </p>
-          {room.credit && (
-            <p className="truncate text-xs text-neutral-500" data-testid="room-credit" title={room.credit}>
-              출처: {room.credit}
-            </p>
+    <main className="flex h-dvh w-full flex-col bg-ground">
+      <header className="relative z-20 flex min-h-[60px] shrink-0 items-center justify-between gap-3 border-b border-line bg-surface px-3 py-2 sm:px-5">
+        <div className="flex min-w-0 items-center gap-2.5 sm:gap-4">
+          <Link href="/" className="flex shrink-0 items-center gap-2 text-[17px] font-bold tracking-tight" aria-label="RoomLens 홈">
+            <LogoMark size={30} />
+            <span className="hidden lg:inline">RoomLens</span>
+          </Link>
+          <div className="flex min-w-0 items-center gap-2">
+            <Link href="/" className="hidden shrink-0 text-sm text-sub hover:text-ink sm:inline">
+              {isOwner ? '내 방' : '공개된 방'}
+            </Link>
+            <Icon name="chevronRight" className="hidden text-field sm:block" />
+            <div className="flex min-w-0 flex-col">
+              <h1 className="truncate text-[15px] leading-tight font-semibold" data-testid="room-title">
+                {room.title}
+              </h1>
+              <p className="hidden truncate text-xs text-sub md:block">
+                <span data-testid="room-owner">{ownerName}</span>
+                {room.description ? ` · ${room.description}` : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {isOwner && <RoomOwnerControls roomId={room.id} initialPublic={room.is_public} canPublish={ready} />}
+          {user ? (
+            <Link href="/account" className="hidden items-center gap-2 text-[13px] text-sub hover:text-ink sm:flex" title="내 정보">
+              <Avatar name={myName} size={30} />
+              <span className="hidden max-w-32 truncate xl:inline" data-testid="header-nickname">
+                {myName}
+              </span>
+            </Link>
+          ) : (
+            <Link href={loginUrlFor(`/rooms/${room.id}`)} className="btn btn-outline h-[38px] px-4 text-[13px]">
+              로그인
+            </Link>
           )}
         </div>
-        {isOwner && <RoomOwnerControls roomId={room.id} initialPublic={room.is_public} canPublish={ready} />}
-      </div>
+      </header>
 
-      <div className="relative min-h-0 flex-1 bg-neutral-900">
+      <div className="relative min-h-0 flex-1">
         {splatUrl ? (
           <SplatViewer
             url={splatUrl}
@@ -95,11 +126,14 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             initialReport={report && reportRow ? { id: reportRow.id, model: reportRow.model, createdAt: reportRow.created_at, report } : null}
             userFurniture={myFurniture}
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
+            credit={room.credit}
           />
         ) : (
-          <p className="p-6 text-sm text-neutral-300" data-testid="room-not-ready">
-            아직 3D 파일을 올리지 않은 방입니다. 방을 지우고 새로 만들어 주세요.
-          </p>
+          <div className="flex h-full items-center justify-center p-6">
+            <p className="max-w-md rounded-3xl bg-surface p-8 text-center text-[15px] text-body shadow-card" data-testid="room-not-ready">
+              아직 3D 파일을 올리지 않은 방입니다. 방을 지우고 새로 만들어 주세요.
+            </p>
+          </div>
         )}
       </div>
     </main>
