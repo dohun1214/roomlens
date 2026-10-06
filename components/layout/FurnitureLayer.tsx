@@ -32,6 +32,10 @@ import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/
 import { disposeModelTemplate, instantiateModel, makeModelTemplate, type ModelTemplate } from '@/lib/three/furnitureModel';
 import { pointerToNdc } from '@/lib/three/pickPoint';
 import type { Engine } from '@/components/viewer/engine';
+import FurnitureGlyph from '@/components/ui/FurnitureGlyph';
+import Icon from '@/components/ui/Icon';
+import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
+import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
 import FloorPlan from './FloorPlan';
 
 type Item = PlacedItem;
@@ -45,6 +49,7 @@ const WARNING_EMISSIVE = 0x4a3800;
 const NO_OPENINGS: Opening[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
 const NO_LAYOUTS: LayoutChoice[] = [];
+const NO_KEYS: string[] = [];
 
 /** 배치를 고르는 칸에 보여줄 것 */
 export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai' };
@@ -60,10 +65,14 @@ type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint 
  * 배치를 바꾸거나(내 배치 ↔ AI 배치) 새로 추천받으면 부모가 key를 바꿔 이 층을 새로 만든다.
  */
 export default function FurnitureLayer({
+  slots,
+  showPlan,
+  onShowPlan,
   engineRef,
   floorPolygon,
   catalog = DEFAULT_CATALOG,
   openings = NO_OPENINGS,
+  aiOpeningKeys = NO_KEYS,
   userFurniture = NO_FURNITURE,
   onCreateFurniture,
   onDeleteFurniture,
@@ -80,12 +89,19 @@ export default function FurnitureLayer({
   aiResult = null,
   aiSummary = null,
 }: {
+  /** 패널과 3D 화면 위에 그려 넣을 자리 */
+  slots: Slots;
+  /** 3D 위에 평면도를 덮어 보여줄지 (뷰어가 기억한다: 배치를 바꿔도 그대로) */
+  showPlan: boolean;
+  onShowPlan: (show: boolean) => void;
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
   /** 놓을 수 있는 가구 목록. 방 화면은 DB의 카탈로그를 넘긴다 */
   catalog?: CatalogItem[];
   /** 방의 문·창문. 문 앞·통로·창문 가림 검사에 쓴다 */
   openings?: Opening[];
+  /** 그 가운데 AI가 찾아 아직 확인하지 않은 것 (평면도에서 점선으로 그린다) */
+  aiOpeningKeys?: string[];
   /** 내가 만들어 둔 가구. 처음 한 번만 읽는다 */
   userFurniture?: CatalogItem[];
   /** 내 가구를 만든다 (주면 "내 가구" 칸이 생긴다). 실패하면 null */
@@ -127,10 +143,6 @@ export default function FurnitureLayer({
   // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
   const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
-  // 3D 위에 2D 평면도를 덮어 보여줄지
-  const [showPlan, setShowPlan] = useState(false);
-  // 가구 목록을 접어 패널을 작게 (좁은 화면에서 평면도를 가리지 않게)
-  const [compact, setCompact] = useState(false);
   // 불러온 3D 모델 틀 (주소 → 틀, 받는 중이거나 실패했으면 null). 다 받으면 modelVersion을 올려 다시 그린다
   const [modelCache] = useState(() => new Map<string, ModelTemplate | null>());
   const [modelVersion, setModelVersion] = useState(0);
@@ -440,26 +452,76 @@ export default function FurnitureLayer({
     aiBlocked ??
     (items.length === 0 ? '가구를 먼저 놓으면 AI가 다시 배치해 줍니다.' : items.length > MAX_SUGGEST_ITEMS ? `가구가 ${MAX_SUGGEST_ITEMS}개를 넘으면 추천받을 수 없습니다.` : aiRemaining === 0 ? '오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.' : null);
 
+  const dims = (w: number, d: number, h: number) => `${Math.round(w * 100)} × ${Math.round(d * 100)} × ${Math.round(h * 100)} cm`;
+  const stateOf = (id: string) => (badIds.has(id) ? 'error' : warnIds.has(id) ? 'warning' : 'ok');
+  const showSave = Boolean(onSave) && (items.length > 0 || savedItems.length > 0);
+  const hasChooser = Boolean(onSelectLayout) && layouts.length > 0;
+  const fieldClass = 'field h-10 rounded-[10px] px-3 text-sm';
+
   return (
     <>
-      {showPlan && (
-        <div className="absolute inset-0 bg-neutral-900/95" data-testid="plan-overlay">
-          <div className="absolute inset-x-2 bottom-16 top-2 sm:right-[17.5rem]">
-            <FloorPlan
-              floorPolygon={floorPolygon}
-              items={items}
-              openings={openings}
-              badIds={badIds}
-              warnIds={warnIds}
-              selectedId={selectedId}
-              onSelect={setSelectedId}
-              onMove={(id, x, z) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
-            />
+      <StageLayer slots={slots}>
+        {showPlan && (
+          <div className="absolute inset-0 bg-surface" data-testid="plan-overlay">
+            <div className="absolute inset-x-3 top-[68px] bottom-40 sm:bottom-32 lg:inset-x-6 lg:bottom-[120px]">
+              <FloorPlan
+                floorPolygon={floorPolygon}
+                items={items}
+                openings={openings}
+                aiOpeningKeys={aiOpeningKeys}
+                badIds={badIds}
+                warnIds={warnIds}
+                selectedId={selectedId}
+                onSelect={setSelectedId}
+                onMove={(id, x, z) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+              />
+            </div>
           </div>
-        </div>
-      )}
-      <div
-        className="absolute right-2 top-2 max-h-[calc(100%-4.5rem)] w-64 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/75 p-3 text-xs text-white"
+        )}
+
+        {/* 3D ↔ 평면도 */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={showPlan}
+          aria-label="평면도로 보기"
+          className="absolute top-3 left-3 flex rounded-xl bg-surface p-1 text-[13px] shadow-float"
+          onClick={() => onShowPlan(!showPlan)}
+          data-testid="plan-toggle"
+        >
+          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'font-medium text-sub' : 'bg-ink font-semibold text-white'}`}>3D</span>
+          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'bg-ink font-semibold text-white' : 'font-medium text-sub'}`}>평면도</span>
+        </button>
+
+        {/* 고른 가구: 이름·치수, 회전, 삭제 */}
+        {selected && (
+          <div
+            className="absolute bottom-24 left-1/2 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 sm:bottom-16 lg:bottom-14 items-center gap-2.5 rounded-[14px] bg-surface py-1.5 pr-1.5 pl-2.5 whitespace-nowrap shadow-float sm:gap-3"
+            data-testid="selection-bar"
+            data-id={selected.id}
+          >
+            <FurnitureGlyph furnitureRef={selected.furnitureRef} category={selected.category} size={34} />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate font-bold">{selected.name}</span>
+              <span className="font-mono text-[11px] text-mute" title={`위치 x ${selected.x.toFixed(2)}, z ${selected.z.toFixed(2)} · ${selected.rotationDeg}°`}>
+                {dims(selected.w, selected.d, selected.h)}
+              </span>
+            </span>
+            <span className="h-7 w-px bg-line" aria-hidden="true" />
+            <button className="btn btn-soft h-11 px-3.5 text-[13px]" onClick={rotate}>
+              <Icon name="rotate" />
+              90° 회전
+            </button>
+            <button className="btn btn-danger h-11 px-3.5 text-[13px]" onClick={remove}>
+              삭제
+            </button>
+          </div>
+        )}
+      </StageLayer>
+
+      <ToolPanel
+        slots={slots}
+        tool="furniture"
         data-testid="furniture-panel"
         data-json={JSON.stringify(
           items.map(({ id, kind, furnitureRef, name, x, z, w, d, h, rotationDeg, modelUrl }) => ({
@@ -479,321 +541,399 @@ export default function FurnitureLayer({
         )}
         data-violations={JSON.stringify(violations)}
       >
-        <div className="flex items-center justify-between gap-1">
-          <strong className="mr-auto">가구 배치</strong>
-          <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setShowPlan((prev) => !prev)} data-testid="plan-toggle" aria-pressed={showPlan}>
-            {showPlan ? '3D로 보기' : '평면도'}
-          </button>
-          <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setCompact((prev) => !prev)} data-testid="panel-compact" aria-pressed={compact}>
-            {compact ? '펼치기' : '접기'}
-          </button>
-        </div>
-        {onSelectLayout && layouts.length > 0 && (
-          <div className={compact ? 'hidden' : 'space-y-1'} data-testid="layout-chooser" data-current={currentLayoutId ?? ''} data-count={layouts.length}>
-            <div className="flex items-center gap-1">
-              <select
-                className="w-0 flex-1 rounded bg-white/10 px-1 py-1 disabled:opacity-50"
-                aria-label="배치 고르기"
-                data-testid="layout-select"
-                disabled={layoutBusy || aiBusy}
-                value={currentLayoutId ?? ''}
-                onChange={(e) => selectLayout(e.target.value === '' ? null : e.target.value)}
-              >
-                {/* 직접 만든 배치가 아직 없으면 새로 시작할 수 있게 빈 배치를 둔다 */}
-                {(!hasOwnLayout || currentLayoutId === null) && (
-                  <option className="text-black" value="">
-                    내 배치 (새로 만들기)
-                  </option>
+        <PanelBody>
+          <div className="flex flex-col gap-3">
+            <PanelTitle
+              right={
+                showSave && (
+                  <SaveStatePill
+                    state={saveState}
+                    testId="layout-save-state"
+                    labels={{ saved: '배치 저장됨', dirty: '저장 안 됨', saving: '저장하는 중…', error: '저장하지 못했습니다' }}
+                  />
+                )
+              }
+            >
+              가구 배치
+            </PanelTitle>
+
+            {(hasChooser || (showSave && saveState !== 'saved')) && (
+              <div className="flex flex-col gap-2" data-testid={hasChooser ? 'layout-chooser' : undefined} data-current={hasChooser ? (currentLayoutId ?? '') : undefined} data-count={hasChooser ? layouts.length : undefined}>
+                <div className="flex gap-2">
+                  {hasChooser && (
+                    <div className="relative min-w-0 flex-1">
+                      {currentLayout?.createdBy === 'ai' && <AiBadge className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2" />}
+                      <select
+                        className={`h-11 w-full appearance-none rounded-[10px] border border-line-strong bg-surface pr-9 text-sm font-medium disabled:opacity-50 ${currentLayout?.createdBy === 'ai' ? 'pl-11' : 'pl-3.5'}`}
+                        aria-label="배치 고르기"
+                        data-testid="layout-select"
+                        disabled={layoutBusy || aiBusy}
+                        value={currentLayoutId ?? ''}
+                        onChange={(e) => selectLayout(e.target.value === '' ? null : e.target.value)}
+                      >
+                        {/* 직접 만든 배치가 아직 없으면 새로 시작할 수 있게 빈 배치를 둔다 */}
+                        {(!hasOwnLayout || currentLayoutId === null) && <option value="">내 배치 (새로 만들기)</option>}
+                        {layouts.map((l) => (
+                          <option key={l.id} value={l.id}>
+                            {l.name}
+                          </option>
+                        ))}
+                      </select>
+                      <Icon name="chevronDown" className="pointer-events-none absolute top-1/2 right-3.5 -translate-y-1/2 text-sub" />
+                    </div>
+                  )}
+                  {showSave && saveState !== 'saved' && (
+                    <button className="btn btn-primary h-11 px-4 text-[13px]" data-testid="layout-save" disabled={saveState === 'saving'} onClick={() => void save()}>
+                      {saveState === 'error' ? '다시 저장' : '배치 저장'}
+                    </button>
+                  )}
+                  {hasChooser && onDeleteLayout && currentLayout && !confirmLayoutDelete && (
+                    <button className="btn btn-soft h-11 px-3.5 text-[13px]" disabled={layoutBusy || aiBusy} onClick={() => setConfirmLayoutDelete(true)} data-testid="layout-delete">
+                      지우기
+                    </button>
+                  )}
+                </div>
+                {confirmLayoutDelete && currentLayout && (
+                  <div className="flex flex-wrap items-center gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[13px] text-warn" data-testid="layout-delete-confirm">
+                    <span className="mr-auto">&ldquo;{currentLayout.name}&rdquo;을(를) 지울까요?</span>
+                    <button className="btn btn-danger h-9 bg-danger px-3 text-white hover:bg-[#8f231b]" disabled={layoutBusy} onClick={deleteLayout} data-testid="layout-delete-yes">
+                      지우기
+                    </button>
+                    <button className="btn btn-outline h-9 px-3" onClick={() => setConfirmLayoutDelete(false)}>
+                      취소
+                    </button>
+                  </div>
                 )}
-                {layouts.map((l) => (
-                  <option key={l.id} className="text-black" value={l.id}>
-                    {l.name}
-                  </option>
-                ))}
-              </select>
-              {onDeleteLayout && currentLayout && !confirmLayoutDelete && (
-                <button className="rounded bg-white/20 px-2 py-1 disabled:opacity-50" disabled={layoutBusy || aiBusy} onClick={() => setConfirmLayoutDelete(true)} data-testid="layout-delete">
-                  지우기
-                </button>
-              )}
-            </div>
-            {confirmLayoutDelete && currentLayout && (
-              <div className="flex flex-wrap items-center gap-1 text-amber-300" data-testid="layout-delete-confirm">
-                <span>&ldquo;{currentLayout.name}&rdquo;을(를) 지울까요?</span>
-                <button className="rounded bg-red-600 px-2 py-0.5 text-white disabled:opacity-50" disabled={layoutBusy} onClick={deleteLayout} data-testid="layout-delete-yes">
-                  지우기
-                </button>
-                <button className="rounded bg-white/20 px-2 py-0.5 text-white" onClick={() => setConfirmLayoutDelete(false)}>
-                  취소
-                </button>
               </div>
             )}
           </div>
-        )}
-        <div className={compact ? 'hidden' : 'flex flex-wrap gap-1'} data-testid="furniture-catalog">
-          {catalog.map((entry) => (
-            <button key={entry.id} className="rounded bg-white/20 px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)}>
-              + {entry.nameKo}
-            </button>
-          ))}
-        </div>
-        {onCreateFurniture && (
-          <div className={compact ? 'hidden' : 'space-y-1 border-t border-white/20 pt-2'} data-testid="user-furniture">
-            <div className="flex items-center justify-between">
-              <span className="opacity-80">내 가구</span>
-              {!mineFormOpen && mine.length < MAX_USER_FURNITURE && (
-                <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
-                  직접 만들기
-                </button>
+
+          {aiResult ? (
+            <div className="flex flex-col gap-3" data-testid="ai-result" data-layout-id={aiResult.layoutId}>
+              <SectionTitle
+                right={
+                  aiResult.failures.length === 0 && aiResult.unmet.length === 0 ? (
+                    <span className="pill bg-ok-soft font-medium text-ok">모두 놓음 · 검사 통과</span>
+                  ) : (
+                    <span className="pill bg-warn-soft font-medium text-warn">확인할 것 {aiResult.failures.length + aiResult.unmet.length}</span>
+                  )
+                }
+              >
+                AI 추천 결과
+              </SectionTitle>
+              {aiResult.summary && (
+                <p className="rounded-[14px_14px_14px_4px] bg-accent-soft p-3.5 text-sm text-pretty text-[#1a2140]" data-testid="ai-result-summary">
+                  {aiResult.summary}
+                </p>
               )}
-            </div>
-            {mine.length > 0 && (
-              <div className="flex flex-wrap gap-1" data-testid="user-furniture-list">
-                {mine.map((entry) => (
-                  <span key={entry.id} className="inline-flex overflow-hidden rounded bg-white/20">
-                    <button className="px-2 py-1 disabled:opacity-40" disabled={full} onClick={() => add(entry)} title={`${Math.round(entry.w * 100)} × ${Math.round(entry.d * 100)} × ${Math.round(entry.h * 100)} cm`}>
-                      + {entry.nameKo}
-                    </button>
-                    <button className="border-l border-white/20 px-1.5 py-1" onClick={() => setConfirmDeleteId(entry.id)} aria-label={`${entry.nameKo} 지우기`}>
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-            {confirmDeleteId && (
-              <div className="flex flex-wrap items-center gap-1 text-amber-300" data-testid="user-furniture-confirm">
-                <span>&ldquo;{mine.find((f) => f.id === confirmDeleteId)?.nameKo}&rdquo;을(를) 지울까요? 방에 놓인 것도 사라집니다.</span>
-                <button className="rounded bg-red-600 px-2 py-0.5 text-white disabled:opacity-50" disabled={mineBusy} onClick={() => deleteMine(confirmDeleteId)} data-testid="user-furniture-confirm-yes">
-                  지우기
-                </button>
-                <button className="rounded bg-white/20 px-2 py-0.5 text-white" onClick={() => setConfirmDeleteId(null)}>
-                  취소
-                </button>
-              </div>
-            )}
-            {mineFormOpen && (
-              <div className="space-y-1" data-testid="user-furniture-form">
-                <input
-                  className="w-full rounded bg-white/10 px-2 py-1"
-                  placeholder="이름 (예: 수납장)"
-                  maxLength={USER_FURNITURE_NAME_MAX}
-                  value={mineForm.name}
-                  onChange={(e) => setMineForm({ ...mineForm, name: e.target.value })}
-                  data-testid="user-furniture-name"
-                />
-                <div className="flex items-center gap-1">
-                  {(['width', 'depth', 'height'] as const).map((key) => (
-                    <input
-                      key={key}
-                      className="w-0 flex-1 rounded bg-white/10 px-2 py-1"
-                      inputMode="decimal"
-                      placeholder={{ width: '가로', depth: '깊이', height: '높이' }[key]}
-                      aria-label={{ width: '가로 (cm)', depth: '깊이 (cm)', height: '높이 (cm)' }[key]}
-                      value={mineForm[key]}
-                      onChange={(e) => setMineForm({ ...mineForm, [key]: e.target.value })}
-                      data-testid={`user-furniture-${key}`}
-                    />
+              {aiResult.reasons.length > 0 && (
+                <ul className="flex flex-col gap-3" data-testid="ai-result-reasons">
+                  {aiResult.reasons.map((r) => {
+                    const item = items.find((i) => i.id === r.itemId);
+                    return (
+                      <li key={r.itemId} className="flex gap-3">
+                        <FurnitureGlyph furnitureRef={item?.furnitureRef ?? ''} category={item?.category ?? ''} />
+                        <span className="flex min-w-0 flex-col gap-px">
+                          <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => setSelectedId(r.itemId)}>
+                            {r.name}
+                          </button>
+                          <span className="text-[13px] text-body">{r.reason}</span>
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {aiResult.failures.length > 0 && (
+                <ul className="flex flex-col gap-1.5 text-[13px]" data-testid="ai-result-failures">
+                  {aiResult.failures.map((f) => (
+                    <li key={f.itemId} className="rounded-[10px] bg-danger-tint px-3 py-2 text-danger">
+                      놓지 못함 — {f.message}
+                    </li>
                   ))}
-                  <span>cm</span>
+                </ul>
+              )}
+              {aiResult.unmet.length > 0 && (
+                <ul className="flex flex-col gap-1.5 text-[13px]" data-testid="ai-result-unmet">
+                  {aiResult.unmet.map((u, index) => (
+                    <li key={`${u.itemId}|${index}`} className="rounded-[10px] bg-warn-tint px-3 py-2 text-warn">
+                      {u.message}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="text-xs text-sub">가구를 끌어서 고칠 수 있습니다. AI의 추천은 참고용입니다.</p>
+            </div>
+          ) : (
+            aiSummary && (
+              <div className="flex flex-col gap-2.5" data-testid="ai-saved-summary">
+                <SectionTitle>AI가 추천한 배치</SectionTitle>
+                <p className="rounded-[14px_14px_14px_4px] bg-accent-soft p-3.5 text-[13px] whitespace-pre-line text-[#1a2140]">{aiSummary}</p>
+              </div>
+            )
+          )}
+
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle right={<span className="font-mono text-[11px] text-mute">가로 × 깊이 cm</span>}>가구 추가</SectionTitle>
+            <div className="grid grid-cols-2 gap-2" data-testid="furniture-catalog">
+              {catalog.map((entry) => (
+                <button
+                  key={entry.id}
+                  className="flex h-[52px] items-center gap-2.5 rounded-xl border border-line bg-surface px-2 text-left hover:border-line-strong hover:bg-accent-tint disabled:opacity-40"
+                  disabled={full}
+                  onClick={() => add(entry)}
+                  aria-label={`+ ${entry.nameKo}`}
+                  title={dims(entry.w, entry.d, entry.h)}
+                >
+                  <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                    <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {onCreateFurniture && (
+            <div className="flex flex-col gap-2.5" data-testid="user-furniture">
+              <SectionTitle>내 가구</SectionTitle>
+              {mine.length > 0 && (
+                <div className="grid grid-cols-2 gap-2" data-testid="user-furniture-list">
+                  {mine.map((entry) => (
+                    <span key={entry.id} className="flex h-[52px] items-stretch overflow-hidden rounded-xl border border-line bg-surface">
+                      <button
+                        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 text-left hover:bg-accent-tint disabled:opacity-40"
+                        disabled={full}
+                        onClick={() => add(entry)}
+                        aria-label={`+ ${entry.nameKo}`}
+                        title={dims(entry.w, entry.d, entry.h)}
+                      >
+                        <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
+                        <span className="flex min-w-0 flex-col">
+                          <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                          <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
+                        </span>
+                      </button>
+                      <button className="flex w-8 shrink-0 items-center justify-center border-l border-line text-mute hover:bg-danger-soft hover:text-danger" onClick={() => setConfirmDeleteId(entry.id)} aria-label={`${entry.nameKo} 지우기`}>
+                        <Icon name="close" size={11} />
+                      </button>
+                    </span>
+                  ))}
                 </div>
-                <div className="flex gap-1">
-                  <button className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50" disabled={mineBusy} onClick={createMine} data-testid="user-furniture-create">
-                    만들기
+              )}
+              {confirmDeleteId && (
+                <div className="flex flex-wrap items-center gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[13px] text-warn" data-testid="user-furniture-confirm">
+                  <span className="w-full">&ldquo;{mine.find((f) => f.id === confirmDeleteId)?.nameKo}&rdquo;을(를) 지울까요? 방에 놓인 것도 사라집니다.</span>
+                  <button className="btn btn-danger h-9 bg-danger px-3 text-white hover:bg-[#8f231b]" disabled={mineBusy} onClick={() => deleteMine(confirmDeleteId)} data-testid="user-furniture-confirm-yes">
+                    지우기
                   </button>
-                  <button
-                    className="rounded bg-white/20 px-2 py-1"
-                    onClick={() => {
-                      setMineFormOpen(false);
-                      setMineMessage(null);
-                    }}
-                  >
+                  <button className="btn btn-outline h-9 px-3" onClick={() => setConfirmDeleteId(null)}>
                     취소
                   </button>
                 </div>
+              )}
+              {mineFormOpen ? (
+                <div className="flex flex-col gap-2 rounded-xl bg-ground p-3" data-testid="user-furniture-form">
+                  <input
+                    className={fieldClass}
+                    placeholder="이름 (예: 수납장)"
+                    aria-label="내 가구 이름"
+                    maxLength={USER_FURNITURE_NAME_MAX}
+                    value={mineForm.name}
+                    onChange={(e) => setMineForm({ ...mineForm, name: e.target.value })}
+                    data-testid="user-furniture-name"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    {(['width', 'depth', 'height'] as const).map((key) => (
+                      <input
+                        key={key}
+                        className={`${fieldClass} w-0 flex-1 px-2.5`}
+                        inputMode="decimal"
+                        placeholder={{ width: '가로', depth: '깊이', height: '높이' }[key]}
+                        aria-label={{ width: '가로 (cm)', depth: '깊이 (cm)', height: '높이 (cm)' }[key]}
+                        value={mineForm[key]}
+                        onChange={(e) => setMineForm({ ...mineForm, [key]: e.target.value })}
+                        data-testid={`user-furniture-${key}`}
+                      />
+                    ))}
+                    <span className="font-mono text-xs text-sub">cm</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <button className="btn btn-primary h-10 flex-1 text-[13px]" disabled={mineBusy} onClick={createMine} data-testid="user-furniture-create">
+                      만들기
+                    </button>
+                    <button
+                      className="btn btn-outline h-10 px-4 text-[13px]"
+                      onClick={() => {
+                        setMineFormOpen(false);
+                        setMineMessage(null);
+                      }}
+                    >
+                      취소
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                mine.length < MAX_USER_FURNITURE && (
+                  <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
+                    <Icon name="plus" />
+                    직접 만들기 (이름·치수)
+                  </button>
+                )
+              )}
+              {mineMessage && (
+                <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="user-furniture-message">
+                  {mineMessage}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle
+              right={
+                items.length > 0 &&
+                violations.length > 0 && (
+                  <span className="flex gap-1.5">
+                    {errorCount > 0 && <span className="pill bg-danger-soft font-medium text-danger">문제 {errorCount}</span>}
+                    {violations.length - errorCount > 0 && <span className="pill bg-warn-soft font-medium text-warn">경고 {violations.length - errorCount}</span>}
+                  </span>
+                )
+              }
+            >
+              놓인 가구 <span className="font-mono font-medium text-mute">{items.length}</span>
+            </SectionTitle>
+            {items.length === 0 ? (
+              <p className="text-[13px] text-sub">가구를 추가한 뒤 끌어서 옮기세요. 평면도에서도 끌 수 있습니다. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
+            ) : (
+              <ul className="flex flex-col gap-1" data-testid="placed-list">
+                {items.map((item) => {
+                  const state = stateOf(item.id);
+                  const on = item.id === selectedId;
+                  return (
+                    <li key={item.id}>
+                      <button
+                        className={`flex min-h-10 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left ${on ? 'bg-accent-soft' : 'hover:bg-soft'}`}
+                        onClick={() => setSelectedId(on ? null : item.id)}
+                        aria-pressed={on}
+                        data-id={item.id}
+                        data-state={state}
+                      >
+                        <span className="h-2.5 w-2.5 shrink-0 rounded-[3px]" style={{ background: furnitureTone(item.category).dot }} aria-hidden="true" />
+                        <span className={`min-w-0 flex-1 truncate ${on ? 'font-semibold' : ''}`}>{item.name}</span>
+                        {state === 'error' && <span className="text-xs font-medium text-danger">문제</span>}
+                        {state === 'warning' && <span className="text-xs font-medium text-warn">경고</span>}
+                        {state === 'ok' && on && <span className="text-xs font-medium text-accent-strong">선택됨</span>}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {items.length > 0 && (
+              <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
+                {violations.length === 0 ? (
+                  <p className="flex items-center gap-2 rounded-[10px] bg-ok-soft px-3 py-2 text-[13px] text-ok">
+                    <Icon name="check" />
+                    배치에 문제가 없습니다.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-1.5 text-[13px]">
+                    {violations.map((v) => (
+                      <li
+                        key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`}
+                        className={`rounded-[10px] px-3 py-2 ${v.severity === 'error' ? 'bg-danger-tint text-danger' : 'bg-warn-tint text-warn'}`}
+                        data-type={v.type}
+                        data-severity={v.severity}
+                      >
+                        {v.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             )}
-            {mineMessage && (
-              <p className="text-amber-300" data-testid="user-furniture-message">
-                {mineMessage}
+            {items.length > 0 && !hasDoor && (
+              <p className="text-xs text-sub" data-testid="layout-door-hint">
+                문을 넣으면 문 앞과 통로(60cm)도 검사합니다.
+              </p>
+            )}
+            {full && <p className="text-xs text-sub">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
+            {restored.missing > 0 && (
+              <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="layout-missing">
+                저장된 가구 {restored.missing}개는 목록에서 사라져 불러오지 못했습니다.
               </p>
             )}
           </div>
-        )}
-        {!onCreateFurniture && loginHint && (
-          <p className={compact ? 'hidden' : 'opacity-80'} data-testid="user-furniture-login-hint">
-            로그인하면 치수를 넣어 내 가구를 만들 수 있습니다.
-          </p>
-        )}
-        {onSuggest && (
-          <div className={compact ? 'hidden' : 'space-y-1 border-t border-white/20 pt-2'} data-testid="ai-suggest" data-remaining={aiRemaining ?? ''} data-busy={aiBusy}>
-            <div className="flex items-center justify-between gap-1">
-              <span className="opacity-80">AI 배치 추천{aiRemaining !== null ? ` · 오늘 ${aiRemaining}회 남음` : ''}</span>
-              {!aiOpen && (
-                <button className="rounded bg-violet-600 px-2 py-0.5 disabled:opacity-40" disabled={aiHint !== null} onClick={() => setAiOpen(true)} data-testid="ai-open">
-                  AI 추천
-                </button>
+
+          {loginHint && (
+            <div className="flex flex-col gap-1.5 rounded-xl bg-ground p-3.5 text-[13px] text-body">
+              {!onCreateFurniture && <p data-testid="user-furniture-login-hint">로그인하면 치수를 넣어 내 가구를 만들 수 있습니다.</p>}
+              {!onSuggest && <p data-testid="ai-login-hint">로그인하면 AI에게 가구 배치를 추천받을 수 있습니다.</p>}
+              {!onSave && items.length > 0 && (
+                <p data-testid="layout-login-hint">
+                  <a className="font-semibold text-accent underline" href="/account">
+                    로그인
+                  </a>
+                  하면 배치를 저장할 수 있습니다. 지금은 새로고침하면 사라집니다.
+                </p>
               )}
             </div>
+          )}
+        </PanelBody>
+
+        {onSuggest && (
+          <PanelFooter tone="accent" data-testid="ai-suggest" data-remaining={aiRemaining ?? ''} data-busy={aiBusy}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2 font-bold text-accent-deep">
+                <AiBadge />
+                AI 배치 추천
+              </span>
+              {aiRemaining !== null && <span className="text-xs text-accent-strong">오늘 {aiRemaining}회 남음</span>}
+            </div>
             {aiHint && (
-              <p className="opacity-80" data-testid="ai-hint">
+              <p className="text-[13px] text-[#1a2140]" data-testid="ai-hint">
                 {aiHint}
               </p>
             )}
-            {aiOpen && !aiHint && (
-              <div className="space-y-1" data-testid="ai-form">
+            {aiOpen && !aiHint ? (
+              <div className="flex flex-col gap-2" data-testid="ai-form">
                 <textarea
-                  className="h-14 w-full resize-none rounded bg-white/10 px-2 py-1"
+                  className="field h-[68px] resize-none rounded-[10px] border-accent-line px-3 py-2 text-sm"
                   placeholder="바라는 점이 있으면 적어 주세요 (예: 책상은 창가에). 비워 두어도 됩니다"
+                  aria-label="바라는 점"
                   maxLength={MAX_REQUEST_LENGTH}
                   value={aiRequest}
                   disabled={aiBusy}
                   onChange={(e) => setAiRequest(e.target.value)}
                   data-testid="ai-request"
                 />
-                <p className="opacity-70">지금 놓인 가구 {items.length}개를 AI가 다시 배치합니다. 결과는 &ldquo;AI 배치&rdquo;로 따로 저장되고, 지금 배치는 그대로 남습니다.</p>
-                <div className="flex gap-1">
-                  <button className="rounded bg-violet-600 px-2 py-1 disabled:opacity-50" disabled={aiBusy} onClick={suggest} data-testid="ai-run">
+                <p className="text-xs text-[#1a2140]">지금 놓인 가구 {items.length}개를 AI가 다시 배치합니다. 결과는 &ldquo;AI 배치&rdquo;로 따로 저장되고, 지금 배치는 그대로 남습니다.</p>
+                <div className="flex gap-2">
+                  <button className="btn btn-primary h-11 flex-1 text-sm" disabled={aiBusy} onClick={suggest} data-testid="ai-run">
                     {aiBusy ? 'AI가 배치하는 중… (5~30초)' : '추천받기'}
                   </button>
                   {!aiBusy && (
-                    <button className="rounded bg-white/20 px-2 py-1" onClick={() => setAiOpen(false)}>
+                    <button className="btn h-11 bg-surface px-4 text-sm hover:bg-soft" onClick={() => setAiOpen(false)}>
                       닫기
                     </button>
                   )}
                 </div>
               </div>
+            ) : (
+              <button className="btn btn-primary h-11 text-sm" disabled={aiHint !== null} onClick={() => setAiOpen(true)} data-testid="ai-open">
+                AI 추천
+              </button>
             )}
             {aiMessage && (
-              <p className="text-amber-300" data-testid="ai-message">
+              <p className="rounded-[10px] bg-surface px-3 py-2 text-[13px] text-danger" data-testid="ai-message">
                 {aiMessage}
               </p>
             )}
-          </div>
+          </PanelFooter>
         )}
-        {!onSuggest && loginHint && (
-          <p className={compact ? 'hidden' : 'opacity-80'} data-testid="ai-login-hint">
-            로그인하면 AI에게 가구 배치를 추천받을 수 있습니다.
-          </p>
-        )}
-        {aiResult ? (
-          <div className={compact ? 'hidden' : 'space-y-1 rounded bg-violet-950/70 p-2'} data-testid="ai-result" data-layout-id={aiResult.layoutId}>
-            <p className="font-semibold">AI 추천 결과</p>
-            {aiResult.summary && <p data-testid="ai-result-summary">{aiResult.summary}</p>}
-            {aiResult.reasons.length > 0 && (
-              <ul className="list-disc space-y-0.5 pl-4" data-testid="ai-result-reasons">
-                {aiResult.reasons.map((r) => (
-                  <li key={r.itemId}>
-                    <button className="underline decoration-dotted" onClick={() => setSelectedId(r.itemId)}>
-                      {r.name}
-                    </button>
-                    : {r.reason}
-                  </li>
-                ))}
-              </ul>
-            )}
-            {aiResult.failures.length > 0 && (
-              <ul className="space-y-0.5 text-red-300" data-testid="ai-result-failures">
-                {aiResult.failures.map((f) => (
-                  <li key={f.itemId}>놓지 못함 — {f.message}</li>
-                ))}
-              </ul>
-            )}
-            {aiResult.unmet.length > 0 && (
-              <ul className="space-y-0.5 text-amber-300" data-testid="ai-result-unmet">
-                {aiResult.unmet.map((u, index) => (
-                  <li key={`${u.itemId}|${index}`}>{u.message}</li>
-                ))}
-              </ul>
-            )}
-            <p className="opacity-70">가구를 끌어서 고칠 수 있습니다. AI의 추천은 참고용입니다.</p>
-          </div>
-        ) : (
-          aiSummary && (
-            <div className={compact ? 'hidden' : 'rounded bg-violet-950/70 p-2'} data-testid="ai-saved-summary">
-              <p className="font-semibold">AI가 추천한 배치</p>
-              <p className="whitespace-pre-line">{aiSummary}</p>
-            </div>
-          )
-        )}
-        {selected ? (
-          <div className="space-y-1">
-            <div className="font-mono">
-              <div>{selected.name}</div>
-              <div>
-                {(selected.w * 100).toFixed(0)} × {(selected.d * 100).toFixed(0)} × {(selected.h * 100).toFixed(0)} cm
-              </div>
-              <div>
-                위치 x {selected.x.toFixed(2)}, z {selected.z.toFixed(2)} · {selected.rotationDeg}°
-              </div>
-            </div>
-            <div className="flex gap-1">
-              <button className="rounded bg-white/20 px-2 py-1" onClick={rotate}>
-                90° 회전
-              </button>
-              <button className="rounded bg-white/20 px-2 py-1" onClick={remove}>
-                삭제
-              </button>
-            </div>
-          </div>
-        ) : (
-          <p className={compact ? 'hidden' : 'opacity-80'}>가구를 추가한 뒤 끌어서 옮기세요. 평면도에서도 끌 수 있습니다. 5cm 단위로 움직이고 벽 가까이에서는 벽에 붙습니다.</p>
-        )}
-        {items.length > 0 && (
-          <div data-testid="layout-violations" data-count={violations.length} data-errors={errorCount} data-warnings={violations.length - errorCount}>
-            {violations.length === 0 ? (
-              <p className="text-emerald-300">배치에 문제가 없습니다.</p>
-            ) : (
-              <ul className="space-y-0.5">
-                {violations.map((v) => (
-                  <li key={`${v.itemId}|${v.type}|${v.otherId ?? ''}`} className={v.severity === 'error' ? 'text-red-300' : 'text-amber-300'} data-type={v.type}>
-                    {v.message}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {items.length > 0 && !hasDoor && (
-          <p className="opacity-80" data-testid="layout-door-hint">
-            문을 넣으면 문 앞과 통로(60cm)도 검사합니다.
-          </p>
-        )}
-        {full && <p className="opacity-80">가구는 {MAX_LAYOUT_ITEMS}개까지 놓을 수 있습니다.</p>}
-        {restored.missing > 0 && (
-          <p className="text-amber-300" data-testid="layout-missing">
-            저장된 가구 {restored.missing}개는 목록에서 사라져 불러오지 못했습니다.
-          </p>
-        )}
-        {onSave && (items.length > 0 || savedItems.length > 0) && (
-          <div className="flex items-center justify-between gap-2 border-t border-white/20 pt-2">
-            <span data-testid="layout-save-state" data-state={saveState}>
-              {saveState === 'saved' && '배치 저장됨'}
-              {saveState === 'dirty' && '저장 안 됨'}
-              {saveState === 'saving' && '저장하는 중…'}
-              {saveState === 'error' && '저장하지 못했습니다'}
-            </span>
-            {saveState !== 'saved' && (
-              <button
-                className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50"
-                data-testid="layout-save"
-                disabled={saveState === 'saving'}
-                onClick={() => void save()}
-              >
-                {saveState === 'error' ? '다시 저장' : '배치 저장'}
-              </button>
-            )}
-          </div>
-        )}
-        {!onSave && loginHint && items.length > 0 && (
-          <p className="border-t border-white/20 pt-2 opacity-80" data-testid="layout-login-hint">
-            <a className="underline" href="/account">
-              로그인
-            </a>
-            하면 배치를 저장할 수 있습니다. 지금은 새로고침하면 사라집니다.
-          </p>
-        )}
-      </div>
+      </ToolPanel>
     </>
   );
 }

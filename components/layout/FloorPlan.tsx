@@ -6,10 +6,13 @@ import { dragPlacement, gridLines, planViewBox, pointsAttr, wallLabels } from '@
 import type { PlacedItem } from '@/lib/layout/saved';
 import { openingSegment, type Opening } from '@/lib/rooms/openings';
 import { footprintCorners, type Point2 } from '@/lib/three/floorDrag';
+import { furnitureTone } from '@/lib/layout/furnitureLook';
 
 /** 이 거리(px)보다 적게 움직이면 끌기가 아니라 선택으로 본다 */
 const TAP_MOVE_PX = 4;
-const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
+const NO_KEYS: string[] = [];
+/** 이보다 짧은 벽에는 평면도에 번호를 적지 않는다 (m) */
+const MIN_LABELED_WALL = 0.45;
 
 type Drag = {
   id: string;
@@ -30,6 +33,7 @@ export default function FloorPlan({
   floorPolygon,
   items,
   openings,
+  aiOpeningKeys = NO_KEYS,
   badIds,
   warnIds,
   selectedId,
@@ -39,6 +43,8 @@ export default function FloorPlan({
   floorPolygon: Point2[];
   items: PlacedItem[];
   openings: Opening[];
+  /** AI가 찾아 아직 확인하지 않은 문·창문 (`벽 번호|시작`). 점선으로 그린다 */
+  aiOpeningKeys?: string[];
   /** 문제가 있는 가구 (빨강) */
   badIds: Set<string>;
   /** 경고만 있는 가구 (노랑) */
@@ -118,7 +124,7 @@ export default function FloorPlan({
       onPointerCancel={onUp}
     >
       {/* 1m 격자 */}
-      <g stroke="#ffffff" strokeOpacity={0.12} strokeWidth={1}>
+      <g stroke="#e4e8ef" strokeWidth={1}>
         {grid.xs.map((x) => (
           <line key={`x${x}`} x1={x} y1={viewBox.y} x2={x} y2={viewBox.y + viewBox.height} {...stroke} />
         ))}
@@ -130,40 +136,68 @@ export default function FloorPlan({
       {/* 방 바닥과 벽 */}
       <polygon
         points={pointsAttr(floorPolygon)}
-        fill="#f5f5f4"
-        fillOpacity={0.92}
-        stroke="#e7e5e4"
-        strokeWidth={4}
+        fill="#f7f8fb"
+        stroke="#141a2a"
+        strokeWidth={5}
         strokeLinejoin="round"
         {...stroke}
         data-testid="plan-room"
       />
-      {labels.map((label) => (
-        <text key={label.index} x={label.at[0]} y={label.at[1]} fontSize={0.16} fill="#d6d3d1" textAnchor="middle" dominantBaseline="central">
-          벽 {label.index + 1}
-        </text>
-      ))}
+      {/* 아주 짧은 벽(벽기둥의 옆면 등)은 번호가 서로 겹치므로 적지 않는다 */}
+      {labels
+        .filter((label) => {
+          const a = floorPolygon[label.index];
+          const b = floorPolygon[(label.index + 1) % floorPolygon.length];
+          return Math.hypot(b[0] - a[0], b[1] - a[1]) >= MIN_LABELED_WALL;
+        })
+        .map((label) => (
+          <text key={label.index} x={label.at[0]} y={label.at[1]} fontSize={0.16} fill="#6b7588" textAnchor="middle" dominantBaseline="central">
+            벽 {label.index + 1}
+          </text>
+        ))}
 
       {/* 문 앞 구역(점선)과 문·창문 */}
       {openings.map((opening) => {
         const segment = openingSegment(opening, floorPolygon);
         if (!segment) return null;
         const zone = opening.type === 'door' ? doorZone(opening, floorPolygon) : null;
-        const color = opening.type === 'door' ? '#ffa63d' : '#4cc9ff';
+        const color = opening.type === 'door' ? '#f08a24' : '#2ba3e0';
+        const fromAi = aiOpeningKeys.includes(`${opening.wallIndex}|${opening.from}`);
+        const middle: Point2 = [(segment[0][0] + segment[1][0]) / 2, (segment[0][1] + segment[1][1]) / 2];
         return (
-          <g key={`${opening.wallIndex}|${opening.from}`} data-testid="plan-opening" data-type={opening.type}>
+          <g key={`${opening.wallIndex}|${opening.from}`} data-testid="plan-opening" data-type={opening.type} data-ai={fromAi}>
             {zone && (
               <polygon
                 points={pointsAttr(footprintCorners(zone))}
-                fill="#ffa63d"
+                fill="#f08a24"
                 fillOpacity={0.12}
-                stroke="#ffa63d"
-                strokeWidth={1}
-                strokeDasharray="4 3"
+                stroke="#d9761a"
+                strokeWidth={1.5}
+                strokeDasharray="5 4"
                 {...stroke}
               />
             )}
-            <line x1={segment[0][0]} y1={segment[0][1]} x2={segment[1][0]} y2={segment[1][1]} stroke={color} strokeWidth={7} strokeLinecap="butt" {...stroke} />
+            {/* 벽을 끊어 보이게 바탕색을 먼저 깔고 그 위에 문·창문을 그린다 */}
+            <line x1={segment[0][0]} y1={segment[0][1]} x2={segment[1][0]} y2={segment[1][1]} stroke="#f7f8fb" strokeWidth={8} {...stroke} />
+            <line
+              x1={segment[0][0]}
+              y1={segment[0][1]}
+              x2={segment[1][0]}
+              y2={segment[1][1]}
+              stroke={color}
+              strokeWidth={7}
+              strokeLinecap="butt"
+              strokeDasharray={fromAi ? '7 4' : undefined}
+              {...stroke}
+            />
+            {fromAi && (
+              <g pointerEvents="none">
+                <circle cx={middle[0]} cy={middle[1]} r={0.14} fill="#3350e8" />
+                <text x={middle[0]} y={middle[1]} fontSize={0.13} fontWeight={600} fill="#ffffff" textAnchor="middle" dominantBaseline="central">
+                  AI
+                </text>
+              </g>
+            )}
           </g>
         );
       })}
@@ -174,14 +208,15 @@ export default function FloorPlan({
         const state = badIds.has(item.id) ? 'error' : warnIds.has(item.id) ? 'warning' : 'ok';
         const selected = item.id === selectedId;
         const corners = footprintCorners(shown);
+        const tone = furnitureTone(item.category);
         return (
           <g key={item.id}>
             <polygon
               points={pointsAttr(corners)}
-              fill={hex(item.color)}
-              fillOpacity={0.85}
-              stroke={state === 'error' ? '#ff3b30' : state === 'warning' ? '#ffc233' : selected ? '#1d4ed8' : '#44403c'}
-              strokeWidth={state !== 'ok' || selected ? 3 : 1.5}
+              fill={tone.fill}
+              stroke={state === 'error' ? '#d93a2e' : state === 'warning' ? '#d99a0b' : selected ? '#3350e8' : tone.stroke}
+              strokeWidth={state !== 'ok' || selected ? 3.5 : 2}
+              strokeLinejoin="round"
               className="cursor-grab"
               {...stroke}
               data-testid="plan-item"
@@ -196,14 +231,14 @@ export default function FloorPlan({
               y1={corners[3][1]}
               x2={corners[2][0]}
               y2={corners[2][1]}
-              stroke="#1c1917"
-              strokeOpacity={0.55}
-              strokeWidth={5}
+              stroke={tone.stroke}
+              strokeWidth={6}
+              strokeLinecap="round"
               pointerEvents="none"
               {...stroke}
               data-testid="plan-front"
             />
-            <text x={shown.x} y={shown.z} fontSize={0.15} fill="#1c1917" textAnchor="middle" dominantBaseline="central" pointerEvents="none">
+            <text x={shown.x} y={shown.z} fontSize={0.15} fontWeight={600} fill="#141a2a" textAnchor="middle" dominantBaseline="central" pointerEvents="none">
               {item.name}
             </text>
           </g>
