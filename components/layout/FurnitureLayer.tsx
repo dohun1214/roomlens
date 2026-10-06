@@ -489,7 +489,7 @@ export default function FurnitureLayer({
           </button>
         </div>
         {onSelectLayout && layouts.length > 0 && (
-          <div className="space-y-1" data-testid="layout-chooser" data-current={currentLayoutId ?? ''} data-count={layouts.length}>
+          <div className={compact ? 'hidden' : 'space-y-1'} data-testid="layout-chooser" data-current={currentLayoutId ?? ''} data-count={layouts.length}>
             <div className="flex items-center gap-1">
               <select
                 className="w-0 flex-1 rounded bg-white/10 px-1 py-1 disabled:opacity-50"
