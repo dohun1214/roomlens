@@ -4,7 +4,8 @@ import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
-import { loadMyLayout } from '@/lib/layout/store';
+import { remainingToday } from '@/lib/ai/usage';
+import { loadMyLayouts } from '@/lib/layout/store';
 import { loadUserFurniture } from '@/lib/layout/userFurniture';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { parseOpenings } from '@/lib/rooms/openings';
@@ -35,16 +36,18 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   // 파일을 아직 올리지 않은 방은 주인에게만 보인다 (지울 수 있게)
   if (!ready && !isOwner) notFound();
 
-  const [splatUrl, { data: owner }, { data: catalogRows }, myLayout, myFurniture] = await Promise.all([
+  const [splatUrl, { data: owner }, { data: catalogRows }, myLayouts, myFurniture, aiRemaining] = await Promise.all([
     ready && room.splat_key ? presignGet(room.splat_key) : null,
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
       .from('furniture_catalog')
       .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m, model_key')
       .order('sort_order'),
-    // 이 방에 내가 저장해 둔 가구 배치 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
-    ready && user ? loadMyLayout(supabase, room.id, user.id) : null,
+    // 이 방에 내가 저장해 둔 가구 배치들 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
+    ready && user ? loadMyLayouts(supabase, room.id, user.id) : undefined,
     ready && user ? loadUserFurniture(supabase, user.id) : undefined,
+    // 오늘 남은 AI 호출 횟수
+    ready && user ? remainingToday(user.id) : null,
   ]);
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   // 모델 파일도 비공개 버킷에 있어 가구마다 읽기 주소를 만든다 (서명은 서버 안에서 계산하므로 요청이 나가지 않는다)
@@ -83,7 +86,8 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             canEdit={isOwner}
             catalog={catalog}
             signedIn={Boolean(user)}
-            initialLayout={myLayout}
+            initialLayouts={myLayouts}
+            aiRemaining={aiRemaining}
             userFurniture={myFurniture}
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
           />

@@ -230,9 +230,11 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
   const windows = openings.filter((o) => o.type === 'window');
   const doorZones = doors.map((door) => doorZone(door, polygon)).filter((zone) => zone !== null);
   const windowZones = windows.map((w) => windowZone(w, polygon)).filter((zone) => zone !== null);
-  const windowCenters = windows.flatMap((w) => {
+  // 창문마다: 가운데 점과 "창밖을 보는 방향"(창문이 있는 벽의 바깥쪽)
+  const windowViews = windows.flatMap((w) => {
     const segment = openingSegment(w, polygon);
-    return segment ? [[(segment[0][0] + segment[1][0]) / 2, (segment[0][1] + segment[1][1]) / 2] as Point2] : [];
+    const frame = frames.find((f) => f.index === w.wallIndex);
+    return segment && frame ? [{ center: [(segment[0][0] + segment[1][0]) / 2, (segment[0][1] + segment[1][1]) / 2] as Point2, outward: neg(frame.n) }] : [];
   });
   const doorCenters = doors.flatMap((door) => {
     const segment = openingSegment(door, polygon);
@@ -372,10 +374,12 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
         if (item.category !== 'chair' && item.category !== 'table' && touchingWalls(c.pose, frames) >= 2) s += 0.5;
         const front = frontDirection(c.pose.rotationDeg);
         const here: Point2 = [c.pose.x, c.pose.z];
-        if (p.facing === 'toward_window' && windowCenters.length > 0) {
-          const nearest = windowCenters.reduce((best, w) => (Math.hypot(w[0] - here[0], w[1] - here[1]) < Math.hypot(best[0] - here[0], best[1] - here[1]) ? w : best));
-          const length = Math.hypot(nearest[0] - here[0], nearest[1] - here[1]) || 1;
-          s += dot(front, [(nearest[0] - here[0]) / length, (nearest[1] - here[1]) / length]);
+        if (p.facing === 'toward_window' && windowViews.length > 0) {
+          // 가장 가까운 창문의 창밖 방향과 가구의 앞이 얼마나 같은지. 방향만 보고 위치는 보지 않는다
+          // (가구에서 창문 가운데를 향한 방향으로 재면, 창문 아래의 가구가 창문 옆으로 밀려난다)
+          const distance = (w: (typeof windowViews)[number]) => Math.hypot(w.center[0] - here[0], w.center[1] - here[1]);
+          const nearest = windowViews.reduce((best, w) => (distance(w) < distance(best) ? w : best));
+          s += dot(front, nearest.outward);
         }
         if (ref) s -= Math.hypot(ref.x - here[0], ref.z - here[1]);
         // 문에서 조금 떨어진 자리를 살짝 선호한다 (드나드는 곳을 넓게)

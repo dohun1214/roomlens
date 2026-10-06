@@ -218,7 +218,10 @@ export default function RoomUploadForm() {
         <ul className="list-disc space-y-1 pl-5 text-neutral-600 dark:text-neutral-300">
           <li>수집하는 것: 올린 방 3D 파일과 방 사진 (직접 찍은 방은 집 안 모습이 담겨 개인정보로 다룹니다)</li>
           <li>쓰는 곳: 3D로 보여주기, 가구 배치, AI 방 분석</li>
-          <li>AI 분석을 요청하면 사진이 Google Gemini API로 전송됩니다. 학습에 쓰이지 않는 유료 API를 씁니다</li>
+          <li>
+            AI 방 분석을 요청하면 방 사진 또는 3D 화면을 캡처한 그림이, AI 배치 추천을 요청하면 방의 치수·문과 창문의 위치·가구 목록·적은 요청 글이 Google Gemini API로
+            전송됩니다. 학습에 쓰이지 않는 유료 API를 씁니다
+          </li>
           <li>보관 기간: 방을 지울 때까지. 방을 지우면 파일도 함께 지웁니다</li>
           <li>공개로 바꾸기 전에는 나만 볼 수 있습니다</li>
         </ul>
