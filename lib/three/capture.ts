@@ -35,6 +35,9 @@ function wait(ms: number): Promise<void> {
   });
 }
 
+/** 캡처한 JPEG의 base64가 이보다 짧으면 "거의 빈 그림"으로 본다 (한 가지 색뿐인 1024px 그림이 약 4~8KB) */
+const BLANK_BASE64 = 12_000;
+
 /** canvas를 긴 변 longSide 이하의 JPEG로 줄여 base64(머리말 없이)로 돌려준다 */
 export function canvasToJpegBase64(source: HTMLCanvasElement | ImageBitmap, longSide: number, quality: number): string {
   const scale = Math.min(1, longSide / Math.max(source.width, source.height));
@@ -70,14 +73,26 @@ export async function captureViews(
       controls.update();
       // 스플랫의 세밀도·정렬은 그릴 때마다 조금씩 맞춰지므로, 기다리는 동안 몇 번 그린다
       // (탭이 뒤에 있어 화면 갱신이 멈춘 경우에도 캡처되게 직접 그린다)
-      const rounds = Math.max(1, Math.round((options.settleMs ?? 900) / 150));
-      for (let round = 0; round < rounds; round += 1) {
+      const settle = async (rounds: number) => {
+        for (let round = 0; round < rounds; round += 1) {
+          renderer.render(scene, camera);
+          await wait(150);
+        }
+      };
+      const grab = () => {
+        // 그린 직후 같은 흐름에서 읽어야 내용이 남아 있다
         renderer.render(scene, camera);
-        await wait(150);
+        return canvasToJpegBase64(renderer.domElement, options.longSide, options.quality ?? 0.78);
+      };
+      await settle(Math.max(1, Math.round((options.settleMs ?? 900) / 150)));
+      let image = grab();
+      // 거의 빈 그림이면 스플랫이 아직 그려지지 않은 것이다 (탭이 뒤에 있다가 처음 그릴 때 몇 초 걸린다).
+      // 조금 더 기다렸다가 다시 찍는다. 첫 장은 최대 6초, 그다음부터는 1.2초까지
+      for (let retry = 0; retry < (i === 0 ? 20 : 4) && image.length < BLANK_BASE64; retry += 1) {
+        await settle(2);
+        image = grab();
       }
-      // 그린 직후 같은 흐름에서 읽어야 내용이 남아 있다
-      renderer.render(scene, camera);
-      images.push(canvasToJpegBase64(renderer.domElement, options.longSide, options.quality ?? 0.78));
+      images.push(image);
       options.onProgress?.(i + 1, views.length);
     }
   } finally {
