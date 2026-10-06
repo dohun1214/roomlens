@@ -17,7 +17,7 @@ export default function LogoutButton() {
   };
 
   return (
-    <button className="text-neutral-500 hover:underline disabled:opacity-50" onClick={logout} disabled={busy}>
+    <button className="flex h-10 items-center rounded-full px-3 text-sm text-sub hover:bg-surface hover:text-ink disabled:opacity-50" onClick={logout} disabled={busy}>
       로그아웃
     </button>
   );
