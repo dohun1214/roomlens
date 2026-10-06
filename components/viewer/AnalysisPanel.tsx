@@ -108,7 +108,7 @@ export default function AnalysisPanel({
   return (
     <>
       <button
-        className="absolute bottom-3 left-44 rounded bg-black/75 px-3 py-2 text-xs text-white"
+        className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-black/75 px-3 py-2 text-xs text-white"
         onClick={() => setOpen((prev) => !prev)}
         data-testid="analysis-toggle"
         aria-pressed={open}
@@ -117,7 +117,7 @@ export default function AnalysisPanel({
       </button>
       {open && (
         <div
-          className="absolute bottom-14 left-2 max-h-[60%] w-80 max-w-[calc(100%-1rem)] space-y-2 overflow-y-auto rounded bg-black/85 p-3 text-xs text-white"
+          className="absolute bottom-14 left-1/2 max-h-[60%] w-80 max-w-[calc(100%-1rem)] -translate-x-1/2 space-y-2 overflow-y-auto rounded bg-black/85 p-3 text-xs text-white"
           data-testid="analysis-panel"
           data-phase={phase.kind}
         >
