@@ -165,6 +165,14 @@ describe('배치 솔버: 구역', () => {
     expect(result.unmet).toEqual([]);
   });
 
+  it('창문 아래 + 창문을 보게: 창문 가운데에서 밀려나지 않는다', () => {
+    const result = solveLayout(ROOM, [DESK], [place('desk', 'under_window', { wallId: 'W3', facing: 'toward_window' })]);
+    const desk = find(result, 'desk');
+    expect(desk.x).toBeCloseTo(0, 2);
+    expect(desk.z).toBeCloseTo(1.7, 2);
+    expect(desk.rotationDeg).toBe(180);
+  });
+
   it('창문을 보게: 가구의 앞이 창문 쪽을 향한다', () => {
     const result = solveLayout(ROOM, [CHAIR], [place('chair', 'center', { facing: 'toward_window' })]);
     // CHAIR는 앞뒤 구분 없이 0°·90°만 시도한다 → 창문(+z)을 보는 0°
