@@ -10,7 +10,7 @@ import {
   toSavedItems,
   type SavedItem,
 } from '@/lib/layout/saved';
-import { loadMyLayout, saveMyLayout } from '@/lib/layout/store';
+import { deleteMyLayout, fromLayoutRow, loadMyLayouts, saveMyLayout } from '@/lib/layout/store';
 
 const desk = DEFAULT_CATALOG.find((c) => c.id === 'desk')!;
 const saved = (over: Partial<SavedItem> = {}): SavedItem => ({
@@ -116,22 +116,31 @@ describe('nextItemNumber · sameSavedItems', () => {
 function fakeClient(results: { data: unknown; error: unknown }[]) {
   const calls: { method: string; args: unknown[] }[] = [];
   const builder: Record<string, unknown> = {};
-  for (const method of ['from', 'select', 'insert', 'update', 'eq', 'order', 'limit']) {
+  for (const method of ['from', 'select', 'insert', 'update', 'delete', 'eq', 'order', 'limit']) {
     builder[method] = vi.fn((...args: unknown[]) => {
       calls.push({ method, args });
       return builder;
     });
   }
-  builder.maybeSingle = vi.fn(async () => results.shift() ?? { data: null, error: null });
+  const next = () => results.shift() ?? { data: null, error: null };
+  builder.maybeSingle = vi.fn(async () => next());
+  // 여러 줄을 읽을 때는 maybeSingle 없이 바로 await 한다
+  builder.then = (resolve: (value: unknown) => void) => resolve(next());
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return { client: builder as any, calls };
 }
 const callsOf = (calls: { method: string; args: unknown[] }[], method: string) => calls.filter((c) => c.method === method).map((c) => c.args);
 
-describe('loadMyLayout', () => {
-  it('내 배치를 최근 것부터 하나 읽고 items를 검증한다', async () => {
-    const { client, calls } = fakeClient([{ data: { id: 'L1', items: [saved(), { bad: true }] }, error: null }]);
-    expect(await loadMyLayout(client, 'room-1', 'user-1')).toEqual({ id: 'L1', items: [saved()] });
+describe('loadMyLayouts', () => {
+  const aiRow = { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], created_by: 'ai', ai_summary: '창가에 책상을 둡니다.' };
+  const myRow = { id: 'L1', name: '내 배치', items: [saved(), { bad: true }], created_by: 'user', ai_summary: '쓰지 않는 글' };
+
+  it('내 배치들을 마지막으로 고친 것부터 읽고 items를 검증한다', async () => {
+    const { client, calls } = fakeClient([{ data: [aiRow, myRow], error: null }]);
+    expect(await loadMyLayouts(client, 'room-1', 'user-1')).toEqual([
+      { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], createdBy: 'ai', aiSummary: '창가에 책상을 둡니다.' },
+      { id: 'L1', name: '내 배치', items: [saved()], createdBy: 'user', aiSummary: null },
+    ]);
     expect(callsOf(calls, 'eq')).toEqual([
       ['room_id', 'room-1'],
       ['owner_id', 'user-1'],
@@ -139,9 +148,23 @@ describe('loadMyLayout', () => {
     expect(callsOf(calls, 'order')).toEqual([['updated_at', { ascending: false }]]);
   });
 
-  it('없으면 null', async () => {
-    const { client } = fakeClient([{ data: null, error: null }]);
-    expect(await loadMyLayout(client, 'room-1', 'user-1')).toBeNull();
+  it('없거나 읽지 못하면 빈 목록', async () => {
+    expect(await loadMyLayouts(fakeClient([{ data: [], error: null }]).client, 'room-1', 'user-1')).toEqual([]);
+    expect(await loadMyLayouts(fakeClient([{ data: null, error: { message: 'x' } }]).client, 'room-1', 'user-1')).toEqual([]);
+  });
+
+  it('모르는 created_by 값은 직접 만든 배치로 본다', () => {
+    expect(fromLayoutRow({ id: 'L3', name: '이름', items: 'not-array', created_by: 'robot', ai_summary: null })).toEqual({ id: 'L3', name: '이름', items: [], createdBy: 'user', aiSummary: null });
+  });
+});
+
+describe('deleteMyLayout', () => {
+  it('지웠으면 true, 지울 것이 없거나 실패하면 false', async () => {
+    const done = fakeClient([{ data: { id: 'L1' }, error: null }]);
+    expect(await deleteMyLayout(done.client, 'L1')).toBe(true);
+    expect(callsOf(done.calls, 'eq')).toEqual([['id', 'L1']]);
+    expect(await deleteMyLayout(fakeClient([{ data: null, error: null }]).client, 'L1')).toBe(false);
+    expect(await deleteMyLayout(fakeClient([{ data: null, error: { message: 'x' } }]).client, 'L1')).toBe(false);
   });
 });
 
