@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import { CreateRoomInput, firstIssueMessage, ROOM_CREDIT_MAX, ROOM_DESCRIPTION_MAX, ROOM_TITLE_MAX, type RoomSource } from '@/lib/rooms/schemas';
 import { checkSplatFile, type SplatFormat } from '@/lib/upload/splatFile';
+import Icon from '@/components/ui/Icon';
 import { readFileHead, STAGE_LABEL, uploadRoom, UploadError, type UploadStage } from '@/lib/upload/uploadRoom';
 
 type Picked = { file: File; format: SplatFormat };
@@ -104,14 +105,19 @@ export default function RoomUploadForm() {
 
   if (done) {
     return (
-      <section className="space-y-3 rounded border border-neutral-300 p-4 text-sm dark:border-neutral-700" data-testid="upload-done" data-room-id={done.roomId}>
-        <p className="font-semibold">방을 만들었습니다.</p>
-        <p className="text-neutral-500">지금은 나만 볼 수 있습니다.</p>
-        <div className="flex gap-3">
-            <Link href={`/rooms/${done.roomId}`} className="rounded bg-neutral-900 px-3 py-2 text-white dark:bg-white dark:text-neutral-900" data-testid="upload-view">
-              3D로 보기
-            </Link>
-          <button type="button" onClick={reset} className="rounded border border-neutral-300 px-3 py-2 dark:border-neutral-700">
+      <section className="flex flex-col items-start gap-4" data-testid="upload-done" data-room-id={done.roomId}>
+        <span className="flex h-12 w-12 items-center justify-center rounded-full bg-ok-soft text-ok">
+          <Icon name="check" size={20} />
+        </span>
+        <div className="space-y-1">
+          <p className="text-xl font-bold">방을 만들었습니다.</p>
+          <p className="text-sub">지금은 나만 볼 수 있습니다.</p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Link href={`/rooms/${done.roomId}`} className="btn btn-primary h-[52px] rounded-[14px] px-6 text-base shadow-accent" data-testid="upload-view">
+            3D로 보기
+          </Link>
+          <button type="button" onClick={reset} className="btn btn-soft h-[52px] rounded-[14px] px-5 text-base">
             방 하나 더 만들기
           </button>
         </div>
@@ -119,57 +125,93 @@ export default function RoomUploadForm() {
     );
   }
 
-  const inputClass = 'w-full rounded border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700';
   const percent = Math.round(progress * 100);
+  const labelClass = 'flex flex-col gap-2 text-sm font-bold';
+  const sourceCard = (active: boolean) =>
+    `flex cursor-pointer items-center gap-3.5 rounded-2xl ${active ? 'border-2 border-accent bg-[#f5f7ff] p-[15px]' : 'border border-line-strong bg-surface p-4'}`;
 
   return (
-    <form onSubmit={submit} className="space-y-5" noValidate data-testid="room-form">
-      <label className="block space-y-1 text-sm">
-        <span>방 이름</span>
-        <input
-          className={inputClass}
-          name="title"
-          value={title}
-          maxLength={ROOM_TITLE_MAX}
-          onChange={(e) => {
-            setTitle(e.target.value);
-            setError(null);
-          }}
-          disabled={busy}
-          placeholder="예: 학교 앞 원룸"
-          data-testid="room-title"
-        />
-      </label>
-
-      <label className="block space-y-1 text-sm">
-        <span>설명 (선택)</span>
-        <textarea
-          className={inputClass}
-          name="description"
-          rows={3}
-          value={description}
-          maxLength={ROOM_DESCRIPTION_MAX}
-          onChange={(e) => setDescription(e.target.value)}
-          disabled={busy}
-          data-testid="room-description"
-        />
-      </label>
-
-      <fieldset className="space-y-2 text-sm">
-        <legend className="mb-1">어떤 방인가요?</legend>
-        <label className="flex items-center gap-2">
-          <input type="radio" name="source" checked={source === 'scaniverse'} onChange={() => setSource('scaniverse')} disabled={busy} data-testid="room-source-own" />
-          <span>직접 찍은 방</span>
+    <form onSubmit={submit} className="flex flex-col gap-[30px]" noValidate data-testid="room-form">
+      <div className="flex flex-col gap-[18px]">
+        <label className={labelClass}>
+          <span>방 이름</span>
+          <input
+            className="field h-[50px] text-[15px] font-normal"
+            name="title"
+            value={title}
+            maxLength={ROOM_TITLE_MAX}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              setError(null);
+            }}
+            disabled={busy}
+            placeholder="예: 학교 앞 원룸"
+            data-testid="room-title"
+          />
         </label>
-        <label className="flex items-center gap-2">
-          <input type="radio" name="source" checked={source === 'dataset'} onChange={() => setSource('dataset')} disabled={busy} data-testid="room-source-dataset" />
-          <span>공개 데이터셋 등 다른 사람이 만든 3D</span>
+
+        <label className={labelClass}>
+          <span>
+            설명 <span className="font-normal text-sub">(선택)</span>
+          </span>
+          <textarea
+            className="field py-3 text-[15px] leading-normal font-normal"
+            name="description"
+            rows={2}
+            value={description}
+            maxLength={ROOM_DESCRIPTION_MAX}
+            onChange={(e) => setDescription(e.target.value)}
+            disabled={busy}
+            data-testid="room-description"
+          />
         </label>
+      </div>
+
+      <fieldset className="flex flex-col gap-3">
+        <legend className="mb-2.5 text-sm font-bold">어떤 방인가요?</legend>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className={sourceCard(source === 'scaniverse')}>
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] ${source === 'scaniverse' ? 'bg-[#dfe5ff] text-accent-strong' : 'bg-soft text-body'}`}>
+              <Icon name="phone" />
+            </span>
+            <span className="flex flex-1 flex-col">
+              <span className="font-bold">직접 찍은 방</span>
+              <span className="text-[13px] text-body">Scaniverse 등으로 내가 찍은 방</span>
+            </span>
+            <input
+              type="radio"
+              name="source"
+              className="h-5 w-5 accent-accent"
+              checked={source === 'scaniverse'}
+              onChange={() => setSource('scaniverse')}
+              disabled={busy}
+              data-testid="room-source-own"
+            />
+          </label>
+          <label className={sourceCard(source === 'dataset')}>
+            <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] ${source === 'dataset' ? 'bg-[#dfe5ff] text-accent-strong' : 'bg-soft text-body'}`}>
+              <Icon name="cube" />
+            </span>
+            <span className="flex flex-1 flex-col">
+              <span className="font-bold">다른 사람이 만든 3D</span>
+              <span className="text-[13px] text-body">공개 데이터셋 등. 출처와 라이선스 필요</span>
+            </span>
+            <input
+              type="radio"
+              name="source"
+              className="h-5 w-5 accent-accent"
+              checked={source === 'dataset'}
+              onChange={() => setSource('dataset')}
+              disabled={busy}
+              data-testid="room-source-dataset"
+            />
+          </label>
+        </div>
         {source === 'dataset' && (
-          <label className="block space-y-1">
+          <label className={labelClass}>
             <span>출처와 라이선스</span>
             <input
-              className={inputClass}
+              className="field h-[50px] text-[15px] font-normal"
               name="credit"
               value={credit}
               maxLength={ROOM_CREDIT_MAX}
@@ -181,55 +223,88 @@ export default function RoomUploadForm() {
               placeholder="예: Studio 11 by milanoski (SuperSplat), CC BY 4.0"
               data-testid="room-credit-input"
             />
-            <span className="block text-xs text-neutral-500">
+            <span className="text-xs font-normal text-sub">
               방 화면에 그대로 표시됩니다. 공개하려면 다시 배포해도 되는 라이선스(CC BY 등)인지 먼저 확인하세요.
             </span>
           </label>
         )}
       </fieldset>
 
-      <div className="space-y-1 text-sm">
-        <label className="block space-y-1">
-          <span>3D 파일 (.spz, .ply · 100MB 이하)</span>
+      <div className="flex flex-col gap-2 text-sm">
+        <span className="font-bold" id="room-file-label">
+          3D 파일
+        </span>
+        <label
+          className={`flex cursor-pointer flex-col items-center gap-2.5 rounded-[18px] border-2 border-dashed px-4 py-9 text-center has-focus-visible:outline-2 has-focus-visible:outline-accent ${
+            picked ? 'border-accent bg-[#f5f7ff]' : 'border-accent-line bg-accent-tint'
+          } ${busy ? 'cursor-not-allowed opacity-60' : ''}`}
+        >
+          <span className="flex h-[52px] w-[52px] items-center justify-center rounded-full bg-surface text-accent shadow-[0_2px_8px_rgb(51_80_232/0.16)]">
+            <Icon name={picked ? 'check' : 'upload'} size={24} />
+          </span>
+          {picked ? (
+            <>
+              <span className="text-base font-bold break-all" data-testid="room-file-info">
+                {picked.file.name} · {picked.format.toUpperCase()} · {megabytes(picked.file.size)}
+              </span>
+              <span className="text-[13px] text-sub">다른 파일로 바꾸려면 눌러서 다시 고르세요</span>
+            </>
+          ) : (
+            <>
+              <span className="text-base font-bold">눌러서 3D 파일 고르기</span>
+              <span className="font-mono text-[13px] text-sub">.spz · .ply · 100MB 이하</span>
+            </>
+          )}
           <input
-            className="block w-full text-sm"
+            className="sr-only"
             type="file"
             name="file"
             accept=".spz,.ply,.sog,.rad"
             onChange={onFile}
             disabled={busy}
+            aria-labelledby="room-file-label"
             data-testid="room-file"
           />
         </label>
-        {picked && (
-          <p className="text-neutral-500" data-testid="room-file-info">
-            {picked.file.name} · {picked.format.toUpperCase()} · {megabytes(picked.file.size)}
-          </p>
-        )}
         {fileError && (
-          <p className="text-red-600" role="alert" data-testid="room-file-error">
+          <p className="rounded-xl bg-danger-soft px-4 py-3 text-danger" role="alert" data-testid="room-file-error">
             {fileError}
           </p>
         )}
       </div>
 
-      <fieldset className="space-y-2 rounded border border-neutral-300 p-3 text-sm dark:border-neutral-700">
-        <legend className="px-1 font-semibold">개인정보 수집·이용 동의</legend>
-        <ul className="list-disc space-y-1 pl-5 text-neutral-600 dark:text-neutral-300">
-          <li>수집하는 것: 올린 방 3D 파일과 방 사진 (직접 찍은 방은 집 안 모습이 담겨 개인정보로 다룹니다)</li>
-          <li>쓰는 곳: 3D로 보여주기, 가구 배치, AI 방 분석</li>
-          <li>
-            AI 방 분석을 요청하면 방 사진 또는 3D 화면을 캡처한 그림이, AI 배치 추천을 요청하면 방의 치수·문과 창문의 위치·가구 목록·적은 요청 글이 Google Gemini API로
-            전송됩니다. 학습에 쓰이지 않는 유료 API를 씁니다
-          </li>
-          <li>보관 기간: 방을 지울 때까지. 방을 지우면 파일도 함께 지웁니다</li>
-          <li>공개로 바꾸기 전에는 나만 볼 수 있습니다</li>
-        </ul>
-        <label className="flex items-start gap-2">
+      <fieldset className="flex flex-col gap-3.5 rounded-[18px] bg-ground p-[22px] text-sm">
+        <legend className="float-left mb-3.5 w-full text-[15px] font-bold">개인정보 수집·이용 동의</legend>
+        <dl className="clear-both flex flex-col gap-2.5">
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <dt className="w-24 shrink-0 font-semibold text-body">수집하는 것</dt>
+            <dd className="min-w-[240px] flex-1 text-ink-2">올린 방 3D 파일과 방 사진 (직접 찍은 방은 집 안 모습이 담겨 개인정보로 다룹니다)</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <dt className="w-24 shrink-0 font-semibold text-body">쓰는 곳</dt>
+            <dd className="min-w-[240px] flex-1 text-ink-2">3D로 보여주기, 가구 배치, AI 방 분석</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <dt className="w-24 shrink-0 font-semibold text-body">AI로 보내는 것</dt>
+            <dd className="min-w-[240px] flex-1 text-ink-2">
+              AI 방 분석을 요청하면 방 사진 또는 3D 화면을 캡처한 그림이, AI 배치 추천을 요청하면 방의 치수·문과 창문의 위치·가구 목록·적은 요청 글이 Google Gemini API로
+              전송됩니다. 학습에 쓰이지 않는 유료 API를 씁니다
+            </dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <dt className="w-24 shrink-0 font-semibold text-body">보관 기간</dt>
+            <dd className="min-w-[240px] flex-1 text-ink-2">방을 지울 때까지. 방을 지우면 파일도 함께 지웁니다</dd>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <dt className="w-24 shrink-0 font-semibold text-body">공개 범위</dt>
+            <dd className="min-w-[240px] flex-1 text-ink-2">공개로 바꾸기 전에는 나만 볼 수 있습니다</dd>
+          </div>
+        </dl>
+        <label className="flex min-h-12 cursor-pointer items-center gap-3 rounded-xl bg-surface px-4 font-semibold">
           <input
             type="checkbox"
             name="consent"
-            className="mt-1"
+            className="h-5 w-5 accent-accent"
             checked={consent}
             onChange={(e) => {
               setConsent(e.target.checked);
@@ -243,37 +318,27 @@ export default function RoomUploadForm() {
       </fieldset>
 
       {stage && (
-        <div className="space-y-1 text-sm" data-testid="upload-progress" data-stage={stage} data-percent={percent}>
-          <p data-testid="upload-status">
+        <div className="flex flex-col gap-2 rounded-2xl bg-accent-soft p-4 text-sm" data-testid="upload-progress" data-stage={stage} data-percent={percent}>
+          <p className="font-semibold text-accent-deep" data-testid="upload-status">
             {STAGE_LABEL[stage]}
             {stage === 'uploading' ? ` ${percent}%` : ''}
           </p>
-          <progress className="w-full" max={100} value={stage === 'uploading' ? percent : stage === 'verifying' ? 100 : 0} />
+          <progress className="h-2 w-full accent-accent" max={100} value={stage === 'uploading' ? percent : stage === 'verifying' ? 100 : 0} />
         </div>
       )}
 
       {error && (
-        <p className="text-sm text-red-600" role="alert" data-testid="upload-error">
+        <p className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger" role="alert" data-testid="upload-error">
           {error}
         </p>
       )}
 
-      <div className="flex gap-3">
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
-          data-testid="room-submit"
-        >
+      <div className="flex flex-wrap gap-3">
+        <button type="submit" disabled={busy} className="btn btn-primary h-[52px] rounded-[14px] px-8 text-base shadow-accent" data-testid="room-submit">
           {busy ? '올리는 중…' : error && pendingRoomId ? '다시 시도' : '방 만들기'}
         </button>
         {busy && (
-          <button
-            type="button"
-            onClick={() => abort.current?.abort()}
-            className="rounded border border-neutral-300 px-4 py-2 text-sm dark:border-neutral-700"
-            data-testid="upload-cancel"
-          >
+          <button type="button" onClick={() => abort.current?.abort()} className="btn btn-soft h-[52px] rounded-[14px] px-5 text-[15px]" data-testid="upload-cancel">
             취소
           </button>
         )}
