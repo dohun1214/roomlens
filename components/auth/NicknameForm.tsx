@@ -30,27 +30,17 @@ export default function NicknameForm({ userId, initial }: { userId: string; init
   };
 
   return (
-    <form onSubmit={submit} className="space-y-2" noValidate>
-      <label className="block space-y-1 text-sm">
+    <form onSubmit={submit} className="flex flex-col gap-3" noValidate>
+      <label className="flex flex-col gap-2 text-sm font-bold">
         <span>닉네임</span>
-        <input
-          className="w-full rounded border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700"
-          name="nickname"
-          value={nickname}
-          maxLength={NICKNAME_MAX_LENGTH}
-          onChange={(e) => setNickname(e.target.value)}
-        />
+        <input className="field h-[50px] text-[15px] font-normal" name="nickname" value={nickname} maxLength={NICKNAME_MAX_LENGTH} onChange={(e) => setNickname(e.target.value)} />
       </label>
       <div className="flex items-center gap-3">
-        <button
-          type="submit"
-          disabled={busy || nickname.trim() === initial}
-          className="rounded bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
-        >
+        <button type="submit" disabled={busy || nickname.trim() === initial} className="btn btn-primary h-11 px-5 text-sm">
           저장
         </button>
         {message && (
-          <span className={`text-sm ${message.ok ? 'text-emerald-600' : 'text-red-600'}`} role="status">
+          <span className={`text-sm ${message.ok ? 'text-ok' : 'text-danger'}`} role="status">
             {message.text}
           </span>
         )}

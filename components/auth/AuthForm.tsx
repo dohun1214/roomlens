@@ -69,9 +69,7 @@ export default function AuthForm({ next }: { next: string }) {
       type="button"
       role="tab"
       aria-selected={mode === value}
-      className={`flex-1 border-b-2 py-2 text-sm ${
-        mode === value ? 'border-neutral-900 font-semibold dark:border-white' : 'border-transparent text-neutral-500'
-      }`}
+      className={`h-11 rounded-[10px] text-[15px] ${mode === value ? 'bg-surface font-bold text-ink shadow-sm' : 'font-medium text-sub hover:text-ink'}`}
       onClick={() => {
         setMode(value);
         setError(null);
@@ -81,71 +79,64 @@ export default function AuthForm({ next }: { next: string }) {
     </button>
   );
 
-  const inputClass =
-    'w-full rounded border border-neutral-300 bg-transparent px-3 py-2 text-sm dark:border-neutral-700';
-
   return (
-    <form onSubmit={submit} className="w-full max-w-sm space-y-4" noValidate>
-      <div className="flex" role="tablist">
+    <form onSubmit={submit} className="flex w-full flex-col gap-6" noValidate>
+      <div className="grid grid-cols-2 gap-1 rounded-[14px] bg-soft p-1" role="tablist" aria-label="로그인 또는 가입">
         {tab('login', '로그인')}
         {tab('signup', '가입')}
       </div>
 
-      <label className="block space-y-1 text-sm">
-        <span>이메일</span>
-        <input
-          className={inputClass}
-          type="email"
-          name="email"
-          autoComplete="email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          required
-        />
-      </label>
-
-      <label className="block space-y-1 text-sm">
-        <span>비밀번호{mode === 'signup' ? ` (${PASSWORD_MIN_LENGTH}자 이상)` : ''}</span>
-        <input
-          className={inputClass}
-          type="password"
-          name="password"
-          autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          required
-        />
-      </label>
-
-      {mode === 'signup' && (
-        <label className="flex items-start gap-2 text-sm">
+      <div className="flex flex-col gap-4">
+        <label className="flex flex-col gap-2 text-sm font-bold">
+          <span>이메일</span>
           <input
-            type="checkbox"
-            name="isAdult"
-            className="mt-1"
-            checked={isAdult}
-            onChange={(e) => setIsAdult(e.target.checked)}
+            className="field h-[52px] text-base font-normal"
+            type="email"
+            name="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            required
           />
-          <span>만 18세 이상입니다.</span>
         </label>
-      )}
+
+        <label className="flex flex-col gap-2 text-sm font-bold">
+          <span>
+            비밀번호{mode === 'signup' ? <span className="font-normal text-sub">{` (${PASSWORD_MIN_LENGTH}자 이상)`}</span> : ''}
+          </span>
+          <input
+            className="field h-[52px] text-base font-normal"
+            type="password"
+            name="password"
+            autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            required
+          />
+        </label>
+
+        {mode === 'signup' && (
+          <label className="flex min-h-11 cursor-pointer items-center gap-3 text-[15px]">
+            <input type="checkbox" name="isAdult" className="h-5 w-5 accent-accent" checked={isAdult} onChange={(e) => setIsAdult(e.target.checked)} />
+            <span>만 18세 이상입니다.</span>
+          </label>
+        )}
+      </div>
 
       {error && (
-        <p className="text-sm text-red-600" role="alert" data-testid="auth-error">
+        <p className="rounded-xl bg-danger-soft px-4 py-3 text-sm text-danger" role="alert" data-testid="auth-error">
           {error}
         </p>
       )}
 
-      <button
-        type="submit"
-        disabled={busy}
-        className="w-full rounded bg-neutral-900 px-4 py-2 text-sm text-white disabled:opacity-50 dark:bg-white dark:text-neutral-900"
-      >
+      <button type="submit" disabled={busy} className="btn btn-primary h-[54px] rounded-[14px] text-base shadow-accent">
         {busy ? '처리 중…' : mode === 'login' ? '로그인' : '가입하기'}
       </button>
 
       {mode === 'signup' && (
-        <p className="text-xs text-neutral-500">확인 메일 없이 바로 가입됩니다. 비밀번호를 잊으면 찾을 수 없으니 기억해 두세요.</p>
+        <p className="rounded-[14px] bg-ground px-4 py-3.5 text-[13px] text-pretty text-sub">
+          확인 메일 없이 바로 가입됩니다. 비밀번호를 잊으면 찾을 수 없으니 기억해 두세요.
+        </p>
       )}
     </form>
   );

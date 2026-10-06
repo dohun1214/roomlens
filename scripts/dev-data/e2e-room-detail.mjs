@@ -76,6 +76,10 @@ const api = (p, method, url, body) =>
 const visit = async (p, url) => {
   const res = await p.goto(url, { waitUntil: 'domcontentloaded' });
   const shown = await p.getByTestId('room-title').textContent({ timeout: 1500 }).catch(() => null);
+  // 주인에게 보이는 버튼이 눌릴 준비(hydration)가 될 때까지 기다린다. 3D 뷰어가 없는 화면은 금방 떠서, 바로 누르면 아무 일도 일어나지 않는다
+  await p
+    .waitForFunction(() => [...document.querySelectorAll('[data-testid=room-owner-controls] button')].every((b) => Object.keys(b).some((key) => key.startsWith('__reactProps'))), null, { timeout: 15000 })
+    .catch(() => {});
   return { status: res?.status() ?? 0, title: shown };
 };
 const viewerReady = (p) =>

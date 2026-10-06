@@ -62,7 +62,7 @@ export default function RoomOwnerControls({
     router.refresh();
   };
 
-  const buttonClass = 'rounded border border-neutral-300 px-3 py-1 disabled:opacity-50 dark:border-neutral-700';
+  const buttonClass = 'rounded border border-neutral-300 px-3 py-1 disabled:opacity-50';
 
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="room-owner-controls">
