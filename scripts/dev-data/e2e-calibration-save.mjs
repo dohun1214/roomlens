@@ -118,7 +118,7 @@ try {
   check('다시 열면: 카메라가 방 안, 눈높이(1.5m)에서 시작', inside && Math.abs(after.camera[1] - 1.5) < 0.01, after.camera.map((v) => round(v, 2)));
   check('다시 열면: 보정 표시가 "저장됨"으로 시작', (await page.getByTestId('calibration-save-state').getAttribute('data-state')) === 'saved', null);
   check('다시 열면: 바로 가구를 놓을 수 있음 (가구 패널 표시)', await page.getByTestId('furniture-panel').isVisible(), null);
-  const catalogButtons = await page.getByTestId('furniture-panel').getByRole('button', { name: /^\+ / }).allInnerTexts();
+  const catalogButtons = await page.getByTestId('furniture-catalog').getByRole('button', { name: /^\+ / }).evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label')));
   check('가구 패널에 DB 카탈로그 10종이 나옴', catalogButtons.length === 10 && catalogButtons.includes('+ 책장') && catalogButtons[0] === '+ 싱글 침대', catalogButtons);
   check('보정된 방에는 X축 뒤집기 버튼이 없음', (await page.getByRole('button', { name: /X축 180/ }).count()) === 0, null);
   await page.waitForTimeout(1500);
@@ -153,7 +153,7 @@ try {
   await page.waitForFunction(() => document.querySelector('[data-testid=openings-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
   const { data: withDoor } = await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle();
   check('찍은 문을 추가·저장 → DB에 문 1개', withDoor?.openings?.length === 1 && withDoor.openings[0].type === 'door' && withDoor.openings[0].wallIndex === 0, withDoor?.openings);
-  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await page.getByTestId('calibration-toggle').click();
 
   // 5) 다시 찍기: 화면에서는 보정이 풀리지만 저장된 값은 새로 저장하기 전까지 그대로
   await page.getByRole('button', { name: '다시 찍기' }).click();
@@ -169,9 +169,11 @@ try {
   await page.getByTestId('openings-toggle').click();
   check('새 보정을 저장하기 전: 문·창문은 0개로 시작하고 넣을 수 없음', (await page.getByTestId('openings-locked').isVisible()) && (await page.getByTestId('openings').getAttribute('data-count')) === '0', null);
   const { data: beforeSave } = await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle();
+  await page.getByTestId('calibration-toggle').click();
   await page.getByTestId('calibration-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=calibration-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
   const { data: afterSave } = await admin.from('rooms').select('openings, floor_polygon').eq('id', roomId).maybeSingle();
+  await page.getByTestId('openings-toggle').click();
   const five = afterSave?.floor_polygon ?? [];
   const fiveSkew = Math.max(...five.map((p, i) => Math.min(Math.abs(five[(i + 1) % five.length][0] - p[0]), Math.abs(five[(i + 1) % five.length][1] - p[1]))));
   const fiveWalls = wallLengthsOf(five);

@@ -179,10 +179,8 @@ try {
         },
         { position, target },
       );
-      await page.getByTestId('panel-compact').isVisible();
       await page.screenshot({ path: path.join(dataDir, '_e2e', name) });
     };
-    await page.getByTestId('panel-compact').click();
     await shot('models-front.png', [0, 2.6, 5.2], [0, 0.4, -0.6]);
     await shot('models-top.png', [0, 8.5, 0.01], [0, 0, 0]);
     await shot('models-back.png', [0, 2.6, -5.6], [0, 0.4, 0.6]);
@@ -216,7 +214,6 @@ try {
   }
 
   // 4) 평면도·저장은 그대로
-  if (!dev) await page.getByTestId('panel-compact').click();
   await page.getByTestId('plan-toggle').click();
   check('평면도에는 10개가 모두 나옴', (await page.getByTestId('plan-item').count()) === 10, null);
 } catch (err) {

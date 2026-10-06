@@ -120,7 +120,7 @@ try {
     const box = owner.getByTestId('layout-violations');
     return {
       messages: await box.locator('li').allInnerTexts(),
-      warnings: await box.locator('li.text-amber-300').allInnerTexts(),
+      warnings: await box.locator('li[data-severity=warning]').allInnerTexts(),
       errors: Number(await box.getAttribute('data-errors')),
       ok: (await box.innerText()).includes('배치에 문제가 없습니다'),
       doorHint: (await owner.getByTestId('layout-door-hint').count()) === 1,

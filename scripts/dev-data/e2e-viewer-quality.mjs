@@ -80,7 +80,7 @@ try {
   check('데스크톱 기본은 정렬 0ms, 시야 집중 켬', d.motion === '정렬 0ms · 시야 집중 켬', d.motion);
 
   const pLod = await measure(phone, '&lod=1500000&pr=2');
-  check('폰 ?lod=1500000&pr=2: 기본값보다 많이 그리고 배율 2', pLod.drawn > 800_000 && pLod.pixelRatio === 2, pLod);
+  check('폰 ?lod=1500000&pr=2: 기본값보다 많이 그리고 배율 2', pLod.drawn > p.drawn && pLod.pixelRatio === 2, pLod);
 } catch (err) {
   check('예외 없이 끝까지 실행', false, String(err).slice(0, 300));
 } finally {

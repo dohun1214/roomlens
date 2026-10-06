@@ -14,20 +14,21 @@ import {
   OPENING_TYPES,
   openingFromPoints,
   openingSegment,
+  openingViewpoint,
   sameOpenings,
-  summarizeOpenings,
   wallsOf,
   type Opening,
   type OpeningType,
 } from '@/lib/rooms/openings';
 import { requestOpeningsDetection } from '@/lib/ai/openingsClient';
+import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
+import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다. */
 const TAP_MOVE_PX = 6;
 const OPENING_COLORS: Record<OpeningType, number> = { door: 0xffa63d, window: 0x4cc9ff };
 const WALL_HIGHLIGHT_COLOR = 0xffe14d;
-const hex = (color: number) => `#${color.toString(16).padStart(6, '0')}`;
 const keyOf = (o: Opening) => `${o.wallIndex}|${o.from}`;
 
 /**
@@ -36,6 +37,7 @@ const keyOf = (o: Opening) => `${o.wallIndex}|${o.from}`;
  * 좌표는 방 좌표(바닥 y=0, m)이고 보정 후에는 월드 좌표와 같다.
  */
 export default function OpeningsTool({
+  slots,
   engineRef,
   floorPolygon,
   initial,
@@ -43,8 +45,11 @@ export default function OpeningsTool({
   locked = false,
   onSave,
   onChange,
+  onLook,
   detect,
 }: {
+  /** 패널을 그려 넣을 자리. 이 도구를 골랐을 때만 넣고 지울 수 있다 */
+  slots: Slots;
   engineRef: RefObject<Engine | null>;
   floorPolygon: Point2[];
   /** 저장돼 있던 문·창문. 처음 한 번만 읽는다 */
@@ -56,14 +61,16 @@ export default function OpeningsTool({
   /** 저장한다. 성공하면 true */
   onSave?: (openings: Opening[]) => Promise<boolean>;
   /** 넣거나 지울 때마다 알린다 (저장 전이라도 가구 검사에 바로 반영하려고) */
-  onChange?: (openings: Opening[]) => void;
+  onChange?: (openings: Opening[], aiKeys: string[]) => void;
+  /** "3D에서 보기"로 카메라를 옮겼음을 알린다 (평면도를 보고 있었다면 3D로 돌아가게) */
+  onLook?: () => void;
   /** AI로 문·창문 후보 찾기 (주면 버튼이 생긴다). remaining은 오늘 남은 AI 횟수 */
   detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
 }) {
   const [openings, setOpenings] = useState<Opening[]>(initial);
   const [savedOpenings, setSavedOpenings] = useState<Opening[]>(initial);
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
-  const [open, setOpen] = useState(false);
+  const open = slots.active === 'openings';
   const [type, setType] = useState<OpeningType>('door');
   const [wallIndex, setWallIndex] = useState(0);
   const [from, setFrom] = useState('');
@@ -218,7 +225,7 @@ export default function OpeningsTool({
       return;
     }
     setOpenings(added.openings);
-    onChange?.(added.openings);
+    onChange?.(added.openings, aiKeys);
     setFrom('');
     setMessage(null);
   };
@@ -226,7 +233,7 @@ export default function OpeningsTool({
   const remove = (index: number) => {
     const next = openings.filter((_, i) => i !== index);
     setOpenings(next);
-    onChange?.(next);
+    onChange?.(next, aiKeys);
     setMessage(null);
   };
 
@@ -259,9 +266,10 @@ export default function OpeningsTool({
       setMessage(skipped > 0 ? 'AI가 찾은 것은 모두 이미 넣은 것과 겹칩니다.' : 'AI가 문·창문을 찾지 못했습니다. 직접 넣어 주세요.');
       return;
     }
+    const keys = [...aiKeys, ...added.map(keyOf)];
     setOpenings(next);
-    onChange?.(next);
-    setAiKeys((prev) => [...prev, ...added.map(keyOf)]);
+    setAiKeys(keys);
+    onChange?.(next, keys);
     const doors = added.filter((o) => o.type === 'door').length;
     setMessage(
       `AI가 문 ${doors}개, 창문 ${added.length - doors}개를 찾아 넣었습니다${skipped > 0 ? ` (이미 있는 것과 겹치는 ${skipped}개는 뺌)` : ''}. 3D 화면에서 위치를 확인하고, 틀린 것은 지우거나 종류를 바꾼 뒤 저장하세요.`,
@@ -275,7 +283,7 @@ export default function OpeningsTool({
     if (!made.ok) return;
     const next = openings.map((o, i) => (i === index ? made.opening : o));
     setOpenings(next);
-    onChange?.(next);
+    onChange?.(next, aiKeys);
     setMessage(null);
   };
 
@@ -287,162 +295,201 @@ export default function OpeningsTool({
     if (ok) {
       setSavedOpenings(snapshot);
       setAiKeys([]);
+      onChange?.(snapshot, []);
     }
     setSavePhase(ok ? 'idle' : 'error');
   };
 
-  const close = () => {
-    setOpen(false);
-    setPicking(false);
-    setFirstPoint(null);
-    setMessage(null);
+  /** 3D 화면에서 그 문·창문을 정면으로 본다 */
+  const lookAt = (opening: Opening) => {
+    const engine = engineRef.current;
+    const view = openingViewpoint(opening, floorPolygon);
+    if (!engine || !view) return;
+    engine.camera.position.set(...view.position);
+    engine.controls.target.set(...view.target);
+    engine.controls.update();
+    onLook?.();
   };
 
-  const summary = summarizeOpenings(openings);
-  const data = { 'data-testid': 'openings', 'data-count': openings.length, 'data-json': JSON.stringify(openings) };
-
-  // 보는 사람: 문·창문이 있으면 개수만 알려준다
-  if (!editable) {
-    return (
-      <div {...data} className="pointer-events-none absolute bottom-3 left-16 rounded bg-black/70 px-3 py-2 text-xs text-white" hidden={openings.length === 0}>
-        {summary}
-      </div>
-    );
-  }
-
-  if (!open) {
-    return (
-      <div {...data} className="absolute bottom-3 left-16">
-        <button className="rounded bg-black/70 px-3 py-2 text-xs text-white" onClick={() => setOpen(true)} data-testid="openings-toggle">
-          문·창문 ({openings.length}){dirty ? ' · 저장 안 됨' : ''}
-        </button>
-      </div>
-    );
-  }
+  const doors = openings.filter((o) => o.type === 'door').length;
+  const selectClass = 'h-10 rounded-[10px] border border-field bg-surface px-2.5 text-sm';
 
   return (
-    <div {...data} className="absolute bottom-3 left-16 w-80 max-w-[calc(100%-5rem)] space-y-2 rounded bg-black/75 p-3 text-xs text-white">
-      <div className="flex items-center justify-between">
-        <strong>문·창문</strong>
-        <button className="rounded bg-white/20 px-2 py-0.5" onClick={close}>
-          닫기
-        </button>
-      </div>
+    <ToolPanel slots={slots} tool="openings" data-testid="openings" data-count={openings.length} data-json={JSON.stringify(openings)}>
+      <PanelBody>
+        <div className="flex flex-col gap-1.5">
+          <PanelTitle
+            right={
+              editable &&
+              onSave &&
+              !locked && (
+                <SaveStatePill
+                  state={saveState}
+                  testId="openings-save-state"
+                  labels={{ saved: '저장됨', dirty: '저장 안 됨', saving: '저장하는 중…', error: '저장하지 못했습니다' }}
+                />
+              )
+            }
+          >
+            문·창문 <span className="font-mono font-medium text-mute">{openings.length}</span>
+          </PanelTitle>
+          <p className="text-[13px] text-sub">
+            {openings.length === 0
+              ? editable
+                ? '아직 없습니다. 문과 창문을 넣으면 가구가 문 앞이나 통로를 막는지 검사할 수 있습니다.'
+                : '이 방에는 아직 문·창문이 들어 있지 않습니다.'
+              : `문 ${doors}개, 창문 ${openings.length - doors}개. 가구가 문 앞이나 통로를 막는지 검사할 때 씁니다.`}
+          </p>
+        </div>
 
-      {locked ? (
-        <p className="text-amber-300" data-testid="openings-locked">
-          보정을 저장한 뒤에 문·창문을 넣을 수 있습니다.
-        </p>
-      ) : (
-        <>
-          {openings.length === 0 ? (
-            <p className="opacity-80">아직 없습니다. 문과 창문을 넣으면 가구가 문 앞이나 통로를 막는지 검사할 수 있습니다.</p>
-          ) : (
-            <ul className="space-y-1" data-testid="openings-list">
-              {openings.map((o, i) => (
-                <li key={keyOf(o)} className="flex items-center justify-between gap-1" data-ai={aiKeys.includes(keyOf(o))}>
-                  <span>
-                    <span style={{ color: hex(OPENING_COLORS[o.type]) }}>■</span> {describeOpening(o)}
-                    {aiKeys.includes(keyOf(o)) && (
-                      <span className="ml-1 rounded bg-violet-600 px-1" data-testid="openings-ai-tag">
-                        AI
-                      </span>
-                    )}
+        {locked && editable && (
+          <p className="rounded-xl bg-warn-soft px-3.5 py-3 text-[13px] text-warn" data-testid="openings-locked">
+            보정을 저장한 뒤에 문·창문을 넣을 수 있습니다.
+          </p>
+        )}
+
+        {message && editable && !locked && (
+          <p
+            className={`flex gap-2.5 rounded-[14px] p-3.5 text-[13px] text-pretty ${message.startsWith('AI가 문') ? 'bg-accent-soft text-[#1a2140]' : 'bg-warn-tint text-warn'}`}
+            data-testid="openings-message"
+          >
+            {message.startsWith('AI가 문') && <AiBadge className="mt-0.5 self-start" />}
+            <span>{message}</span>
+          </p>
+        )}
+
+        {!(locked && editable) && openings.length > 0 && (
+          <ul className="flex flex-col gap-1.5" data-testid="openings-list">
+            {openings.map((o, i) => {
+              const fromAi = aiKeys.includes(keyOf(o));
+              return (
+                <li
+                  key={keyOf(o)}
+                  className={`flex items-center gap-2 rounded-xl border py-1.5 pr-1.5 pl-2 ${fromAi ? 'border-accent-line bg-accent-tint' : 'border-line'}`}
+                  data-ai={fromAi}
+                >
+                  <span
+                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] ${o.type === 'door' ? 'bg-[#fdebd8] text-[#b5610e]' : 'bg-[#ddf1fb] text-[#1479ad]'}`}
+                    aria-hidden="true"
+                  >
+                    <Icon name={o.type === 'door' ? 'door' : 'window'} size={18} />
                   </span>
-                  <span className="flex shrink-0 gap-1">
-                    <button className="rounded bg-white/20 px-1.5 py-0.5" onClick={() => switchType(i)} aria-label={`${describeOpening(o)} 종류 바꾸기`}>
-                      {o.type === 'door' ? '창문으로' : '문으로'}
-                    </button>
-                    <button className="rounded bg-white/20 px-1.5 py-0.5" onClick={() => remove(i)} aria-label={`${describeOpening(o)} 삭제`}>
-                      삭제
-                    </button>
+                  <span className="flex min-w-0 flex-1 flex-col" title={describeOpening(o)}>
+                    <span className="flex items-center gap-1.5 text-[13px] font-semibold">
+                      벽 {o.wallIndex + 1} · {OPENING_LABEL[o.type]}
+                      {fromAi && (
+                        <span className="rounded-md bg-accent px-1.5 py-px font-mono text-[10px] font-medium text-white" data-testid="openings-ai-tag">
+                          AI
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-mono text-[11px] text-mute">
+                      {o.from.toFixed(2)} – {o.to.toFixed(2)} m
+                    </span>
                   </span>
+                  <button className="btn btn-soft h-9 w-9 text-sub" onClick={() => lookAt(o)} aria-label={`${describeOpening(o)} 3D에서 보기`} title="3D에서 보기">
+                    <Icon name="target" />
+                  </button>
+                  {editable && !locked && (
+                    <>
+                      <button className="btn btn-soft h-9 px-2.5 text-xs" onClick={() => switchType(i)} aria-label={`${describeOpening(o)} 종류 바꾸기`}>
+                        {o.type === 'door' ? '창문으로' : '문으로'}
+                      </button>
+                      <button className="btn btn-danger h-9 w-9" onClick={() => remove(i)} aria-label={`${describeOpening(o)} 삭제`} title="삭제">
+                        <Icon name="close" size={11} />
+                      </button>
+                    </>
+                  )}
                 </li>
-              ))}
-            </ul>
-          )}
+              );
+            })}
+          </ul>
+        )}
 
-          <div className="space-y-1.5 border-t border-white/20 pt-2">
-            <div className="flex flex-wrap items-center gap-1">
-              <select className="rounded bg-white/10 px-1 py-1" value={type} onChange={(e) => changeType(e.target.value as OpeningType)} data-testid="openings-type" aria-label="종류">
-                {OPENING_TYPES.map((t) => (
-                  <option key={t} value={t} className="text-black">
-                    {OPENING_LABEL[t]}
-                  </option>
-                ))}
-              </select>
-              <select className="rounded bg-white/10 px-1 py-1" value={wallIndex} onChange={(e) => setWallIndex(Number(e.target.value))} data-testid="openings-wall" aria-label="벽">
-                {walls.map((w) => (
-                  <option key={w.index} value={w.index} className="text-black">
-                    벽 {w.index + 1} ({w.length.toFixed(2)} m)
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
-              <label className="flex items-center gap-1">
-                시작
-                <input className="w-16 rounded bg-white/10 px-2 py-1" inputMode="decimal" placeholder="0.20" value={from} onChange={(e) => setFrom(e.target.value)} data-testid="openings-from" />
-              </label>
-              <label className="flex items-center gap-1">
-                폭
-                <input className="w-16 rounded bg-white/10 px-2 py-1" inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} data-testid="openings-width" />
-              </label>
-              <span>m</span>
-              <button className="rounded bg-emerald-600 px-2 py-1" onClick={add} data-testid="openings-add">
-                추가
-              </button>
-            </div>
-            <p className="opacity-80">
-              &ldquo;시작&rdquo;은 노란 기둥이 선 모서리에서 노란 선을 따라 잰 거리입니다.
-            </p>
-            <button className={`rounded px-2 py-1 ${picking ? 'bg-amber-500 text-black' : 'bg-white/20'}`} onClick={togglePicking} data-testid="openings-pick" aria-pressed={picking}>
+        {editable && !locked && (
+          <div className="flex flex-col gap-2.5">
+            <SectionTitle>직접 넣기</SectionTitle>
+            <button
+              className={`flex h-[42px] items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium ${picking ? 'bg-warn-soft font-semibold text-warn' : 'border border-dashed border-field text-body hover:bg-soft'}`}
+              onClick={togglePicking}
+              data-testid="openings-pick"
+              aria-pressed={picking}
+            >
+              <Icon name="target" />
               {picking ? '찍기 그만' : '화면에서 양 끝 찍기'}
             </button>
             {picking && (
-              <p className="text-amber-300" data-testid="openings-pick-hint">
+              <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="openings-pick-hint">
                 {firstPoint ? `${OPENING_LABEL[type]}의 반대쪽 끝을 탭하세요.` : `${OPENING_LABEL[type]}의 한쪽 끝을 탭하세요.`}
               </p>
             )}
+            <div className="flex flex-col gap-2 rounded-xl bg-ground p-3">
+              <div className="flex gap-2">
+                <select className={`${selectClass} w-24`} value={type} onChange={(e) => changeType(e.target.value as OpeningType)} data-testid="openings-type" aria-label="종류">
+                  {OPENING_TYPES.map((t) => (
+                    <option key={t} value={t}>
+                      {OPENING_LABEL[t]}
+                    </option>
+                  ))}
+                </select>
+                <select className={`${selectClass} min-w-0 flex-1`} value={wallIndex} onChange={(e) => setWallIndex(Number(e.target.value))} data-testid="openings-wall" aria-label="벽">
+                  {walls.map((w) => (
+                    <option key={w.index} value={w.index}>
+                      벽 {w.index + 1} ({w.length.toFixed(2)} m)
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-end gap-2">
+                <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-semibold text-body">
+                  시작 (m)
+                  <input className="field h-10 rounded-[10px] px-2.5 font-mono text-sm font-normal" inputMode="decimal" placeholder="0.20" value={from} onChange={(e) => setFrom(e.target.value)} data-testid="openings-from" />
+                </label>
+                <label className="flex min-w-0 flex-1 flex-col gap-1 text-xs font-semibold text-body">
+                  폭 (m)
+                  <input className="field h-10 rounded-[10px] px-2.5 font-mono text-sm font-normal" inputMode="decimal" value={width} onChange={(e) => setWidth(e.target.value)} data-testid="openings-width" />
+                </label>
+                <button className="btn btn-primary h-10 px-4 text-[13px]" onClick={add} data-testid="openings-add">
+                  추가
+                </button>
+              </div>
+              <p className="text-xs text-sub">&ldquo;시작&rdquo;은 노란 기둥이 선 모서리에서 노란 선을 따라 잰 거리입니다.</p>
+            </div>
           </div>
+        )}
+      </PanelBody>
 
+      {editable && !locked && (detect || onSave) && (
+        <PanelFooter>
           {detect && (
-            <div className="space-y-1 border-t border-white/20 pt-2" data-testid="openings-detect" data-remaining={detect.remaining ?? ''} data-busy={detecting !== null}>
-              <button className="rounded bg-violet-600 px-2 py-1 disabled:opacity-50" disabled={detecting !== null || detect.remaining === 0} onClick={detectOpenings} data-testid="openings-detect-run">
-                {detecting === null && 'AI로 찾기'}
-                {detecting !== null && detecting.done < detecting.total && `화면 캡처 중 (${detecting.done}/${detecting.total})`}
-                {detecting !== null && detecting.done >= detecting.total && (detecting.total === 0 ? '준비 중…' : 'AI가 찾는 중… (10~40초)')}
-              </button>
-              <p className="opacity-80">
+            <div className="flex flex-col gap-2.5" data-testid="openings-detect" data-remaining={detect.remaining ?? ''} data-busy={detecting !== null}>
+              <p className="text-xs text-pretty text-sub">
                 방 안을 여러 방향에서 캡처한 그림을 Google Gemini로 보내 문·창문 후보를 찾습니다. 틀리거나 빠뜨릴 수 있으니 꼭 확인하세요.
                 {detect.remaining !== null ? ` 오늘 ${detect.remaining}회 남음.` : ''}
               </p>
             </div>
           )}
-
-          {message && (
-            <p className="text-amber-300" data-testid="openings-message">
-              {message}
-            </p>
-          )}
-
-          {onSave && (
-            <div className="flex items-center justify-between gap-2 border-t border-white/20 pt-2">
-              <span data-testid="openings-save-state" data-state={saveState}>
-                {saveState === 'saved' && '저장됨'}
-                {saveState === 'dirty' && '저장 안 됨'}
-                {saveState === 'saving' && '저장하는 중…'}
-                {saveState === 'error' && '저장하지 못했습니다'}
-              </span>
-              {saveState !== 'saved' && (
-                <button className="rounded bg-emerald-600 px-2 py-1 disabled:opacity-50" disabled={saveState === 'saving'} onClick={save} data-testid="openings-save">
-                  {saveState === 'error' ? '다시 저장' : '저장'}
-                </button>
-              )}
-            </div>
-          )}
-        </>
+          <div className="flex gap-2">
+            {detect && (
+              <button
+                className="btn h-11 min-w-0 flex-1 border border-accent-line bg-surface px-2 text-sm text-accent-strong hover:bg-accent-tint"
+                disabled={detecting !== null || detect.remaining === 0}
+                onClick={detectOpenings}
+                data-testid="openings-detect-run"
+              >
+                {detecting === null && 'AI로 찾기'}
+                {detecting !== null && detecting.done < detecting.total && `화면 캡처 중 (${detecting.done}/${detecting.total})`}
+                {detecting !== null && detecting.done >= detecting.total && (detecting.total === 0 ? '준비 중…' : 'AI가 찾는 중… (10~40초)')}
+              </button>
+            )}
+            {onSave && saveState !== 'saved' && (
+              <button className="btn btn-primary h-11 flex-1 text-sm" disabled={saveState === 'saving'} onClick={save} data-testid="openings-save">
+                {saveState === 'error' ? '다시 저장' : '저장'}
+              </button>
+            )}
+          </div>
+        </PanelFooter>
       )}
-    </div>
+    </ToolPanel>
   );
 }

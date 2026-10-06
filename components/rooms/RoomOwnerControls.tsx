@@ -2,6 +2,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import Icon from '@/components/ui/Icon';
 import { createClient } from '@/lib/supabase/client';
 
 type Pending = 'publish' | 'delete' | null;
@@ -62,49 +63,51 @@ export default function RoomOwnerControls({
     router.refresh();
   };
 
-  const buttonClass = 'rounded border border-neutral-300 px-3 py-1 disabled:opacity-50';
-
   return (
-    <div className="flex flex-wrap items-center gap-2 text-sm" data-testid="room-owner-controls">
-      {pending ? (
-        <>
-          <span data-testid="room-confirm-text">{CONFIRM_TEXT[pending]}</span>
-          <button
-            type="button"
-            className={`${buttonClass} font-semibold`}
-            disabled={busy}
-            onClick={() => (pending === 'publish' ? setVisibility(true) : remove())}
-            data-testid="room-confirm-yes"
-          >
-            {busy ? '처리 중…' : pending === 'publish' ? '공개' : '삭제'}
-          </button>
-          <button type="button" className={buttonClass} disabled={busy} onClick={() => setPending(null)} data-testid="room-confirm-no">
-            취소
-          </button>
-        </>
-      ) : (
-        <>
-          <span className="text-neutral-500" data-testid="room-visibility">
-            {isPublic ? '공개' : '비공개'}
-          </span>
-          {canPublish && (
+    <div className="flex items-center gap-2 text-[13px]" data-testid="room-owner-controls">
+      <span className="pill bg-chip py-1 text-sub" data-testid="room-visibility">
+        <Icon name={isPublic ? 'globe' : 'lock'} size={12} />
+        {isPublic ? '공개' : '비공개'}
+      </span>
+      {canPublish && (
+        <button
+          type="button"
+          className="btn btn-outline h-[38px] px-3 sm:px-4"
+          disabled={busy || pending !== null}
+          onClick={() => (isPublic ? setVisibility(false) : setPending('publish'))}
+          data-testid="room-visibility-toggle"
+        >
+          {isPublic ? '비공개로 바꾸기' : '공개하기'}
+        </button>
+      )}
+      <button type="button" className="btn btn-soft h-[38px] px-3 text-sub hover:text-danger" disabled={busy || pending !== null} onClick={() => setPending('delete')} data-testid="room-delete">
+        삭제
+      </button>
+
+      {/* 공개와 삭제는 한 번 더 묻는다 */}
+      {pending && (
+        <div className="absolute top-full right-3 mt-2 flex w-[min(22rem,calc(100vw-1.5rem))] flex-col gap-3 rounded-2xl bg-surface p-4 shadow-float" role="alertdialog" aria-label="확인">
+          <p className="text-sm text-ink-2" data-testid="room-confirm-text">
+            {CONFIRM_TEXT[pending]}
+          </p>
+          <div className="flex justify-end gap-2">
+            <button type="button" className="btn btn-outline h-10 px-4" disabled={busy} onClick={() => setPending(null)} data-testid="room-confirm-no">
+              취소
+            </button>
             <button
               type="button"
-              className={buttonClass}
+              className={`btn h-10 px-4 ${pending === 'delete' ? 'bg-danger text-white hover:bg-[#8f231b]' : 'btn-primary'}`}
               disabled={busy}
-              onClick={() => (isPublic ? setVisibility(false) : setPending('publish'))}
-              data-testid="room-visibility-toggle"
+              onClick={() => (pending === 'publish' ? setVisibility(true) : remove())}
+              data-testid="room-confirm-yes"
             >
-              {isPublic ? '비공개로 바꾸기' : '공개하기'}
+              {busy ? '처리 중…' : pending === 'publish' ? '공개' : '삭제'}
             </button>
-          )}
-          <button type="button" className={buttonClass} disabled={busy} onClick={() => setPending('delete')} data-testid="room-delete">
-            삭제
-          </button>
-        </>
+          </div>
+        </div>
       )}
       {error && (
-        <span className="text-red-600" role="alert" data-testid="room-control-error">
+        <span className="absolute top-full right-3 mt-2 rounded-xl bg-danger-soft px-3 py-2 text-danger shadow-float" role="alert" data-testid="room-control-error">
           {error}
         </span>
       )}

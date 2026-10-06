@@ -97,7 +97,7 @@ try {
   /** 방 좌표(m) → 화면 위치(px). 방 가운데가 원점이고 가로가 4m */
   const toScreen = async (x, z) => {
     const box = await page.getByTestId('plan-room').boundingBox();
-    const scale = (box.width - 4) / 4; // 벽 선 두께 4px 제외
+    const scale = (box.width - 5) / 4; // 벽 선 두께 5px 제외
     return { x: box.x + box.width / 2 + x * scale, y: box.y + box.height / 2 + z * scale, scale };
   };
   /** 평면도에서 가구의 가운데를 잡아 (x, z)로 끈다 */
@@ -112,13 +112,13 @@ try {
 
   // 1) 평면도 열기
   await openRoom(page, roomId);
-  check('처음에는 3D, 평면도 버튼이 있음', (await page.getByTestId('plan-overlay').count()) === 0 && (await page.getByTestId('plan-toggle').innerText()) === '평면도', null);
+  check('처음에는 3D, 보기 전환(3D·평면도)이 있음', (await page.getByTestId('plan-overlay').count()) === 0 && (await page.getByTestId('plan-toggle').getAttribute('aria-checked')) === 'false', null);
   await page.getByTestId('plan-toggle').click();
   const openingTypes = await page.getByTestId('plan-opening').evaluateAll((els) => els.map((el) => el.getAttribute('data-type')));
   const wallTexts = await page.getByTestId('floor-plan').locator('text').allTextContents();
-  check('평면도: 방, 문·창문, 벽 번호가 보이고 버튼은 "3D로 보기"', (await page.getByTestId('plan-room').isVisible()) && openingTypes.join() === 'door,window' && ['벽 1', '벽 2', '벽 3', '벽 4'].every((w) => wallTexts.includes(w)) && (await page.getByTestId('plan-toggle').innerText()) === '3D로 보기', [openingTypes, wallTexts]);
+  check('평면도: 방, 문·창문, 벽 번호가 보이고 보기 전환은 평면도 쪽', (await page.getByTestId('plan-room').isVisible()) && openingTypes.join() === 'door,window' && ['벽 1', '벽 2', '벽 3', '벽 4'].every((w) => wallTexts.includes(w)) && (await page.getByTestId('plan-toggle').getAttribute('aria-checked')) === 'true', [openingTypes, wallTexts]);
   const room = await page.getByTestId('plan-room').boundingBox();
-  check('방 그림의 가로세로 비율이 4:3', near((room.width - 4) / (room.height - 4), 4 / 3, 0.02), [Math.round(room.width), Math.round(room.height)]);
+  check('방 그림의 가로세로 비율이 4:3', near((room.width - 5) / (room.height - 5), 4 / 3, 0.02), [Math.round(room.width), Math.round(room.height)]);
 
   // 2) 가구를 추가하면 평면도에 나온다
   await panel.getByRole('button', { name: '+ 책상', exact: true }).click();
@@ -164,10 +164,10 @@ try {
   await page.mouse.click(f1.x + f1.width / 2, f1.y + f1.height / 2);
   const before = (await items())[0];
   check('빈 곳을 누르면 선택 해제, 가구를 누르면(끌지 않고) 선택만 되고 움직이지 않음', noneSelected && (await planItem('f1').getAttribute('data-selected')) === 'true' && near(before.x, 1.4) && near(before.z, -1.2), [before.x, before.z]);
-  await panel.getByRole('button', { name: '90° 회전', exact: true }).click();
+  await page.getByTestId('selection-bar').getByRole('button', { name: '90° 회전', exact: true }).click();
   const rotated = (await items())[0];
   const rotatedSize = await drawnSize('f1');
-  check('패널의 90° 회전이 평면도에 반영됨 (가로 0.6 × 세로 1.2로 보임)', rotated.rotationDeg === 90 && near(rotatedSize[0], 0.6) && near(rotatedSize[1], 1.2), rotatedSize);
+  check('고른 가구 띠의 90° 회전이 평면도에 반영됨 (가로 0.6 × 세로 1.2로 보임)', rotated.rotationDeg === 90 && near(rotatedSize[0], 0.6) && near(rotatedSize[1], 1.2), rotatedSize);
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'plan.png') });
 
@@ -188,9 +188,9 @@ try {
   await page.waitForTimeout(500);
   await page.getByTestId('panel-compact').click();
   const catalogHidden = !(await page.getByTestId('furniture-catalog').isVisible());
-  const phonePanel = await panel.boundingBox();
+  const phoneSheet = await page.getByTestId('tool-panel').boundingBox();
   const phoneRoom = await page.getByTestId('plan-room').boundingBox();
-  check('폰 크기(390px): 패널을 접으면 가구 목록이 숨고 방 그림을 가리지 않음', catalogHidden && phonePanel.y + phonePanel.height <= phoneRoom.y + 2, [Math.round(phonePanel.y + phonePanel.height), Math.round(phoneRoom.y)]);
+  check('폰 크기(390px): 아래 패널을 접으면 가구 목록이 숨고 방 그림을 가리지 않음', catalogHidden && phoneSheet.y >= phoneRoom.y + phoneRoom.height - 2, [Math.round(phoneRoom.y + phoneRoom.height), Math.round(phoneSheet.y)]);
   await dragTo('f2', -1.5, 0.8);
   const onPhone = (await items())[1];
   check('폰 크기(390px) 화면의 평면도에서도 끌림', near(onPhone.x, -1.5, 0.06) && near(onPhone.z, 0.8, 0.06), [onPhone.x, onPhone.z]);

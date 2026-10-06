@@ -134,7 +134,7 @@ try {
   // 5) 고치기: 추가했다가 지우면 저장된 것과 같아지고, 추가한 채 저장하면 같은 배치가 바뀐다
   await addFurniture(owner, '의자');
   const dirtyAfterAdd = await saveState(owner);
-  await owner.getByTestId('furniture-panel').getByRole('button', { name: '삭제', exact: true }).click();
+  await owner.getByTestId('selection-bar').getByRole('button', { name: '삭제', exact: true }).click();
   check('추가했다가 지우면 다시 "배치 저장됨"', dirtyAfterAdd === 'dirty' && (await saveState(owner)) === 'saved', dirtyAfterAdd);
   await addFurniture(owner, '의자');
   check('새 가구 id는 이어서 붙음 (f3)', (await panelItems(owner)).map((i) => i.id).join() === 'f1,f2,f3', null);

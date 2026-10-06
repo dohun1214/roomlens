@@ -16,10 +16,11 @@ import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/l
 import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
+import { ToolRail, type Slots, type ToolId } from './workspace';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
-import type { Opening } from '@/lib/rooms/openings';
+import { sameOpenings, type Opening } from '@/lib/rooms/openings';
 import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
@@ -67,10 +68,13 @@ type Props = {
   userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
   initialOpenings?: Opening[];
+  /** 방의 출처·라이선스 (데이터셋 방). 3D 화면 아래에 표시한다 */
+  credit?: string | null;
 };
 
 const NO_OPENINGS: Opening[] = [];
 const NO_LAYOUTS: MyLayout[] = [];
+const NO_KEYS: string[] = [];
 
 export default function SplatViewer({
   url,
@@ -85,6 +89,7 @@ export default function SplatViewer({
   initialReport = null,
   userFurniture,
   initialOpenings = NO_OPENINGS,
+  credit = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -105,7 +110,18 @@ export default function SplatViewer({
   const savedPolygonKeyRef = useRef(savedPolygonKey);
   const [openings, setOpenings] = useState({ key: savedPolygonKey, items: initialOpenings });
   // 화면에서 넣거나 지운(아직 저장 전일 수 있는) 문·창문. 가구 검사는 이것을 쓴다
-  const [liveOpenings, setLiveOpenings] = useState<{ key: string | null; items: Opening[] } | null>(null);
+  const [liveOpenings, setLiveOpenings] = useState<{ key: string | null; items: Opening[]; aiKeys: string[] } | null>(null);
+  // 고른 도구 (아직 고르지 않았으면 보정된 방은 가구, 아니면 크기 보정)
+  const [tool, setTool] = useState<ToolId | null>(null);
+  // 도구들이 패널과 3D 화면 위에 자기 화면을 그려 넣을 자리
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
+  const [stageEl, setStageEl] = useState<HTMLElement | null>(null);
+  // 폰: 아래 패널을 접었는지
+  const [sheetClosed, setSheetClosed] = useState(false);
+  // 3D 대신 평면도를 보고 있는지
+  const [showPlan, setShowPlan] = useState(false);
+  const [hasReport, setHasReport] = useState(initialReport !== null);
+  const [debug] = useState(() => new URLSearchParams(window.location.search).has('debug'));
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
   const [fps, setFps] = useState(0);
   const [loadProgress, setLoadProgress] = useState<LoadProgress | null>(null);
@@ -135,7 +151,7 @@ export default function SplatViewer({
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x111111);
+    scene.background = new THREE.Color(0xe9ecf1);
     const camera = new THREE.PerspectiveCamera(
       60,
       container.clientWidth / container.clientHeight,
@@ -409,96 +425,193 @@ export default function SplatViewer({
   // 저장하지 않은 보정 위에서는 추천할 수 없다 (서버는 저장된 평면도로 계산한다)
   const aiBlocked = roomPolygonKey !== savedPolygonKey ? '보정을 저장한 뒤에 AI 추천을 쓸 수 있습니다.' : null;
 
-  return (
-    <div className="relative h-full w-full">
-      <div ref={containerRef} className="absolute inset-0 touch-none" />
+  // 지금 쓸 수 있는 도구와 고른 도구
+  const ready = stats.status === 'ready';
+  const calibrated = ready && room?.key === sceneKey;
+  const tools: ToolId[] = [];
+  if (calibrated) tools.push('furniture', 'openings');
+  // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
+  if (ready && (!url || canEdit)) tools.push('calibration');
+  if (ready && roomId) tools.push('analysis');
+  const wanted = tool ?? (calibration ? 'furniture' : 'calibration');
+  const active = tools.includes(wanted) ? wanted : (tools[0] ?? null);
+  const slots: Slots = { panel: panelEl, stage: stageEl, active };
+  const calibrationUnsaved = Boolean(roomId) && calibrated && roomPolygonKey !== savedPolygonKey;
+  const openingsUnsaved = Boolean(roomId) && canEdit && liveOpenings !== null && liveOpenings.key === roomPolygonKey && !sameOpenings(liveOpenings.items, savedOpenings);
 
-      <div className="absolute left-2 top-2 max-w-[calc(100%-1rem)] space-y-2 rounded bg-black/70 p-3 text-xs text-white">
-        <div className="flex flex-wrap items-center gap-2">
-          {!url && (
-            <>
-          <input
-            className="w-64 max-w-full rounded bg-white/10 px-2 py-1"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            placeholder="SPZ / PLY URL"
-          />
-          <button
-            className="rounded bg-white/20 px-2 py-1"
-            onClick={() => load({ kind: 'url', url: urlInput })}
-          >
-            URL 열기
-          </button>
-          <label className="cursor-pointer rounded bg-white/20 px-2 py-1">
-            파일 열기
-            <input
-              type="file"
-              accept=".spz,.ply,.rad,.sog,.zip"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) load({ kind: 'file', file });
-                e.target.value = '';
-              }}
-            />
-          </label>
-            </>
-          )}
-          {/* 저장된 보정은 뒤집기 상태까지 포함하므로 보정된 방에서는 바꾸지 않는다 */}
-          {!calibration && (
-            <button className="rounded bg-white/20 px-2 py-1" onClick={toggleFlip}>
-              X축 180° {flipped ? 'ON' : 'OFF'}
-            </button>
-          )}
+  const selectTool = (next: ToolId) => {
+    // 폰에서 고른 탭을 다시 누르면 패널을 접었다 편다
+    setSheetClosed(next === active ? (closed) => !closed : false);
+    setTool(next);
+  };
+
+  return (
+    <div className="flex h-full w-full flex-col bg-ground lg:flex-row lg:gap-3 lg:p-3" data-testid="workspace" data-tool={active ?? ''}>
+      <ToolRail
+        tools={tools}
+        active={active}
+        onSelect={selectTool}
+        marks={{
+          ...(calibrationUnsaved ? { calibration: 'warn' as const } : {}),
+          ...(openingsUnsaved ? { openings: 'warn' as const } : {}),
+          ...(hasReport ? { analysis: 'ok' as const } : {}),
+        }}
+      />
+
+      <aside
+        className={`relative order-2 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface max-lg:-mt-5 max-lg:max-h-[58%] max-lg:rounded-t-[22px] max-lg:shadow-[0_-6px_24px_rgb(20_26_42/0.1)] lg:w-[376px] lg:rounded-2xl lg:shadow-panel ${
+          tools.length === 0 ? 'max-lg:hidden' : ''
+        }`}
+        data-testid="tool-panel"
+        data-closed={sheetClosed}
+      >
+        <button
+          type="button"
+          className="flex h-7 shrink-0 items-center justify-center lg:hidden"
+          onClick={() => setSheetClosed((closed) => !closed)}
+          aria-pressed={sheetClosed}
+          aria-label={sheetClosed ? '패널 펼치기' : '패널 접기'}
+          data-testid="panel-compact"
+        >
+          <span className="h-1 w-10 rounded-full bg-line-strong" aria-hidden="true" />
+        </button>
+        <div ref={setPanelEl} className={`flex min-h-0 flex-1 flex-col ${sheetClosed ? 'max-lg:hidden' : ''}`}>
+          {tools.length === 0 && <p className="p-5 text-sm text-sub">{stats.status === 'error' ? '3D 파일을 열지 못했습니다.' : '3D를 불러오는 중입니다…'}</p>}
         </div>
-        <div className="font-mono" data-testid="viewer-stats">
-          <div>
-            상태: {stats.status}
-            {stats.error ? ` (${stats.error})` : ''}
+      </aside>
+
+      <div className="relative order-1 min-h-0 flex-1 overflow-hidden bg-[#e9ecf1] lg:order-3 lg:rounded-2xl lg:shadow-panel" data-testid="stage">
+        <div ref={containerRef} className="absolute inset-0 touch-none" />
+
+        {/* 도구들이 3D 위에 띄우는 것 (평면도, 보기 전환, 고른 가구의 띠) */}
+        <div ref={setStageEl} className="pointer-events-none absolute inset-0 *:pointer-events-auto" />
+
+        {/* 개발용 뷰어(/viewer): 파일 열기. 방 화면에서는 주소에 ?debug 를 붙였을 때만 수치를 보여준다 */}
+        <div
+          className={
+            !url || debug
+              ? 'absolute top-3 right-3 max-w-[min(22rem,calc(100%-1.5rem))] space-y-2 rounded-xl bg-surface/95 p-3 text-xs text-ink-2 shadow-float'
+              : 'sr-only'
+          }
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {!url && (
+              <>
+                <input
+                  className="field h-8 w-56 max-w-full rounded-lg px-2 text-xs"
+                  value={urlInput}
+                  onChange={(e) => setUrlInput(e.target.value)}
+                  placeholder="SPZ / PLY URL"
+                  aria-label="3D 파일 주소"
+                />
+                <button className="btn btn-soft h-8 rounded-lg px-2.5 text-xs" onClick={() => load({ kind: 'url', url: urlInput })}>
+                  URL 열기
+                </button>
+                <label className="btn btn-soft h-8 cursor-pointer rounded-lg px-2.5 text-xs">
+                  파일 열기
+                  <input
+                    type="file"
+                    accept=".spz,.ply,.rad,.sog,.zip"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) load({ kind: 'file', file });
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+              </>
+            )}
+            {/* 저장된 보정은 뒤집기 상태까지 포함하므로 보정된 방에서는 바꾸지 않는다 */}
+            {!calibration && (
+              <button className="btn btn-soft h-8 rounded-lg px-2.5 text-xs" onClick={toggleFlip}>
+                X축 180° {flipped ? 'ON' : 'OFF'}
+              </button>
+            )}
           </div>
-          <div className="truncate">파일: {name ?? stats.name}</div>
-          {stats.loadMs !== undefined && (
-            <div data-testid="viewer-load-time" data-load-ms={Math.round(stats.loadMs)} data-download-ms={stats.downloadMs === undefined ? '' : Math.round(stats.downloadMs)}>
-              로딩: {(stats.loadMs / 1000).toFixed(2)}초
-              {stats.downloadMs !== undefined &&
-                ` (받기 ${(stats.downloadMs / 1000).toFixed(1)}초 + 준비 ${((stats.loadMs - stats.downloadMs) / 1000).toFixed(1)}초)`}
-            </div>
-          )}
-          {stats.numSplats !== undefined && (
+          <div className="font-mono" data-testid="viewer-stats">
             <div>
-              스플랫: {stats.numSplats.toLocaleString()}개{stats.fromLodTree ? ' (LOD 트리)' : ''}
+              상태: {stats.status}
+              {stats.error ? ` (${stats.error})` : ''}
             </div>
-          )}
-          <div>FPS: {fps}</div>
-          {drawn !== null && (
-            <div data-testid="viewer-drawn" data-drawn={drawn} data-pixel-ratio={pixelRatio} data-motion={motionInfo}>
-              그리는 중: {drawn.toLocaleString()}개 · 배율 {pixelRatio} · {motionInfo}
-            </div>
-          )}
+            <div className="truncate">파일: {name ?? stats.name}</div>
+            {stats.loadMs !== undefined && (
+              <div data-testid="viewer-load-time" data-load-ms={Math.round(stats.loadMs)} data-download-ms={stats.downloadMs === undefined ? '' : Math.round(stats.downloadMs)}>
+                로딩: {(stats.loadMs / 1000).toFixed(2)}초
+                {stats.downloadMs !== undefined &&
+                  ` (받기 ${(stats.downloadMs / 1000).toFixed(1)}초 + 준비 ${((stats.loadMs - stats.downloadMs) / 1000).toFixed(1)}초)`}
+              </div>
+            )}
+            {stats.numSplats !== undefined && (
+              <div>
+                스플랫: {stats.numSplats.toLocaleString()}개{stats.fromLodTree ? ' (LOD 트리)' : ''}
+              </div>
+            )}
+            <div>FPS: {fps}</div>
+            {drawn !== null && (
+              <div data-testid="viewer-drawn" data-drawn={drawn} data-pixel-ratio={pixelRatio} data-motion={motionInfo}>
+                그리는 중: {drawn.toLocaleString()}개 · 배율 {pixelRatio} · {motionInfo}
+              </div>
+            )}
+          </div>
         </div>
+
+        {stats.status === 'loading' && loadProgress && (
+          <div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center"
+            data-testid="viewer-loading"
+            data-phase={loadProgress.phase}
+            data-percent={loadProgress.percent ?? ''}
+          >
+            <div className="w-72 max-w-[80%] space-y-3 rounded-2xl bg-surface p-5 text-center text-sm font-semibold shadow-float" role="status">
+              <p>{loadingLabel(loadProgress)}</p>
+              <progress className="h-2 w-full accent-accent" max={100} value={loadingBarValue(loadProgress)} />
+            </div>
+          </div>
+        )}
+
+        {stats.status === 'error' && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+            <p className="rounded-2xl bg-surface px-5 py-4 text-sm text-danger shadow-float" role="alert">
+              3D 파일을 열지 못했습니다. 새로고침해 보세요.
+            </p>
+          </div>
+        )}
+
+        {/* 아래 줄: 보정 상태와 출처 */}
+        {ready && (
+          <div className="pointer-events-none absolute inset-x-3 bottom-7 flex flex-col items-start gap-1.5 text-xs text-ink-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between lg:bottom-3">
+            {calibrated ? (
+              <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-calibrated">
+                <span className="h-[7px] w-[7px] rounded-full bg-ok-dot" aria-hidden="true" />
+                크기 보정됨 <span className="font-mono">(m)</span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-uncalibrated">
+                <span className="h-[7px] w-[7px] rounded-full bg-warn-dot" aria-hidden="true" />
+                {canEdit || !url ? '크기 보정을 하면 가구를 놓을 수 있습니다' : '아직 크기 보정을 하지 않은 방입니다'}
+              </span>
+            )}
+            {credit && (
+              <span className="max-w-full truncate rounded-full bg-surface/95 px-3 py-1.5 sm:max-w-[60%]" data-testid="room-credit" title={credit}>
+                출처: {credit}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {stats.status === 'loading' && loadProgress && (
-        <div
-          className="pointer-events-none absolute inset-0 flex items-center justify-center"
-          data-testid="viewer-loading"
-          data-phase={loadProgress.phase}
-          data-percent={loadProgress.percent ?? ''}
-        >
-          <div className="w-64 max-w-[80%] space-y-2 rounded bg-black/70 p-4 text-center text-sm text-white" role="status">
-            <p>{loadingLabel(loadProgress)}</p>
-            <progress className="w-full" max={100} value={loadingBarValue(loadProgress)} />
-          </div>
-        </div>
-      )}
-
-      {stats.status === 'ready' && room?.key === sceneKey && (
+      {calibrated && room && (
         <FurnitureLayer
           key={`furniture|${sceneKey}|${layoutNonce}`}
+          slots={slots}
+          showPlan={showPlan}
+          onShowPlan={setShowPlan}
           engineRef={engineRef}
           floorPolygon={room.polygon}
           catalog={catalog}
           openings={shownOpenings}
+          aiOpeningKeys={liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.aiKeys : NO_KEYS}
           userFurniture={userFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
@@ -516,13 +629,15 @@ export default function SplatViewer({
           aiSummary={currentLayout?.aiSummary ?? null}
         />
       )}
-      {stats.status === 'ready' && room?.key === sceneKey && (
+      {calibrated && room && (
         <OpeningsTool
           key={`openings|${sceneKey}|${roomPolygonKey}`}
+          slots={slots}
           engineRef={engineRef}
           floorPolygon={room.polygon}
           initial={savedOpenings}
-          onChange={(items) => setLiveOpenings({ key: roomPolygonKey, items })}
+          onChange={(items, aiKeys) => setLiveOpenings({ key: roomPolygonKey, items, aiKeys })}
+          onLook={() => setShowPlan(false)}
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
@@ -530,21 +645,23 @@ export default function SplatViewer({
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
-      {stats.status === 'ready' && roomId && (
+      {ready && roomId && (
         <AnalysisPanel
+          slots={slots}
           engineRef={engineRef}
           roomId={roomId}
-          floorPolygon={room?.key === sceneKey ? room.polygon : null}
+          floorPolygon={calibrated && room ? room.polygon : null}
           canAnalyze={canEdit && signedIn}
           initialReport={initialReport}
           aiRemaining={aiRemaining}
           onRemaining={setAiRemaining}
+          onReport={() => setHasReport(true)}
         />
       )}
-      {/* 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만 */}
-      {stats.status === 'ready' && (!url || canEdit) && (
+      {ready && (!url || canEdit) && (
         <CalibrationTool
           key={sceneKey}
+          slots={slots}
           engineRef={engineRef}
           initial={url && calibration ? { transform: calibration.transform, floorPolygon: calibration.floorPolygon } : null}
           onSave={roomId && canEdit ? saveCalibration : undefined}

@@ -6,6 +6,7 @@ import { CAPTURE_LONG_SIDE, capturePlan, capturePlanAround, MAX_ANALYSIS_IMAGES,
 import type { Point2 } from '@/lib/three/floorDrag';
 import { captureViews, photoToJpegBase64 } from '@/lib/three/capture';
 import type { Engine } from './engine';
+import { AiBadge, PanelBody, PanelFooter, PanelTitle, SectionTitle, ToolPanel, type Slots } from './workspace';
 
 type Phase = { kind: 'idle' } | { kind: 'capturing'; done: number; total: number } | { kind: 'sending' };
 type Photo = { name: string; data: string };
@@ -15,6 +16,7 @@ type Photo = { name: string; data: string };
  * 리포트는 방을 볼 수 있는 사람 모두에게 보이고, 분석은 방 주인만 시작할 수 있다.
  */
 export default function AnalysisPanel({
+  slots,
   engineRef,
   roomId,
   floorPolygon,
@@ -22,7 +24,10 @@ export default function AnalysisPanel({
   initialReport,
   aiRemaining,
   onRemaining,
+  onReport,
 }: {
+  /** 패널을 그려 넣을 자리 */
+  slots: Slots;
   engineRef: RefObject<Engine | null>;
   roomId: string;
   /** 보정된 방의 평면도. 있으면 방 안의 자리에서, 없으면 지금 서 있는 자리에서 둘러보며 캡처한다 */
@@ -33,8 +38,9 @@ export default function AnalysisPanel({
   /** 오늘 남은 AI 횟수 (모르면 null) */
   aiRemaining: number | null;
   onRemaining: (remaining: number) => void;
+  /** 새 리포트가 생겼음을 알린다 (도구 줄에 표시하려고) */
+  onReport?: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [report, setReport] = useState<SavedReport | null>(initialReport);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const [message, setMessage] = useState<string | null>(null);
@@ -95,6 +101,7 @@ export default function AnalysisPanel({
         return;
       }
       setReport({ id: json.report.id, model: json.report.model ?? '', createdAt: json.report.createdAt ?? '', report: parsed });
+      onReport?.();
       if (typeof json.remaining === 'number') onRemaining(json.remaining);
     } catch (err) {
       console.error(err);
@@ -106,91 +113,86 @@ export default function AnalysisPanel({
 
   const noQuota = aiRemaining === 0;
   return (
-    <>
-      <button
-        className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded bg-black/75 px-3 py-2 text-xs text-white"
-        onClick={() => setOpen((prev) => !prev)}
-        data-testid="analysis-toggle"
-        aria-pressed={open}
-      >
-        방 분석{report ? ' ✓' : ''}
-      </button>
-      {open && (
-        <div
-          className="absolute bottom-14 left-1/2 max-h-[60%] w-80 max-w-[calc(100%-1rem)] -translate-x-1/2 space-y-2 overflow-y-auto rounded bg-black/85 p-3 text-xs text-white"
-          data-testid="analysis-panel"
-          data-phase={phase.kind}
+    <ToolPanel slots={slots} tool="analysis" data-testid="analysis-panel" data-phase={phase.kind}>
+      <PanelBody>
+        <PanelTitle
+          right={
+            report &&
+            !Number.isNaN(new Date(report.createdAt).getTime()) && (
+              <span className="font-mono text-xs text-mute">
+                {new Date(report.createdAt).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })}
+              </span>
+            )
+          }
         >
-          <div className="flex items-center justify-between">
-            <strong>AI 방 분석</strong>
-            <button className="rounded bg-white/20 px-2 py-0.5" onClick={() => setOpen(false)}>
-              닫기
+          <AiBadge />방 분석
+        </PanelTitle>
+        {report ? (
+          <RoomReportView saved={report} />
+        ) : (
+          <p className="rounded-xl bg-ground p-4 text-[13px] text-body" data-testid="analysis-empty">
+            아직 분석한 적이 없습니다.{canAnalyze ? ' 아래 버튼을 누르면 AI가 방의 옵션·수납·채광·상태를 살펴봅니다.' : ' 방 주인이 분석하면 여기에 보입니다.'}
+          </p>
+        )}
+        {message && (
+          <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="analysis-message">
+            {message}
+          </p>
+        )}
+        {sent.length > 0 && (
+          <div className="flex flex-col gap-2" data-testid="analysis-sent" data-count={sent.length}>
+            <SectionTitle>
+              보낸 그림 <span className="font-mono font-medium text-mute">{sent.length}</span>
+            </SectionTitle>
+            <div className="flex flex-wrap gap-1.5">
+              {sent.map((data, index) => (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={index} className="h-11 rounded-md" alt={`그림 ${index + 1}`} title={`그림 ${index + 1}`} src={`data:image/jpeg;base64,${data}`} />
+              ))}
+            </div>
+          </div>
+        )}
+      </PanelBody>
+
+      {canAnalyze && (
+        <PanelFooter data-testid="analysis-controls" data-remaining={aiRemaining ?? ''}>
+          <p className="text-xs text-pretty text-sub">
+            3D 화면을 여러 방향에서 캡처한 그림{photos.length > 0 ? `과 넣은 사진 ${photos.length}장` : ''}을 Google Gemini로 보내 옵션·수납·채광·상태를 살펴봅니다. 놓아 둔 가상 가구는 그림에 넣지
+            않고, 그림은 저장하지 않습니다.{aiRemaining !== null ? ` 오늘 ${aiRemaining}회 남음.` : ''}
+          </p>
+          {photos.length > 0 && (
+            <p className="text-xs text-body" data-testid="analysis-photo-list" data-count={photos.length}>
+              사진 {photos.length}장: {photos.map((p) => p.name).join(', ')}{' '}
+              <button className="font-semibold text-accent underline" disabled={busy} onClick={() => setPhotos([])}>
+                빼기
+              </button>
+            </p>
+          )}
+          <div className="flex gap-2">
+            <label className={`btn btn-outline h-11 flex-1 cursor-pointer px-2 text-sm font-medium ${busy ? 'pointer-events-none opacity-50' : ''}`}>
+              사진 넣기 (선택)
+              <input
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                disabled={busy}
+                data-testid="analysis-photos"
+                onChange={(e) => {
+                  void addPhotos(e.target.files);
+                  e.target.value = '';
+                }}
+              />
+            </label>
+            <button className="btn btn-primary h-11 min-w-0 flex-1 px-2 text-sm" disabled={busy || noQuota} onClick={run} data-testid="analysis-run">
+              {phase.kind === 'capturing' && `화면 캡처 중 (${phase.done}/${phase.total})`}
+              {phase.kind === 'sending' && 'AI가 분석하는 중… (10~40초)'}
+              {phase.kind === 'idle' && (report ? '다시 분석' : '분석 시작')}
             </button>
           </div>
-          {report ? (
-            <RoomReportView saved={report} />
-          ) : (
-            <p className="opacity-80" data-testid="analysis-empty">
-              아직 분석한 적이 없습니다.{canAnalyze ? '' : ' 방 주인이 분석하면 여기에 보입니다.'}
-            </p>
-          )}
-          {canAnalyze && (
-            <div className="space-y-1 border-t border-white/20 pt-2" data-testid="analysis-controls" data-remaining={aiRemaining ?? ''}>
-              <p className="opacity-80">
-                3D 화면을 여러 방향에서 캡처한 그림{photos.length > 0 ? `과 넣은 사진 ${photos.length}장` : ''}을 Google Gemini로 보내 옵션·수납·채광·상태를 살펴봅니다. 놓아 둔 가상 가구는 그림에 넣지
-                않고, 그림은 저장하지 않습니다.{aiRemaining !== null ? ` 오늘 ${aiRemaining}회 남음.` : ''}
-              </p>
-              <label className="inline-block cursor-pointer rounded bg-white/20 px-2 py-1">
-                사진 넣기 (선택)
-                <input
-                  type="file"
-                  accept="image/*"
-                  multiple
-                  className="hidden"
-                  disabled={busy}
-                  data-testid="analysis-photos"
-                  onChange={(e) => {
-                    void addPhotos(e.target.files);
-                    e.target.value = '';
-                  }}
-                />
-              </label>
-              {photos.length > 0 && (
-                <p data-testid="analysis-photo-list" data-count={photos.length}>
-                  사진 {photos.length}장: {photos.map((p) => p.name).join(', ')}{' '}
-                  <button className="underline" disabled={busy} onClick={() => setPhotos([])}>
-                    빼기
-                  </button>
-                </p>
-              )}
-              <div>
-                <button className="rounded bg-violet-600 px-2 py-1 disabled:opacity-50" disabled={busy || noQuota} onClick={run} data-testid="analysis-run">
-                  {phase.kind === 'capturing' && `화면 캡처 중 (${phase.done}/${phase.total})`}
-                  {phase.kind === 'sending' && 'AI가 분석하는 중… (10~40초)'}
-                  {phase.kind === 'idle' && (report ? '다시 분석' : '분석 시작')}
-                </button>
-              </div>
-              {noQuota && <p className="opacity-80">오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.</p>}
-            </div>
-          )}
-          {message && (
-            <p className="text-amber-300" data-testid="analysis-message">
-              {message}
-            </p>
-          )}
-          {sent.length > 0 && (
-            <div data-testid="analysis-sent" data-count={sent.length}>
-              <p className="opacity-70">보낸 그림 {sent.length}장</p>
-              <div className="flex flex-wrap gap-1">
-                {sent.map((data, index) => (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img key={index} className="h-10 rounded" alt={`그림 ${index + 1}`} title={`그림 ${index + 1}`} src={`data:image/jpeg;base64,${data}`} />
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
+          {noQuota && <p className="text-xs text-body">오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.</p>}
+        </PanelFooter>
       )}
-    </>
+    </ToolPanel>
   );
 }
