@@ -152,10 +152,10 @@ export default function CalibrationTool({
     }
   }, [taps, length, floor.plane, cornersDone, cornerCount, square]);
 
-  // 찍은 점 표시 (roomGroup의 자식이라 보정을 적용하면 함께 움직인다)
+  // 찍은 점 표시 (roomGroup의 자식이라 보정을 적용하면 함께 움직인다). 다른 도구를 쓰는 동안에는 가구·문 표시와 섞이지 않게 숨긴다
   useEffect(() => {
     const engine = engineRef.current;
-    if (!engine || taps.length === 0) return;
+    if (!engine || taps.length === 0 || !active) return;
     const group = new THREE.Group();
     const disposables: { dispose: () => void }[] = [];
     const overlay = { depthTest: false, transparent: true };
@@ -198,7 +198,7 @@ export default function CalibrationTool({
       engine.roomGroup.remove(group);
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, taps, floor.corners, cornersDone]);
+  }, [engineRef, taps, floor.corners, cornersDone, active]);
 
   // 보정 적용 후 바닥(y=0)에 1m 격자 표시 (이 도구를 보고 있을 때만)
   useEffect(() => {
