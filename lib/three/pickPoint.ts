@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { utils, type PackedSplats, type SplatMesh } from '@sparkjsdev/spark';
-import { pickSurfaceAlongRay, type SplatVisitor } from './splatPick';
+import { isRenderedLodIndex, pickSurfaceAlongRay, type SplatVisitor } from './splatPick';
 
 export type PickResult = {
   /** 표면 위의 점 (월드 좌표) */
@@ -49,6 +49,7 @@ function visitRenderedSplats(mesh: SplatMesh): ((visit: SplatVisitor) => void) |
   if (!indices || count === 0) return null; // 아직 한 번도 그려지지 않음
   return (visit) => {
     for (let i = 0; i < count; i += 1) {
+      if (!isRenderedLodIndex(indices[i], count)) continue;
       const s = utils.unpackSplat(packedArray, indices[i], splatEncoding);
       visit(s.center, s.scales, s.quaternion, s.opacity);
     }

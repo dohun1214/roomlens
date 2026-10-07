@@ -34,6 +34,16 @@ export type SurfacePick = {
   profile?: [number, number][];
 };
 
+/**
+ * LOD로 그릴 때 "지금 그리는 스플랫"의 번호 목록에서 쓸 수 있는 번호인지.
+ * Spark가 목록을 바꾸는 사이에는 그리는 수(count)만 먼저 늘고 목록 끝이 0으로 남아 있을 때가 있다(실측: 그리는 수가
+ * 상한에 닿은 큰 장면에서 화면을 돌린 직후 몇 초). 0번은 LOD 트리의 뿌리, 곧 장면 전체를 뭉친 아주 큰 스플랫이라
+ * 이것을 표면으로 보면 탭한 점이 방 한가운데 허공에 찍힌다. 뿌리 하나만 그리는 경우가 아니면 0번은 건너뛴다.
+ */
+export function isRenderedLodIndex(index: number, count: number): boolean {
+  return index !== 0 || count === 1;
+}
+
 const CUTOFF_SIGMA = 3;
 const MIN_WEIGHT = 1 / 255;
 const MAX_ALPHA = 0.99;
