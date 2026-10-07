@@ -17,6 +17,7 @@ import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClie
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
 import { ToolRail, type Slots, type ToolId } from './workspace';
+import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
@@ -132,6 +133,9 @@ export default function SplatViewer({
   const [flipped, setFlipped] = useState(calibration?.flipX ?? false);
   // 보정이 적용된 방의 평면도. 다른 파일을 열면 key가 달라져 무시된다.
   const [room, setRoom] = useState<{ key: string; polygon: Point2[] } | null>(null);
+  /** 키보드로 걸을 때 1초에 가는 거리 (지금 장면의 단위) */
+  const walkSpeedRef = useRef(WALK_SPEED);
+  const rawSpeedRef = useRef(WALK_SPEED);
   const [urlInput, setUrlInput] = useState(
     () => url ?? (new URLSearchParams(window.location.search).get('url') || SAMPLE_SPLAT_URL),
   );
@@ -179,9 +183,46 @@ export default function SplatViewer({
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
 
+    // 키보드로 걸어 다니기 (W A S D·방향키, Q E, Shift). 글자를 넣는 중에는 움직이지 않는다
+    const pressed = new Set<string>();
+    const viewDir = new THREE.Vector3();
+    const upDir = new THREE.Vector3();
+    const step = new THREE.Vector3();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.ctrlKey || event.metaKey || event.altKey || isTypingTarget(event.target as HTMLElement | null)) return;
+      if (isMoveKey(event.code)) {
+        pressed.add(event.code);
+        // 방향키로 페이지가 밀리지 않게
+        if (event.code.startsWith('Arrow')) event.preventDefault();
+      } else if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        pressed.add(event.code);
+      }
+    };
+    const onKeyUp = (event: KeyboardEvent) => pressed.delete(event.code);
+    const releaseKeys = () => pressed.clear();
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', releaseKeys);
+    document.addEventListener('visibilitychange', releaseKeys);
+    // 입력 칸으로 초점이 옮겨 가면 keyup을 받지 못하므로 그때도 멈춘다
+    window.addEventListener('focusin', releaseKeys);
+
     let frames = 0;
     let last = performance.now();
+    let lastFrame = performance.now();
     renderer.setAnimationLoop(() => {
+      const frameNow = performance.now();
+      if (pressed.size > 0 && controls.enabled) {
+        camera.getWorldDirection(viewDir);
+        upDir.set(0, 1, 0).applyQuaternion(camera.quaternion);
+        const delta = moveStep(pressed, viewDir.toArray(), upDir.toArray(), (frameNow - lastFrame) / 1000, walkSpeedRef.current);
+        if (delta) {
+          step.set(...delta);
+          camera.position.add(step);
+          controls.target.add(step);
+        }
+      }
+      lastFrame = frameNow;
       controls.update();
       renderer.render(scene, camera);
       frames += 1;
@@ -210,6 +251,11 @@ export default function SplatViewer({
 
     return () => {
       ro.disconnect();
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', releaseKeys);
+      document.removeEventListener('visibilitychange', releaseKeys);
+      window.removeEventListener('focusin', releaseKeys);
       renderer.setAnimationLoop(null);
       engineRef.current?.splat?.dispose();
       controls.dispose();
@@ -274,9 +320,13 @@ export default function SplatViewer({
         engine.camera.far = 200;
         engine.camera.updateProjectionMatrix();
         engine.controls.update();
+        // 보정 전 단위로는 1m가 1/s 이다 (보정을 풀었을 때 쓰는 빠르기)
+        rawSpeedRef.current = WALK_SPEED / saved.transform.s;
         setRoom({ key: `${name}|${loadMs}|${flippedRef.current}`, polygon: saved.floorPolygon });
       } else {
-        frameCamera(engine, splat);
+        // 크기를 모르는 장면: 장면 크기에 견줘 걷는 빠르기를 정한다
+        const size = frameCamera(engine, splat);
+        rawSpeedRef.current = size ? size * 0.1 : WALK_SPEED;
       }
 
       // lod: true 이면 원본 배열은 비고 LOD 트리(lodSplats)만 남는다.
@@ -428,6 +478,10 @@ export default function SplatViewer({
   // 지금 쓸 수 있는 도구와 고른 도구
   const ready = stats.status === 'ready';
   const calibrated = ready && room?.key === sceneKey;
+  useEffect(() => {
+    // 보정된 방은 m 단위이므로 걷는 빠르기가 정해져 있다
+    walkSpeedRef.current = calibrated ? WALK_SPEED : rawSpeedRef.current;
+  }, [calibrated, ready, sceneKey]);
   const tools: ToolId[] = [];
   if (calibrated) tools.push('furniture', 'openings');
   // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
@@ -581,17 +635,27 @@ export default function SplatViewer({
         {/* 아래 줄: 보정 상태와 출처 */}
         {ready && (
           <div className="pointer-events-none absolute inset-x-3 bottom-7 flex flex-col items-start gap-1.5 text-xs text-ink-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between lg:bottom-3">
-            {calibrated ? (
-              <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-calibrated">
-                <span className="h-[7px] w-[7px] rounded-full bg-ok-dot" aria-hidden="true" />
-                크기 보정됨 <span className="font-mono">(m)</span>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {calibrated ? (
+                <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-calibrated">
+                  <span className="h-[7px] w-[7px] rounded-full bg-ok-dot" aria-hidden="true" />
+                  크기 보정됨 <span className="font-mono">(m)</span>
+                </span>
+              ) : (
+                <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-uncalibrated">
+                  <span className="h-[7px] w-[7px] rounded-full bg-warn-dot" aria-hidden="true" />
+                  {canEdit || !url ? '크기 보정을 하면 가구를 놓을 수 있습니다' : '아직 크기 보정을 하지 않은 방입니다'}
+                </span>
+              )}
+              {/* 키보드가 있는 큰 화면에서만: 걸어 다니는 키 안내 */}
+              <span className="hidden items-center gap-1.5 rounded-full bg-surface/95 px-3 py-1.5 lg:flex" data-testid="stage-keys">
+                이동 <kbd className="font-mono text-ink">W A S D</kbd>
+                <span className="text-mute" aria-hidden="true">·</span>
+                높이 <kbd className="font-mono text-ink">Q E</kbd>
+                <span className="text-mute" aria-hidden="true">·</span>
+                빠르게 <kbd className="font-mono text-ink">Shift</kbd>
               </span>
-            ) : (
-              <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-uncalibrated">
-                <span className="h-[7px] w-[7px] rounded-full bg-warn-dot" aria-hidden="true" />
-                {canEdit || !url ? '크기 보정을 하면 가구를 놓을 수 있습니다' : '아직 크기 보정을 하지 않은 방입니다'}
-              </span>
-            )}
+            </div>
             {credit && (
               <span className="max-w-full truncate rounded-full bg-surface/95 px-3 py-1.5 sm:max-w-[60%]" data-testid="room-credit" title={credit}>
                 출처: {credit}
@@ -695,11 +759,12 @@ function robustBounds(packed: PackedSplats, maxSamples = 200_000): THREE.Box3 | 
   return new THREE.Box3(min, max);
 }
 
-function frameCamera(engine: Engine, splat: SplatMesh) {
+/** 장면 전체가 보이는 자리로 카메라를 옮기고 장면의 크기(대각선 길이)를 돌려준다 */
+function frameCamera(engine: Engine, splat: SplatMesh): number | null {
   const packed = splat.packedSplats;
   const source = packed?.numSplats ? packed : packed?.lodSplats;
   const box = source ? robustBounds(source) : null;
-  if (!box || box.isEmpty()) return;
+  if (!box || box.isEmpty()) return null;
   splat.updateMatrixWorld(true);
   box.applyMatrix4(splat.matrixWorld);
   const center = box.getCenter(new THREE.Vector3());
@@ -715,4 +780,5 @@ function frameCamera(engine: Engine, splat: SplatMesh) {
   engine.camera.far = Math.max(100, size * 10);
   engine.camera.updateProjectionMatrix();
   engine.controls.update();
+  return size;
 }
