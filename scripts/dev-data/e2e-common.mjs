@@ -70,6 +70,8 @@ export async function moveCamera(page, position, target, waitMs = 2500) {
   await page.evaluate(
     async ({ position, target, waitMs }) => {
       const e = window.__roomlens;
+      // 실측은 방 밖이나 천장 위에서도 내려다보므로 카메라를 방 안에 가두지 않는다 (가두는 것은 e2e-camera-bounds가 본다)
+      e.freeCamera = true;
       e.camera.position.set(...position);
       e.controls.target.set(...target);
       e.camera.near = 0.05;

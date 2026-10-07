@@ -17,6 +17,7 @@ import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClie
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
 import { ToolRail, type Slots, type ToolId } from './workspace';
+import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
@@ -136,6 +137,10 @@ export default function SplatViewer({
   /** 키보드로 걸을 때 1초에 가는 거리 (지금 장면의 단위) */
   const walkSpeedRef = useRef(WALK_SPEED);
   const rawSpeedRef = useRef(WALK_SPEED);
+  /** 카메라를 방 안에 머물게 할지 (보정된 방에서만 쓸 수 있다) */
+  const [stayInside, setStayInside] = useState(true);
+  /** 카메라가 머물 범위: 바닥 평면도와 천장 높이. null이면 막지 않는다 */
+  const boundsRef = useRef<{ polygon: Point2[]; ceilingY: number | null } | null>(null);
   const [urlInput, setUrlInput] = useState(
     () => url ?? (new URLSearchParams(window.location.search).get('url') || SAMPLE_SPLAT_URL),
   );
@@ -210,20 +215,40 @@ export default function SplatViewer({
     let frames = 0;
     let last = performance.now();
     let lastFrame = performance.now();
+    let lastGood: Point2 | null = null;
     renderer.setAnimationLoop(() => {
       const frameNow = performance.now();
+      // 캡처처럼 카메라를 직접 옮기는 동안(controls.enabled = false)과 실측의 자유 카메라에서는 막지 않는다
+      const bounds = controls.enabled && !engineRef.current?.freeCamera ? boundsRef.current : null;
       if (pressed.size > 0 && controls.enabled) {
         camera.getWorldDirection(viewDir);
         upDir.set(0, 1, 0).applyQuaternion(camera.quaternion);
         const delta = moveStep(pressed, viewDir.toArray(), upDir.toArray(), (frameNow - lastFrame) / 1000, walkSpeedRef.current);
         if (delta) {
           step.set(...delta);
+          if (bounds) {
+            // 벽에 막히면 막힌 만큼만 간다. 돌리는 중심도 같은 만큼만 옮겨야 벽 너머로 달아나지 않는다
+            const wanted: [number, number, number] = [camera.position.x + step.x, camera.position.y + step.y, camera.position.z + step.z];
+            const allowed = keepCameraInRoom(wanted, bounds.polygon, bounds.ceilingY, lastGood) ?? wanted;
+            step.set(allowed[0] - camera.position.x, allowed[1] - camera.position.y, allowed[2] - camera.position.z);
+          }
           camera.position.add(step);
           controls.target.add(step);
         }
       }
       lastFrame = frameNow;
       controls.update();
+      if (bounds) {
+        // 마우스로 돌리거나 물러나다 벽을 넘은 경우: 카메라만 방 안으로 데려오고 보던 곳은 그대로 본다
+        const fixed = keepCameraInRoom(camera.position.toArray(), bounds.polygon, bounds.ceilingY, lastGood);
+        if (fixed) {
+          camera.position.set(...fixed);
+          camera.lookAt(controls.target);
+        }
+        lastGood = [camera.position.x, camera.position.z];
+      } else {
+        lastGood = null;
+      }
       renderer.render(scene, camera);
       frames += 1;
       const now = performance.now();
@@ -482,6 +507,15 @@ export default function SplatViewer({
     // 보정된 방은 m 단위이므로 걷는 빠르기가 정해져 있다
     walkSpeedRef.current = calibrated ? WALK_SPEED : rawSpeedRef.current;
   }, [calibrated, ready, sceneKey]);
+  const roomPolygon = calibrated && room ? room.polygon : null;
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine || !roomPolygon || !stayInside) {
+      boundsRef.current = null;
+      return;
+    }
+    boundsRef.current = { polygon: roomPolygon, ceilingY: engine.splat ? sceneTopY(engine.splat) : null };
+  }, [roomPolygon, stayInside]);
   const tools: ToolId[] = [];
   if (calibrated) tools.push('furniture', 'openings');
   // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
@@ -647,6 +681,20 @@ export default function SplatViewer({
                   {canEdit || !url ? '크기 보정을 하면 가구를 놓을 수 있습니다' : '아직 크기 보정을 하지 않은 방입니다'}
                 </span>
               )}
+              {calibrated && (
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={stayInside}
+                  onClick={() => setStayInside((v) => !v)}
+                  className="pointer-events-auto flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5 hover:bg-surface"
+                  title={stayInside ? '카메라가 벽·바닥·천장 밖으로 나가지 않습니다. 누르면 풉니다.' : '카메라가 방 밖으로도 나갑니다. 누르면 방 안에 머뭅니다.'}
+                  data-testid="stay-inside"
+                >
+                  방 안에서만
+                  <span className={`rounded-full px-1.5 py-px text-[11px] font-semibold ${stayInside ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{stayInside ? '켬' : '끔'}</span>
+                </button>
+              )}
               {/* 키보드가 있는 큰 화면에서만: 걸어 다니는 키 안내 */}
               <span className="hidden items-center gap-1.5 rounded-full bg-surface/95 px-3 py-1.5 lg:flex" data-testid="stage-keys">
                 이동 <kbd className="font-mono text-ink">W A S D</kbd>
@@ -757,6 +805,17 @@ function robustBounds(packed: PackedSplats, maxSamples = 200_000): THREE.Box3 | 
   const min = new THREE.Vector3(q(xs, 0.02), q(ys, 0.02), q(zs, 0.02));
   const max = new THREE.Vector3(q(xs, 0.98), q(ys, 0.98), q(zs, 0.98));
   return new THREE.Box3(min, max);
+}
+
+/** 스캔의 맨 위 높이(지금 좌표 기준). 보정된 방에서는 천장 높이(m)쯤이다 */
+function sceneTopY(splat: SplatMesh): number | null {
+  const packed = splat.packedSplats;
+  const source = packed?.numSplats ? packed : packed?.lodSplats;
+  const box = source ? robustBounds(source) : null;
+  if (!box || box.isEmpty()) return null;
+  splat.updateWorldMatrix(true, false);
+  box.applyMatrix4(splat.matrixWorld);
+  return Number.isFinite(box.max.y) ? box.max.y : null;
 }
 
 /** 장면 전체가 보이는 자리로 카메라를 옮기고 장면의 크기(대각선 길이)를 돌려준다 */
