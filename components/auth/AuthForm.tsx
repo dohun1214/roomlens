@@ -1,6 +1,5 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { useState, type FormEvent } from 'react';
 import { authErrorMessage, PASSWORD_MIN_LENGTH, validateSignUp } from '@/lib/auth/messages';
 import { createClient } from '@/lib/supabase/client';
@@ -8,7 +7,6 @@ import { createClient } from '@/lib/supabase/client';
 type Mode = 'login' | 'signup';
 
 export default function AuthForm({ next }: { next: string }) {
-  const router = useRouter();
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -31,6 +29,7 @@ export default function AuthForm({ next }: { next: string }) {
 
     setBusy(true);
     const supabase = createClient();
+    let leaving = false;
     try {
       if (mode === 'login') {
         const { error: signInError } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
@@ -57,10 +56,12 @@ export default function AuthForm({ next }: { next: string }) {
           .eq('id', data.user.id);
         if (profileError) console.error(profileError);
       }
-      router.replace(next);
-      router.refresh();
+      // 화면을 새로 받아서 넘어간다. 화면 안에서만 넘어가면(router.replace) 로그인 전에 받아 둔
+      // "로그인 화면으로 돌려보내기"가 그대로 쓰여, 방 만들기를 누르고 가입한 사람이 빈 화면에 멈춘다(실측)
+      leaving = true;
+      window.location.assign(next);
     } finally {
-      setBusy(false);
+      if (!leaving) setBusy(false);
     }
   };
 

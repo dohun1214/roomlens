@@ -86,6 +86,17 @@ try {
   await page.getByRole('button', { name: '가입하기' }).click();
   check('이미 가입된 이메일 → 안내 문구', (await alertText()).includes('이미 가입'), null);
 
+  // 9) 홈에서 "방 만들기"를 눌러 로그인 화면으로 온 사람: 로그인하면 방 만들기 화면으로 넘어간다
+  //    (주소를 직접 여는 것과 달리, 화면 안에서 눌러 오면 "로그인으로 돌려보내기"가 브라우저에 남아 있다)
+  await page.goto(`${appUrl}/`);
+  await page.getByRole('link', { name: '방 만들기' }).first().click();
+  await page.waitForURL('**/login?next=**', { timeout: 15000 });
+  await page.getByLabel('이메일').fill(email);
+  await page.getByLabel(/비밀번호/).fill(password);
+  await page.getByRole('button', { name: '로그인', exact: true }).last().click();
+  const arrived = await page.waitForURL('**/rooms/new', { timeout: 15000 }).then(() => true, () => false);
+  check('방 만들기를 눌러 온 로그인 → 방 만들기 화면으로 (빈 화면에 멈추지 않음)', arrived && (await page.getByTestId('room-form').isVisible()), page.url());
+
   check('브라우저 콘솔 오류 없음', errors.filter((e) => !e.includes('400') && !e.includes('422')).length === 0, errors.slice(0, 3));
 } catch (err) {
   check('예외 없이 끝까지 실행', false, String(err).slice(0, 300));
