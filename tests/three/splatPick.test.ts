@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { pickSurfaceAlongRay, type Quat, type SplatVisitor, type Vec3 } from '@/lib/three/splatPick';
+import { isRenderedLodIndex, pickSurfaceAlongRay, type Quat, type SplatVisitor, type Vec3 } from '@/lib/three/splatPick';
 
 type Splat = { center: Vec3; scales: Vec3; quaternion: Quat; opacity: number };
 
@@ -139,5 +139,30 @@ describe('pickSurfaceAlongRay', () => {
     const scene = [...plane(0, 0.07), ...plane(-1.6, 0.45)];
     const hit = hitPoint(scene, new THREE.Vector3(0, 2.2, 0), new THREE.Vector3(0, 0, 0));
     expect(hit!.point.y).toBeCloseTo(0, 2);
+  });
+});
+
+describe('isRenderedLodIndex', () => {
+  it('목록 끝에 남은 0번(LOD 트리의 뿌리)은 건너뛴다', () => {
+    const indices = [266, 258, 3530628, 0, 0, 0];
+    expect(indices.filter((index) => isRenderedLodIndex(index, indices.length))).toEqual([266, 258, 3530628]);
+  });
+
+  it('뿌리 하나만 그리는 경우에는 쓴다', () => {
+    expect(isRenderedLodIndex(0, 1)).toBe(true);
+  });
+
+  it('방 한가운데의 아주 큰 뿌리 스플랫을 빼면 탭한 점이 허공이 아니라 벽에 찍힌다', () => {
+    // 5m 앞의 벽(얇고 넓은 스플랫들)과, 2m 앞 방 가운데에 놓인 장면 전체 크기의 뿌리 스플랫
+    const wall: Splat[] = [-0.1, 0, 0.1].map((x) => ({ center: { x, y: 0, z: -5 }, scales: { x: 0.2, y: 0.2, z: 0.005 }, quaternion: IDENTITY, opacity: 0.9 }));
+    const root: Splat = { center: { x: 0.3, y: 0.2, z: -2 }, scales: { x: 3, y: 2, z: 4 }, quaternion: IDENTITY, opacity: 0.95 };
+    const origin = { x: 0, y: 0, z: 0 };
+    const direction = { x: 0, y: 0, z: -1 };
+    const withRoot = pickSurfaceAlongRay(visitAll([...wall, root, root, root]), origin, direction);
+    expect(withRoot?.distance).toBeCloseTo(2, 1);
+    const all = [root, ...wall, root, root];
+    const indices = [0, 1, 2, 3, 0, 0];
+    const kept = indices.filter((index) => isRenderedLodIndex(index, indices.length)).map((index) => all[index]);
+    expect(pickSurfaceAlongRay(visitAll(kept), origin, direction)?.distance).toBeCloseTo(5, 1);
   });
 });
