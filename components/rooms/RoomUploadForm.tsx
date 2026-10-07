@@ -252,7 +252,7 @@ export default function RoomUploadForm() {
           ) : (
             <>
               <span className="text-base font-bold">눌러서 3D 파일 고르기</span>
-              <span className="font-mono text-[13px] text-sub">.spz · .ply · 100MB 이하</span>
+              <span className="font-mono text-[13px] text-sub">.spz · .ply · .sog · 100MB 이하</span>
             </>
           )}
           <input
