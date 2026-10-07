@@ -668,8 +668,8 @@ export default function SplatViewer({
 
         {/* 아래 줄: 보정 상태와 출처 */}
         {ready && (
-          <div className="pointer-events-none absolute inset-x-3 bottom-7 flex flex-col items-start gap-1.5 text-xs text-ink-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between lg:bottom-3">
-            <div className="flex flex-wrap items-center gap-1.5">
+          <div className="pointer-events-none absolute inset-x-3 bottom-7 flex flex-col items-start gap-1.5 text-xs text-ink-2 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between lg:bottom-3 lg:flex-nowrap">
+            <div className="flex flex-wrap items-center gap-1.5 lg:shrink-0 lg:flex-nowrap">
               {calibrated ? (
                 <span className="flex items-center gap-2 rounded-full bg-surface/95 px-3 py-1.5" data-testid="stage-calibrated">
                   <span className="h-[7px] w-[7px] rounded-full bg-ok-dot" aria-hidden="true" />
@@ -695,8 +695,8 @@ export default function SplatViewer({
                   <span className={`rounded-full px-1.5 py-px text-[11px] font-semibold ${stayInside ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{stayInside ? '켬' : '끔'}</span>
                 </button>
               )}
-              {/* 키보드가 있는 큰 화면에서만: 걸어 다니는 키 안내 */}
-              <span className="hidden items-center gap-1.5 rounded-full bg-surface/95 px-3 py-1.5 lg:flex" data-testid="stage-keys">
+              {/* 키보드가 있는 넓은 화면에서만: 걸어 다니는 키 안내 (좁으면 아래 줄이 두 줄이 되어 고른 가구 띠를 가린다) */}
+              <span className="hidden items-center gap-1.5 rounded-full bg-surface/95 px-3 py-1.5 whitespace-nowrap xl:flex" data-testid="stage-keys">
                 이동 <kbd className="font-mono text-ink">W A S D</kbd>
                 <span className="text-mute" aria-hidden="true">·</span>
                 높이 <kbd className="font-mono text-ink">Q E</kbd>
@@ -705,7 +705,7 @@ export default function SplatViewer({
               </span>
             </div>
             {credit && (
-              <span className="max-w-full truncate rounded-full bg-surface/95 px-3 py-1.5 sm:max-w-[60%]" data-testid="room-credit" title={credit}>
+              <span className="max-w-full truncate rounded-full bg-surface/95 px-3 py-1.5 sm:max-w-[60%] lg:max-w-none lg:min-w-0" data-testid="room-credit" title={credit}>
                 출처: {credit}
               </span>
             )}
