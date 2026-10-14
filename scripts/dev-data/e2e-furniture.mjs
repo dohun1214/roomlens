@@ -91,14 +91,17 @@ try {
     { rotationDeg: desk.rotationDeg, gapCm: round(gapToFarWall(desk, polygon) * 100, 2) });
   await page.screenshot({ path: path.join(shotDir, `furniture-${scene}-wall.png`) });
 
-  // 4) 빈 곳을 끌면 화면이 돈다 (OrbitControls가 살아 있다)
+  // 4) 빈 곳을 끌면 화면이 돈다 (제자리에서 고개 돌리기)
+  const viewDir = () => page.evaluate(() => window.__roomlens.camera.getWorldDirection(window.__roomlens.camera.position.clone()).toArray());
+  const dirIdle = await viewDir();
   const camIdle = await camera();
   // 3D 화면(패널 오른쪽)의 왼쪽 아래: 가구가 없는 바닥
   const stage = await page.getByTestId('stage').boundingBox();
   const empty = { x: stage.x + stage.width * 0.2, y: stage.y + stage.height * 0.65 };
   await drag(empty, { x: empty.x + 120, y: empty.y + 20 });
   const camOrbit = await camera();
-  check('빈 곳을 끌면 화면이 돈다', camIdle.some((v, i) => Math.abs(v - camOrbit[i]) > 0.01), null);
+  const dirOrbit = await viewDir();
+  check('빈 곳을 끌면 화면이 돈다 (자리는 거의 그대로)', Math.hypot(...dirIdle.map((v, i) => v - dirOrbit[i])) > 0.05 && Math.hypot(...camIdle.map((v, i) => v - camOrbit[i])) < 0.15, null);
   const [same] = await items();
   check('화면을 돌릴 때 가구는 움직이지 않는다', same.x === desk.x && same.z === desk.z, null);
 

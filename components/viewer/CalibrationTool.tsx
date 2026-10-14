@@ -21,6 +21,7 @@ import { pickPoint, pointerToNdc } from '@/lib/three/pickPoint';
 import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
 import { PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
+import { gridSegmentsInside } from '@/lib/three/floorGrid';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다. */
 const TAP_MOVE_PX = 6;
@@ -204,18 +205,21 @@ export default function CalibrationTool({
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine || !applied || !active) return;
-    const grid = new THREE.GridHelper(20, 20, 0x3350e8, 0x6b7588);
-    grid.position.y = 0.01;
-    const material = grid.material as THREE.Material;
-    material.transparent = true;
-    material.opacity = 0.6;
+    // 방 안쪽 바닥에만 그린다 (스플랫은 깊이를 남기지 않아 방 밖의 선이 벽 위로 비쳐 보인다)
+    const segments = appliedPolygon ? gridSegmentsInside(appliedPolygon, 1) : [];
+    if (segments.length === 0) return;
+    const geometry = new THREE.BufferGeometry().setFromPoints(
+      segments.flatMap(([a, b]) => [new THREE.Vector3(a[0], 0.01, a[1]), new THREE.Vector3(b[0], 0.01, b[1])]),
+    );
+    const material = new THREE.LineBasicMaterial({ color: 0x6b7588, transparent: true, opacity: 0.6 });
+    const grid = new THREE.LineSegments(geometry, material);
     engine.scene.add(grid);
     return () => {
       engine.scene.remove(grid);
-      grid.geometry.dispose();
+      geometry.dispose();
       material.dispose();
     };
-  }, [engineRef, applied, active]);
+  }, [engineRef, applied, appliedPolygon, active]);
 
   // 도구가 사라질 때(다른 파일을 열 때 등) 보정을 되돌린다.
   // 저장된 보정으로 시작했다면 다시 적용해 둔다 (개발 모드에서는 이 effect가 두 번 돌면서 한 번 되돌려지기 때문).
@@ -263,6 +267,7 @@ export default function CalibrationTool({
     onApplied?.(null);
     setTaps([]);
     setCornersDone(false);
+    setLength('');
     setMessage(null);
   };
 
@@ -394,6 +399,9 @@ export default function CalibrationTool({
               </span>
               <span className="text-body">바닥 모서리가 가구에 가려졌으면 두 벽이 만나는 세로 선 위 아무 높이나 찍으세요.</span>
               <span className="text-body">ㄱ자처럼 꺾인 방은 꺾이는 곳마다 찍습니다. 다 찍었으면 아래 버튼을 누르세요.</span>
+              <span className="text-body" data-testid="calibration-near-hint">
+                멀리서 찍으면 화면의 한 점이 수십 cm가 됩니다. <b>W A S D</b>나 휠로 모서리에 3m 안쪽까지 다가가서 찍으세요.
+              </span>
               <span className="flex flex-wrap items-center gap-1">
                 {Array.from({ length: Math.max(cornerCount, 4) }, (_, i) => dot(i < cornerCount, cornerColor(i), i))}
               </span>

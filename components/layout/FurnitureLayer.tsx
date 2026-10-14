@@ -10,6 +10,7 @@ import type { AiResultView } from '@/lib/ai/suggestClient';
 import { MAX_SUGGEST_ITEMS } from '@/lib/ai/layoutSuggest';
 import { MAX_REQUEST_LENGTH } from '@/lib/ai/roomSummary';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
+import { lastInsideAlong } from '@/lib/layout/geometry';
 import {
   MAX_USER_FURNITURE,
   parseUserFurnitureForm,
@@ -64,6 +65,12 @@ type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint 
  * onSave가 있으면 저장 버튼을 보여주고, initialItems(저장된 배치)로 시작한다.
  * 배치를 바꾸거나(내 배치 ↔ AI 배치) 새로 추천받으면 부모가 key를 바꿔 이 층을 새로 만든다.
  */
+/** 방 좌표의 한 점이 지금 3D 화면 안(가장자리 10% 제외)에 보이는지 */
+function inView(engine: Engine, x: number, y: number, z: number): boolean {
+  const p = new THREE.Vector3(x, y, z).project(engine.camera);
+  return p.z > -1 && p.z < 1 && Math.abs(p.x) < 0.9 && Math.abs(p.y) < 0.9;
+}
+
 export default function FurnitureLayer({
   slots,
   showPlan,
@@ -345,7 +352,20 @@ export default function FurnitureLayer({
     // 되도록 가구의 쓰는 쪽(책상·수납의 앞 등)이 서로 막히지 않는 자리를 고른다
     const others = itemsRef.current;
     const doorZones = openings.flatMap((o) => (o.type === 'door' ? [doorZone(o, floorPolygon)] : [])).filter((zone) => zone !== null);
-    const placed = findFreeSpot(entry, [...others, ...doorZones], floorPolygon, (spot) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, others, floorPolygon));
+    const obstacles = [...others, ...doorZones];
+    const prefer = (spot: Footprint) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, others, floorPolygon);
+    let placed = findFreeSpot(entry, obstacles, floorPolygon, prefer);
+    // 3D로 보는 중인데 그 자리가 화면 밖이면(창문을 가까이 보고 있을 때 등) 추가된 줄 모른다 → 화면 가운데 바닥부터 찾는다
+    const engine = engineRef.current;
+    if (engine && !showPlan && !inView(engine, placed.x, entry.h / 2, placed.z)) {
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(0, 0), engine.camera);
+      const eye: Point2 = [engine.camera.position.x, engine.camera.position.z];
+      // 화면 가운데 광선이 바닥에 닿는 곳(바닥을 안 보면 2m 앞). 벽 너머면 벽 바로 앞까지 당긴다
+      const ahead = rayFloorPoint(ray.ray.origin, ray.ray.direction) ?? [eye[0] + ray.ray.direction.x * 2, eye[1] + ray.ray.direction.z * 2];
+      const start = floorPolygon ? lastInsideAlong(eye, ahead, floorPolygon) : ahead;
+      if (start) placed = findFreeSpot(entry, obstacles, floorPolygon, prefer, start);
+    }
     setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
   };
