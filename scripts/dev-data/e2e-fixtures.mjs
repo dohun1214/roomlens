@@ -162,7 +162,11 @@ try {
 
   // 3) 가구 도구: 새 가구는 원래 가구를 피하고, 겹치게 끌면 문제로 알린다
   await owner.getByTestId('tool-furniture').click();
-  check('다른 도구로 가면 그리기가 멈춤', (await owner.getByTestId('floor-plan').getAttribute('data-drawing')) === 'false', null);
+  const stopped = await owner
+    .waitForFunction(() => document.querySelector('[data-testid=floor-plan]')?.getAttribute('data-drawing') === 'false', null, { timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+  check('다른 도구로 가면 그리기가 멈춤', stopped, null);
   await owner.getByTestId('furniture-panel').getByRole('button', { name: '+ 소파 · 화이트', exact: true }).click();
   const [sofa] = await itemsOf(owner);
   const sofaBox = { x: sofa.x, z: sofa.z, w: sofa.w, d: sofa.d };
@@ -179,6 +183,7 @@ try {
   await owner.screenshot({ path: path.join(dataDir, '_e2e', 'fixtures-overlap.png') });
   // 치울 가구로 바꾸면(저장 전에도) 바로 문제가 사라진다
   await owner.getByTestId('fixtures-toggle').click();
+  await owner.waitForTimeout(500);
   check('원래 가구 도구로 돌아와도 그리기는 꺼진 채', (await owner.getByTestId('fixtures').getAttribute('data-mode')) === '' && (await owner.getByTestId('floor-plan').getAttribute('data-drawing')) === 'false', null);
   await owner.getByTestId('fixture-remove').first().check();
   check('그 침대를 "치울 가구"로 바꾸면 겹침 문제가 바로 사라짐', (await owner.getByTestId('layout-violations').getAttribute('data-errors')) === '0', await owner.getByTestId('layout-violations').innerText());
