@@ -56,6 +56,24 @@ const SHAPES: Record<GlyphKind, ReactNode> = {
       <path d="M9 9v6M15 9v6" />
     </>
   ),
+  sofa: (
+    <>
+      <rect x="3" y="7" width="18" height="11" rx="2.2" />
+      <path d="M3 10.5h18M6.5 10.5V18M17.5 10.5V18" />
+    </>
+  ),
+  tv: (
+    <>
+      <rect x="2.5" y="10" width="19" height="6.5" rx="1.4" />
+      <path d="M7 7.5h10" />
+    </>
+  ),
+  lamp: (
+    <>
+      <circle cx="12" cy="12" r="6" />
+      <circle cx="12" cy="12" r="1.6" />
+    </>
+  ),
   box: <rect x="4.5" y="6" width="15" height="12" rx="2" />,
 };
 
