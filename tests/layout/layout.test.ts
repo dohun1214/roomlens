@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Footprint, Point2 } from '@/lib/three/floorDrag';
 import { lastInsideAlong } from '@/lib/layout/geometry';
-import { readFileSync } from 'node:fs';
-import { categoryColor, DEFAULT_CATALOG, fromCatalogRow, modelCredits } from '@/lib/layout/catalog';
+import { readdirSync, readFileSync } from 'node:fs';
+import { catalogLabel, catalogThumbnail, categoryColor, DEFAULT_CATALOG, fromCatalogRow, modelCredits } from '@/lib/layout/catalog';
 import { checkLayout, findFreeSpot, violatingIds, type LayoutItem } from '@/lib/layout/check';
 import {
   distanceToPolygon,
@@ -181,15 +181,44 @@ describe('카탈로그', () => {
     ).toEqual(['ABO', 'Poly Haven']);
   });
 
-  it('기본 카탈로그 치수는 실사 모델 마이그레이션과 같다', () => {
-    const sql = readFileSync('supabase/migrations/20261014123558_furniture_catalog_real_models.sql', 'utf8');
-    const rows = [...sql.matchAll(/\('([a-z0-9-]+)', ([\d.]+), ([\d.]+), ([\d.]+)\)/g)].map((m) => [m[1], +m[2], +m[3], +m[4]]);
-    expect(rows).toEqual(DEFAULT_CATALOG.map((c) => [c.id, c.w, c.d, c.h]));
+  it('기본 카탈로그는 DB 마이그레이션(종류마다 두 모양)과 같은 이름·모양·분류·치수·순서', () => {
+    const file = readdirSync('supabase/migrations').find((f) => f.endsWith('_furniture_catalog_variants.sql'));
+    const sql = readFileSync(`supabase/migrations/${file}`, 'utf8');
+    const rows = [...sql.matchAll(/\('([a-z0-9-]+)', '([^']+)', '([^']+)', '([a-z]+)', ([\d.]+), ([\d.]+), ([\d.]+), ([\d.]+), \d+, '[^']+'\)/g)].map((m) => [
+      m[1],
+      m[2],
+      m[3],
+      m[4],
+      +m[5],
+      +m[6],
+      +m[7],
+      +m[8],
+    ]);
+    expect(rows).toEqual(DEFAULT_CATALOG.map((c) => [c.id, c.nameKo, c.styleKo, c.category, c.w, c.d, c.h, c.clearance]));
   });
 
-  it('기본 카탈로그는 10종이고 id가 겹치지 않는다', () => {
-    expect(DEFAULT_CATALOG).toHaveLength(10);
-    expect(new Set(DEFAULT_CATALOG.map((c) => c.id)).size).toBe(10);
+  it('기본 카탈로그는 18종 × 두 모양, id가 겹치지 않고 두 번째 모양은 -b', () => {
+    expect(DEFAULT_CATALOG).toHaveLength(36);
+    expect(new Set(DEFAULT_CATALOG.map((c) => c.id)).size).toBe(36);
+    for (let i = 0; i < DEFAULT_CATALOG.length; i += 2) {
+      const [a, b] = [DEFAULT_CATALOG[i], DEFAULT_CATALOG[i + 1]];
+      expect(b.id).toBe(`${a.id}-b`);
+      expect(b.nameKo).toBe(a.nameKo);
+      expect(b.styleKo).not.toBe(a.styleKo);
+    }
+  });
+
+  it('목록 이름과 모델 사진: "책상 · 서랍형", 내 가구는 사진 없음', () => {
+    expect(catalogLabel({ nameKo: '책상', styleKo: '서랍형' })).toBe('책상 · 서랍형');
+    expect(catalogLabel({ nameKo: '수납장' })).toBe('수납장');
+    expect(catalogThumbnail({ id: 'desk-b' })).toBe('/furniture/desk-b.webp');
+    expect(catalogThumbnail({ id: 'u1', kind: 'user' })).toBeNull();
+  });
+
+  it('DB 행의 모양 이름을 넘긴다', () => {
+    const row = { id: 'desk-b', name_ko: '책상', style_ko: '철제 다리', category: 'desk', width_m: 1.2, depth_m: 0.6, height_m: 0.75, clearance_m: 0.7 };
+    expect(fromCatalogRow(row).styleKo).toBe('철제 다리');
+    expect(fromCatalogRow({ ...row, style_ko: null })).not.toHaveProperty('styleKo');
   });
 
   it('종류별 색, 모르는 종류는 회색', () => {

@@ -105,6 +105,7 @@ export type Database = {
           model_key: string | null;
           name_ko: string;
           sort_order: number;
+          style_ko: string | null;
           width_m: number;
         };
         Insert: {
@@ -117,6 +118,7 @@ export type Database = {
           model_key?: string | null;
           name_ko: string;
           sort_order?: number;
+          style_ko?: string | null;
           width_m: number;
         };
         Update: {
@@ -129,6 +131,7 @@ export type Database = {
           model_key?: string | null;
           name_ko?: string;
           sort_order?: number;
+          style_ko?: string | null;
           width_m?: number;
         };
         Relationships: [];
