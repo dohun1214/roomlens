@@ -55,7 +55,7 @@ try {
 
   // 방 좌표(원점 = 모서리 중심)에서 방 안을 내려다본다
   await moveCamera(page, [0.01, 2.6, 2.2], [0, 0, 0]);
-  await page.getByRole('button', { name: '+ 책상' }).click();
+  await page.getByRole('button', { name: '+ 책상 · 서랍형' }).click();
   await page.waitForTimeout(300);
   let [desk] = await items();
   check('책상이 방 가운데에 놓인다', Math.hypot(desk.x, desk.z) < 0.06, [desk.x, desk.z]);
@@ -108,7 +108,7 @@ try {
   // 5) 두 번째 가구는 겹치지 않는 빈자리에 놓인다
   const violations = async () => JSON.parse(await page.getByTestId('furniture-panel').getAttribute('data-violations'));
   await moveCamera(page, [0.01, 6, 0.01], [0, 0, 0]); // 바로 위에서 내려다본다
-  await page.getByRole('button', { name: '+ 옷장' }).click();
+  await page.getByRole('button', { name: '+ 옷장 · 원목' }).click();
   await page.waitForTimeout(300);
   let ward;
   [desk, ward] = await items();

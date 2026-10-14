@@ -121,7 +121,7 @@ try {
   check('방 그림의 가로세로 비율이 4:3', near((room.width - 5) / (room.height - 5), 4 / 3, 0.02), [Math.round(room.width), Math.round(room.height)]);
 
   // 2) 가구를 추가하면 평면도에 나온다
-  await panel.getByRole('button', { name: '+ 책상', exact: true }).click();
+  await panel.getByRole('button', { name: '+ 책상 · 서랍형', exact: true }).click();
   const added = (await items())[0];
   /** 평면도에 그려진 가구의 가로·세로 (m): 다각형 꼭짓점에서 계산 */
   const drawnSize = (id) =>
@@ -152,7 +152,7 @@ try {
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'plan-door.png') });
   await dragTo('f1', 1.35, -1.2); // 벽에서 10cm 안이면 벽에 붙는다 (x = 1.375)
   check('문 옆 벽으로 옮기면 문제 없음', (await planItem('f1').getAttribute('data-state')) === 'ok' && (await page.getByTestId('layout-violations').getAttribute('data-count')) === '0', null);
-  await panel.getByRole('button', { name: '+ 옷장', exact: true }).click();
+  await panel.getByRole('button', { name: '+ 옷장 · 원목', exact: true }).click();
   await dragTo('f2', 0.4, 1.2);
   check('옷장을 창문 앞으로 끌면: 평면도에서 노랑, "옷장: 창문을 가립니다"', (await planItem('f2').getAttribute('data-state')) === 'warning' && (await messages()).includes('옷장: 창문을 가립니다'), await messages());
 
