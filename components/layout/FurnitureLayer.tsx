@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { DEFAULT_CATALOG, modelCredits, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { blocksAccess } from '@/lib/layout/accessSide';
 import type { AiResultView } from '@/lib/ai/suggestClient';
@@ -32,6 +33,7 @@ import {
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { disposeModelTemplate, instantiateModel, makeModelTemplate, type ModelTemplate } from '@/lib/three/furnitureModel';
 import { pointerToNdc } from '@/lib/three/pickPoint';
+import { makeShadowTexture, shadowSize } from '@/lib/three/softShadow';
 import type { Engine } from '@/components/viewer/engine';
 import FurnitureGlyph from '@/components/ui/FurnitureGlyph';
 import Icon from '@/components/ui/Icon';
@@ -47,6 +49,9 @@ const VIOLATION_EDGE_COLOR = 0xff3b30;
 const VIOLATION_EMISSIVE = 0x7a1010;
 const WARNING_EDGE_COLOR = 0xffc233;
 const WARNING_EMISSIVE = 0x4a3800;
+/** 가구 밑 그림자의 진하기와 바닥에서 띄우는 높이 (m, 바닥과 겹쳐 깜빡이지 않게) */
+const SHADOW_OPACITY = 0.45;
+const SHADOW_LIFT = 0.004;
 const NO_OPENINGS: Opening[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
 const NO_LAYOUTS: LayoutChoice[] = [];
@@ -177,8 +182,10 @@ export default function FurnitureLayer({
   const dirty = !sameSavedItems(currentSaved, savedItems);
   const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
   const full = items.length >= MAX_LAYOUT_ITEMS;
+  const credits = useMemo(() => modelCredits(catalog), [catalog]);
 
-  // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다)
+  // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다).
+  // 실사 모델(PBR 재질)도 이 두 빛만으로 맞췄다: 실내 환경 맵을 더하면 흰 가구가 하얗게 날아가 스플랫 방보다 튄다
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -191,6 +198,10 @@ export default function FurnitureLayer({
     };
   }, [engineRef]);
 
+  // 가구 밑의 부드러운 그림자 그림 (가구마다 함께 쓴다)
+  const shadowTexture = useMemo(() => makeShadowTexture(), []);
+  useEffect(() => () => shadowTexture.dispose(), [shadowTexture]);
+
   // 가구 3D 모델 불러오기: 놓인 가구가 쓰는 모델을 한 번씩만 받아 틀로 만들어 둔다.
   // 받는 동안과 받지 못했을 때는 상자로 보인다
   useEffect(() => {
@@ -198,7 +209,7 @@ export default function FurnitureLayer({
       const url = item.modelUrl;
       if (!url || modelCache.has(url)) continue;
       modelCache.set(url, null);
-      new GLTFLoader().load(
+      new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(
         url,
         (gltf) => {
           const template = makeModelTemplate(gltf.scene);
@@ -259,6 +270,15 @@ export default function FurnitureLayer({
         const model = instantiateModel(template, item.w, item.h, item.d);
         model.position.y = -item.h / 2;
         mesh.add(model);
+        // 바닥에 닿은 느낌이 나도록 밑에 그림자를 깐다 (바닥보다 살짝 위, 가구와 함께 돈다)
+        const shadowGeometry = new THREE.PlaneGeometry(...shadowSize(item.w, item.d));
+        const shadowMaterial = new THREE.MeshBasicMaterial({ map: shadowTexture, color: 0x000000, transparent: true, opacity: SHADOW_OPACITY, depthWrite: false });
+        const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.position.y = -item.h / 2 + SHADOW_LIFT;
+        shadow.renderOrder = -1;
+        mesh.add(shadow);
+        disposables.push(shadowGeometry, shadowMaterial);
       }
       group.add(mesh);
       disposables.push(geometry, material, edgeGeometry, edgeMaterial);
@@ -270,7 +290,7 @@ export default function FurnitureLayer({
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion]);
+  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion, shadowTexture]);
 
   // 바닥 평면 드래그
   useEffect(() => {
@@ -713,6 +733,11 @@ export default function FurnitureLayer({
                 </button>
               ))}
             </div>
+            {credits.length > 0 && (
+              <p className="text-[11px] leading-snug text-mute" data-testid="furniture-credit">
+                가구 3D 모델: {credits.join(' · ')}. 웹용으로 압축하고 크기를 맞췄습니다.
+              </p>
+            )}
           </div>
 
           {onCreateFurniture && (
