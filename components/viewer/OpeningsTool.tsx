@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { pickPoint, pointerToNdc } from '@/lib/three/pickPoint';
@@ -83,6 +83,15 @@ export default function OpeningsTool({
   const [aiKeys, setAiKeys] = useState<string[]>([]);
 
   const walls = useMemo(() => wallsOf(floorPolygon), [floorPolygon]);
+  // 화면 탭 처리(아래 effect)에서 최신 값을 쓰기 위한 참조. effect를 다시 걸면 누르는 중인 탭을 놓친다
+  const openingsRef = useRef(openings);
+  const aiKeysRef = useRef(aiKeys);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    openingsRef.current = openings;
+    aiKeysRef.current = aiKeys;
+    onChangeRef.current = onChange;
+  });
   const dirty = !sameOpenings(openings, savedOpenings);
   const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
   const editing = editable && open && !locked;
@@ -183,11 +192,20 @@ export default function OpeningsTool({
         setMessage(made.message);
         return;
       }
+      // 찍은 것은 바로 목록에 넣는다. 틀리면 목록에서 지우거나 아래 칸에서 숫자를 고쳐 다시 넣는다
       setWallIndex(made.opening.wallIndex);
       setFrom(made.opening.from.toFixed(2));
       setWidth(made.opening.widthM.toFixed(2));
       setPicking(false);
-      setMessage('찍은 위치를 채웠습니다. 값을 확인하고 "추가"를 누르세요.');
+      const added = addOpening(openingsRef.current, made.opening);
+      if (!added.ok) {
+        setMessage(added.message);
+        return;
+      }
+      setOpenings(added.openings);
+      onChangeRef.current?.(added.openings, aiKeysRef.current);
+      const o = made.opening;
+      setMessage(`벽 ${o.wallIndex + 1}에 ${OPENING_LABEL[o.type]}을 넣었습니다 (${o.from.toFixed(2)}~${o.to.toFixed(2)} m). 틀리면 목록에서 지우고 다시 찍으세요.`);
     };
 
     el.addEventListener('pointerdown', onDown);
@@ -203,8 +221,11 @@ export default function OpeningsTool({
     setWidth(DEFAULT_OPENING_WIDTH[next].toFixed(2));
   };
 
-  const togglePicking = () => {
-    setPicking((prev) => !prev);
+  /** 문 또는 창문의 양 끝 찍기를 시작한다. 같은 버튼을 다시 누르면 그만 */
+  const startPicking = (next: OpeningType) => {
+    const stop = picking && type === next;
+    if (!stop) changeType(next);
+    setPicking(!stop);
     setFirstPoint(null);
     setMessage(null);
   };
@@ -409,15 +430,23 @@ export default function OpeningsTool({
         {editable && !locked && (
           <div className="flex flex-col gap-2.5">
             <SectionTitle>직접 넣기</SectionTitle>
-            <button
-              className={`flex h-[42px] items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium ${picking ? 'bg-warn-soft font-semibold text-warn' : 'border border-dashed border-field text-body hover:bg-soft'}`}
-              onClick={togglePicking}
-              data-testid="openings-pick"
-              aria-pressed={picking}
-            >
-              <Icon name="target" />
-              {picking ? '찍기 그만' : '화면에서 양 끝 찍기'}
-            </button>
+            <div className="grid grid-cols-2 gap-2">
+              {OPENING_TYPES.map((t) => {
+                const on = picking && type === t;
+                return (
+                  <button
+                    key={t}
+                    className={`flex h-[42px] items-center justify-center gap-1.5 rounded-xl text-[13px] font-medium ${on ? 'bg-warn-soft font-semibold text-warn' : 'border border-dashed border-field text-body hover:bg-soft'}`}
+                    onClick={() => startPicking(t)}
+                    data-testid={t === 'door' ? 'openings-pick' : 'openings-pick-window'}
+                    aria-pressed={on}
+                  >
+                    <Icon name={on ? 'close' : t === 'door' ? 'door' : 'window'} />
+                    {on ? '찍기 그만' : `${OPENING_LABEL[t]} 양 끝 찍기`}
+                  </button>
+                );
+              })}
+            </div>
             {picking && (
               <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="openings-pick-hint">
                 {firstPoint ? `${OPENING_LABEL[type]}의 반대쪽 끝을 탭하세요.` : `${OPENING_LABEL[type]}의 한쪽 끝을 탭하세요.`}
