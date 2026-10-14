@@ -5,6 +5,7 @@
 import { parseWallId, wallId } from '@/lib/ai/roomSummary';
 import type { LayoutIntent } from '@/lib/ai/schemas';
 import { openingSegment, type Opening } from '@/lib/rooms/openings';
+import type { FixtureObstacle } from '@/lib/rooms/fixtures';
 import { halfExtentAlong, signedArea, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, windowZone } from './access';
 import { accessBlocked, accessRule, frontDirection } from './accessSide';
@@ -12,7 +13,8 @@ import { checkLayout } from './check';
 import { distanceToPolygon, footprintInsideRoom, footprintsOverlap, interiorPoint, pointInPolygon } from './geometry';
 
 export type SolverItem = { id: string; name: string; category: string; w: number; d: number; h: number; clearance: number };
-export type SolverRoom = { polygon: Point2[]; openings: Opening[] };
+/** fixtures: 방에 원래 있던 가구 (옮길 수 없음). 새 가구는 겹치지 않게 놓고, 통로·쓰는 쪽을 따질 때도 장애물로 본다 */
+export type SolverRoom = { polygon: Point2[]; openings: Opening[]; fixtures?: FixtureObstacle[] };
 export type Placement = LayoutIntent['placements'][number];
 /** 자리가 정해진 가구. reason은 Gemini가 적은 이유 */
 export type SolvedItem = SolverItem & Footprint & { reason: string };
@@ -218,13 +220,15 @@ const DEFAULT_PLACEMENT = { zone: 'against_wall', wallId: '', nearItemId: '', fa
 
 /**
  * 배치 의도를 좌표로 바꾼다.
- * 돌려준 placed는 서로 겹치지 않고, 방 안에 있고, 문 앞을 막지 않는다.
+ * 돌려준 placed는 서로 겹치지 않고, 원래 있던 가구와도 겹치지 않고, 방 안에 있고, 문 앞을 막지 않는다.
  * 통로·창문·쓰는 쪽은 되도록 지키고, 못 지킨 것은 unmet에 적는다.
  * 의도에 없는 가구 id는 무시하고, 의도에서 빠진 가구는 아무 벽에나 붙인다.
  */
 export function solveLayout(room: SolverRoom, items: SolverItem[], placements: Placement[], options: SolveOptions = {}): SolveResult {
   const fallback = options.fallback ?? true;
   const { polygon, openings } = room;
+  const fixtures = room.fixtures ?? [];
+  const fixtureNames = new Map(fixtures.map((f) => [f.id, f.name]));
   const frames = wallFrames(polygon);
   const doors = openings.filter((o) => o.type === 'door');
   const windows = openings.filter((o) => o.type === 'window');
@@ -288,7 +292,7 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
 
     const whyInvalid = (pose: Footprint): { type: 'outside' | 'door' | 'overlap'; otherId?: string } | null => {
       if (!footprintInsideRoom(pose, polygon)) return { type: 'outside' };
-      const other = placed.find((q) => footprintsOverlap(pose, q));
+      const other = placed.find((q) => footprintsOverlap(pose, q)) ?? fixtures.find((f) => footprintsOverlap(pose, f));
       if (other) return { type: 'overlap', otherId: other.id };
       if (doorZones.some((zone) => footprintsOverlap(pose, zone))) return { type: 'door' };
       return null;
@@ -350,7 +354,7 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
             counts.set(key, (counts.get(key) ?? 0) + 1);
           }
           const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-          if (top.startsWith('overlap:')) return `${where}에 자리가 없음 (${byId.get(top.slice(8))?.name ?? '다른 가구'}와(과) 겹침)`;
+          if (top.startsWith('overlap:')) return `${where}에 자리가 없음 (${byId.get(top.slice(8))?.name ?? fixtureNames.get(top.slice(8)) ?? '다른 가구'}와(과) 겹침)`;
           if (top === 'door') return `${where}에 자리가 없음 (문 앞을 막음)`;
           return `${where}에 자리가 없음 (방 밖으로 나감)`;
         };
@@ -359,11 +363,12 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
       }
 
       // 점수: 쓰는 쪽이 비었는지, 다른 가구의 쓰는 쪽을 막는지, 창문을 가리는지, 침대 머리, 모서리, 보는 방향, 기준 가구와의 거리
-      const blockedBefore = new Set(placed.filter((q) => accessBlocked(q, placed, polygon)).map((q) => q.id));
+      const around = [...placed, ...fixtures];
+      const blockedBefore = new Set(placed.filter((q) => accessBlocked(q, around, polygon)).map((q) => q.id));
       const hasRule = accessRule(item) !== null;
       const score = (c: Candidate): number => {
         const self = { ...item, ...c.pose };
-        const all = [...placed, self];
+        const all = [...around, self];
         let s = c.bias;
         if (hasRule) s += accessBlocked(self, all, polygon) ? -2 : 2;
         for (const q of placed) {
@@ -391,9 +396,9 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
       // 통로: 점수가 높은 후보부터, 이미 놓은 가구나 이 가구로 가는 길을 새로 막지 않는 첫 자리
       let chosen = ranked[0].c;
       if (doors.length > 0) {
-        const before = new Set(findUnreachable(placed, polygon, doors) ?? []);
+        const before = new Set(findUnreachable(around, polygon, doors) ?? []);
         for (const { c } of ranked.slice(0, WALKWAY_TRIES)) {
-          const after = findUnreachable([...placed, { ...c.pose, id: item.id }], polygon, doors);
+          const after = findUnreachable([...around, { ...c.pose, id: item.id }], polygon, doors);
           if (after === null || after.every((id) => before.has(id))) {
             chosen = c;
             break;
@@ -418,7 +423,7 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
     }
 
     // 놓은 결과를 화면과 같은 검사로 확인해, 지키지 못한 조건을 모은다
-    const violations = checkLayout(placed, polygon, openings);
+    const violations = checkLayout(placed, polygon, openings, fixtures);
     const unmet = [...notes, ...violations.map((v) => ({ itemId: v.itemId, message: v.message }))];
     const missed = [...failures.map((f) => f.itemId), ...notes.map((n) => n.itemId)];
     return { placed, failures, unmet, missed, cost: failures.length * 100 + notes.length * 10 + violations.length };
