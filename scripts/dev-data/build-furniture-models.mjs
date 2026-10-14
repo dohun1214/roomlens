@@ -33,20 +33,47 @@ export const LICENSES = {
 
 /**
  * 카탈로그 id → 원본. key는 ABO의 3dmodel_id 또는 Poly Haven의 자산 id.
- * yaw(도)는 원본의 앞면이 +z를 보도록 돌리는 각도 (ABO는 이미 +z라 0).
+ * yaw(도)는 원본의 앞면이 +z를 보도록 돌리는 각도 (ABO는 이미 +z라 0. Shelf_01도 앞이 +z).
+ * 종류마다 두 가지 모양이 있고, 두 번째는 id 끝에 -b를 붙인다.
  * 슈퍼싱글은 싱글과 같은 모델을 폭만 넓혀 쓴다 (뷰어가 치수에 맞춰 늘인다).
  */
 export const MODELS = {
-  'bed-single': { source: 'abo', key: 'B07H8V7MQS', yaw: 0 }, // Movian Moselle 싱글
+  'bed-single': { source: 'abo', key: 'B07H8V7MQS', yaw: 0 }, // 원목 (Movian Moselle)
+  'bed-single-b': { source: 'abo', key: 'B086TFXK75', yaw: 0 }, // 철제
   'bed-super-single': { source: 'abo', key: 'B07H8V7MQS', yaw: 0 },
-  'bed-queen': { source: 'abo', key: 'B07K7NXVXR', yaw: 0 }, // 원목 더블
-  desk: { source: 'abo', key: 'B07H4MM3TC', yaw: 0 }, // Movian Moselle 책상
+  'bed-super-single-b': { source: 'abo', key: 'B086TFXK75', yaw: 0 },
+  'bed-queen': { source: 'abo', key: 'B07K7NXVXR', yaw: 0 }, // 원목
+  'bed-queen-b': { source: 'abo', key: 'B086TG9Q4V', yaw: 0 }, // 철제
+  desk: { source: 'abo', key: 'B07H4MM3TC', yaw: 0 }, // 서랍형 (Moselle)
+  'desk-b': { source: 'abo', key: 'B07XL85YDN', yaw: 0 }, // 철제 다리
   chair: { source: 'abo', key: 'B07MDJYKXR', yaw: 0 }, // 패브릭 회전의자
-  wardrobe: { source: 'abo', key: 'B07H8V7P3H', yaw: 0 }, // Movian Moselle 2도어 옷장
-  hanger: { source: 'abo', key: 'B07TY5QHX1', yaw: 0 }, // 선반 달린 행거
-  drawer: { source: 'abo', key: 'B084ZB8L8W', yaw: 0 }, // 3단 원목 서랍장
-  'table-2': { source: 'abo', key: 'B07ML7P94G', yaw: 0 }, // 정사각 2인 식탁
-  bookcase: { source: 'abo', key: 'B075Z6YS1Z', yaw: 0 }, // 원목·철제 4단 책장
+  'chair-b': { source: 'abo', key: 'B075YMXWZM', yaw: 0 }, // 원목 의자
+  wardrobe: { source: 'abo', key: 'B07H8V7P3H', yaw: 0 }, // 원목 (Moselle)
+  'wardrobe-b': { source: 'abo', key: 'B07JGMW8DG', yaw: 0 }, // 화이트
+  hanger: { source: 'abo', key: 'B07TY5QHX1', yaw: 0 }, // 선반형
+  'hanger-b': { source: 'abo', key: 'B07TTYC9XD', yaw: 0 }, // 심플
+  drawer: { source: 'abo', key: 'B084ZB8L8W', yaw: 0 }, // 원목 3단
+  'drawer-b': { source: 'abo', key: 'B07HSL4TS1', yaw: 0 }, // 화이트
+  'table-2': { source: 'abo', key: 'B07ML7P94G', yaw: 0 }, // 정사각
+  'table-2-b': { source: 'abo', key: 'B07B86T48F', yaw: 0 }, // 원목
+  bookcase: { source: 'abo', key: 'B075Z6YS1Z', yaw: 0 }, // 철제 4단
+  'bookcase-b': { source: 'polyhaven', key: 'Shelf_01', yaw: 0 }, // 화이트
+  sofa: { source: 'abo', key: 'B07B4M38B4', yaw: 0 }, // 화이트 2인
+  'sofa-b': { source: 'abo', key: 'B071FMSY5M', yaw: 0 }, // 차콜 2인
+  'tv-stand': { source: 'abo', key: 'B07HSJDMXQ', yaw: 0 }, // 원목
+  'tv-stand-b': { source: 'abo', key: 'B07GFFR1SC', yaw: 0 }, // 블랙
+  nightstand: { source: 'abo', key: 'B07K7K7GTZ', yaw: 0 }, // 원목
+  'nightstand-b': { source: 'abo', key: 'B079VPLVH5', yaw: 0 }, // 화이트
+  'coffee-table': { source: 'abo', key: 'B07H8SZP51', yaw: 0 }, // 화이트
+  'coffee-table-b': { source: 'abo', key: 'B07QFB1TH8', yaw: 0 }, // 원목
+  'shoe-cabinet': { source: 'abo', key: 'B07GG2X2MX', yaw: 0 }, // 화이트
+  'shoe-cabinet-b': { source: 'abo', key: 'B07GFDZWMS', yaw: 0 }, // 블랙
+  vanity: { source: 'abo', key: 'B076HF56ZC', yaw: 0 }, // 거울·의자 세트
+  'vanity-b': { source: 'abo', key: 'B079ZB4V97', yaw: 0 }, // 서랍형
+  bench: { source: 'abo', key: 'B07DBHFDSQ', yaw: 0 }, // 블랙 수납 벤치
+  'bench-b': { source: 'abo', key: 'B07M6PKCQR', yaw: 0 }, // 화이트 수납 벤치
+  'floor-lamp': { source: 'abo', key: 'B07HKF28GD', yaw: 0 }, // 갓 스탠드
+  'floor-lamp-b': { source: 'abo', key: 'B082XLB716', yaw: 0 }, // 구형 스탠드
 };
 
 /** 텍스처의 긴 변 (px). 색은 1024, 요철·거칠기는 화면에서 덜 보이므로 512로 줄여 폰의 GPU 메모리를 아낀다 */
