@@ -19,6 +19,7 @@ import type { Engine } from './engine';
 import { ToolRail, type Slots, type ToolId } from './workspace';
 import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
+import { LOOK_ROTATE_SPEED, lookTarget, panDelta, pinchDistance, wheelDistance } from '@/lib/three/viewMove';
 import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
@@ -187,6 +188,102 @@ export default function SplatViewer({
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    // 방 안에서 둘러보기: 끌기 = 제자리에서 고개 돌리기(바라보는 점을 카메라 바로 앞에 둔다, 아래 루프).
+    // 휠·옮기기는 OrbitControls 대신 아래에서 직접 한다 (바라보는 점이 가까워 OrbitControls로는 거의 안 움직인다)
+    controls.enableZoom = false;
+    controls.enablePan = false;
+    controls.rotateSpeed = LOOK_ROTATE_SPEED;
+    const canvas = renderer.domElement;
+
+    // 캡처처럼 카메라를 직접 옮기는 동안(controls.enabled = false)과 실측의 자유 카메라에서는 방 안에 가두지 않는다
+    const currentBounds = () => (controls.enabled && !engineRef.current?.freeCamera ? boundsRef.current : null);
+    let lastGood: Point2 | null = null;
+    /** 카메라와 바라보는 점을 같이 옮긴다. 방 안에 머물게 할 때는 벽에 막힌 만큼만 */
+    const moveBy = (delta: THREE.Vector3) => {
+      const bounds = currentBounds();
+      if (bounds) {
+        const wanted: [number, number, number] = [camera.position.x + delta.x, camera.position.y + delta.y, camera.position.z + delta.z];
+        const allowed = keepCameraInRoom(wanted, bounds.polygon, bounds.ceilingY, lastGood) ?? wanted;
+        delta.set(allowed[0] - camera.position.x, allowed[1] - camera.position.y, allowed[2] - camera.position.z);
+      }
+      camera.position.add(delta);
+      controls.target.add(delta);
+    };
+
+    // 휠: 보는 쪽으로 다가가기/물러나기
+    const forward = new THREE.Vector3();
+    const onWheel = (event: WheelEvent) => {
+      if (!controls.enabled) return;
+      event.preventDefault();
+      const distance = wheelDistance(event.deltaY, event.deltaMode, walkSpeedRef.current);
+      if (!distance) return;
+      camera.getWorldDirection(forward);
+      moveBy(forward.multiplyScalar(distance));
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+
+    // 오른쪽 끌기·Shift(Ctrl)+끌기: 옆·위아래로 옮기기. 두 손가락: 끌면 옮기고 벌리면 다가간다
+    // (가구를 잡은 포인터는 FurnitureLayer가 capture 단계에서 막아 여기로 오지 않는다)
+    const sideDir = new THREE.Vector3();
+    const panBy = (dx: number, dy: number) => {
+      sideDir.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      sideDir.y = 0;
+      if (sideDir.lengthSq() < 1e-9) return;
+      sideDir.normalize();
+      moveBy(new THREE.Vector3(...panDelta(dx, dy, sideDir.toArray(), walkSpeedRef.current)));
+    };
+    let mousePan: { id: number; x: number; y: number } | null = null;
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { cx: number; cy: number; dist: number } | null = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()];
+      return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!controls.enabled) return;
+      if (event.pointerType === 'touch') {
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        pinch = touches.size === 2 ? pinchState() : null;
+        // 두 손가락일 때는 돌리지 않는다 (OrbitControls는 확대·옮기기를 꺼 두면 두 손가락의 가운데로 계속 돌린다)
+        controls.enableRotate = touches.size < 2;
+        return;
+      }
+      if (event.button === 2 || (event.button === 0 && (event.shiftKey || event.ctrlKey || event.metaKey))) {
+        mousePan = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      }
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        if (!touches.has(event.pointerId)) return;
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (touches.size !== 2 || !pinch) return;
+        const next = pinchState();
+        panBy(next.cx - pinch.cx, next.cy - pinch.cy);
+        const distance = pinchDistance(pinch.dist, next.dist, walkSpeedRef.current);
+        if (distance) {
+          camera.getWorldDirection(forward);
+          moveBy(forward.multiplyScalar(distance));
+        }
+        pinch = next;
+        return;
+      }
+      if (!mousePan || event.pointerId !== mousePan.id) return;
+      panBy(event.clientX - mousePan.x, event.clientY - mousePan.y);
+      mousePan = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+    const onPointerEnd = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        touches.delete(event.pointerId);
+        pinch = touches.size === 2 ? pinchState() : null;
+        if (touches.size === 0) controls.enableRotate = true;
+        return;
+      }
+      if (mousePan && event.pointerId === mousePan.id) mousePan = null;
+    };
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerEnd);
+    canvas.addEventListener('pointercancel', onPointerEnd);
 
     // 키보드로 걸어 다니기 (W A S D·방향키, Q E, Shift). 글자를 넣는 중에는 움직이지 않는다
     const pressed = new Set<string>();
@@ -215,28 +312,21 @@ export default function SplatViewer({
     let frames = 0;
     let last = performance.now();
     let lastFrame = performance.now();
-    let lastGood: Point2 | null = null;
     renderer.setAnimationLoop(() => {
       const frameNow = performance.now();
-      // 캡처처럼 카메라를 직접 옮기는 동안(controls.enabled = false)과 실측의 자유 카메라에서는 막지 않는다
-      const bounds = controls.enabled && !engineRef.current?.freeCamera ? boundsRef.current : null;
+      const bounds = currentBounds();
       if (pressed.size > 0 && controls.enabled) {
         camera.getWorldDirection(viewDir);
         upDir.set(0, 1, 0).applyQuaternion(camera.quaternion);
         const delta = moveStep(pressed, viewDir.toArray(), upDir.toArray(), (frameNow - lastFrame) / 1000, walkSpeedRef.current);
-        if (delta) {
-          step.set(...delta);
-          if (bounds) {
-            // 벽에 막히면 막힌 만큼만 간다. 돌리는 중심도 같은 만큼만 옮겨야 벽 너머로 달아나지 않는다
-            const wanted: [number, number, number] = [camera.position.x + step.x, camera.position.y + step.y, camera.position.z + step.z];
-            const allowed = keepCameraInRoom(wanted, bounds.polygon, bounds.ceilingY, lastGood) ?? wanted;
-            step.set(allowed[0] - camera.position.x, allowed[1] - camera.position.y, allowed[2] - camera.position.z);
-          }
-          camera.position.add(step);
-          controls.target.add(step);
-        }
+        if (delta) moveBy(step.set(...delta));
       }
       lastFrame = frameNow;
+      if (controls.enabled) {
+        // 어디서 카메라를 옮겼든(첫 구도, "3D에서 보기" 등) 바라보는 점을 바로 앞으로 당겨 제자리에서 돌게 한다
+        const target = lookTarget(camera.position.toArray(), controls.target.toArray());
+        if (target) controls.target.set(...target);
+      }
       controls.update();
       if (bounds) {
         // 마우스로 돌리거나 물러나다 벽을 넘은 경우: 카메라만 방 안으로 데려오고 보던 곳은 그대로 본다
@@ -281,6 +371,11 @@ export default function SplatViewer({
       window.removeEventListener('blur', releaseKeys);
       document.removeEventListener('visibilitychange', releaseKeys);
       window.removeEventListener('focusin', releaseKeys);
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerEnd);
+      canvas.removeEventListener('pointercancel', onPointerEnd);
       renderer.setAnimationLoop(null);
       engineRef.current?.splat?.dispose();
       controls.dispose();
@@ -547,7 +642,7 @@ export default function SplatViewer({
       />
 
       <aside
-        className={`relative order-2 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface max-lg:-mt-5 max-lg:max-h-[58%] max-lg:rounded-t-[22px] max-lg:shadow-[0_-6px_24px_rgb(20_26_42/0.1)] lg:w-[376px] lg:rounded-2xl lg:shadow-panel ${
+        className={`relative order-2 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface max-lg:-mt-5 max-lg:max-h-[48%] max-lg:rounded-t-[22px] max-lg:shadow-[0_-6px_24px_rgb(20_26_42/0.1)] lg:w-[376px] lg:rounded-2xl lg:shadow-panel ${
           tools.length === 0 ? 'max-lg:hidden' : ''
         }`}
         data-testid="tool-panel"
