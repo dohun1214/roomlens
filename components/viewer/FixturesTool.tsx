@@ -16,9 +16,11 @@ import {
   updateFixture,
   type Fixture,
 } from '@/lib/rooms/fixtures';
+import { addCandidates } from '@/lib/ai/fixturesDetect';
+import { requestFixturesDetection } from '@/lib/ai/fixturesClient';
 import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
-import { PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
+import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다 */
 const TAP_MOVE_PX = 6;
@@ -29,9 +31,12 @@ const MARKER_COLOR = 0x3350e8;
 
 type Mode = 'tap' | 'draw' | null;
 
+const AI_MESSAGE = 'AI가 원래 가구';
+
 /**
  * 방에 원래 있는 가구(스캔에 찍힌 침대·옷장 등)를 표시한다. 새 가구는 이 자리를 피하고, 겹치면 배치 검사가 알려 준다.
- * 넣는 방법: 3D 화면에서 가구 윗면의 마주 보는 두 모서리를 탭하거나(높이도 함께 잰다), 평면도에서 사각형을 그린다.
+ * 넣는 방법: 3D 화면에서 가구 윗면의 마주 보는 두 모서리를 탭하거나(높이도 함께 잰다), 평면도에서 사각형을 그리거나,
+ * AI가 위에서 내려다본 그림에서 찾은 후보를 받아 확인한다.
  * 좌표는 방 좌표(바닥 y=0, m)이고 보정 후에는 월드 좌표와 같다.
  */
 export default function FixturesTool({
@@ -45,6 +50,7 @@ export default function FixturesTool({
   onChange,
   onLook,
   onPlanDraw,
+  detect,
 }: {
   slots: Slots;
   engineRef: RefObject<Engine | null>;
@@ -63,6 +69,8 @@ export default function FixturesTool({
   onLook?: () => void;
   /** 평면도에서 사각형 그리기를 켜고 끈다 (handler가 null이면 끔). 켜면 평면도를 연다 */
   onPlanDraw?: (handler: ((a: Point2, b: Point2) => void) | null) => void;
+  /** AI로 원래 가구 후보 찾기 (주면 버튼이 생긴다). remaining은 오늘 남은 AI 횟수 */
+  detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
 }) {
   const [fixtures, setFixtures] = useState<Fixture[]>(initial);
   const [saved, setSaved] = useState<Fixture[]>(initial);
@@ -71,6 +79,9 @@ export default function FixturesTool({
   const [firstPoint, setFirstPoint] = useState<[number, number, number] | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // AI로 찾는 중이면 캡처 진행 상황, 그리고 AI가 넣은 것들의 id (저장하거나 지울 때까지 "AI" 표시)
+  const [detecting, setDetecting] = useState<{ done: number; total: number } | null>(null);
+  const [aiIds, setAiIds] = useState<string[]>([]);
   const open = slots.active === 'fixtures';
   const editing = editable && open && !locked;
   const dirty = !sameFixtures(fixtures, saved);
@@ -220,7 +231,37 @@ export default function FixturesTool({
   const remove = (id: string) => {
     commit(fixtures.filter((f) => f.id !== id));
     if (selectedId === id) setSelectedId(null);
+    setAiIds((ids) => ids.filter((i) => i !== id));
     setMessage(null);
+  };
+
+  /** AI가 찾은 후보를 목록에 넣는다. 이미 있는 것과 겹치는 후보는 뺀다. 저장은 사용자가 확인한 뒤 직접 한다 */
+  const detectFixtures = async () => {
+    const engine = engineRef.current;
+    if (!engine || !detect || detecting) return;
+    setMessage(null);
+    setMode(null);
+    setFirstPoint(null);
+    setDetecting({ done: 0, total: 0 });
+    const outcome = await requestFixturesDetection(engine, detect.roomId, floorPolygon, (done, total) => setDetecting({ done, total }));
+    setDetecting(null);
+    if (!outcome.ok) {
+      if (outcome.code === 'AI_LIMIT') detect.onRemaining(0);
+      setMessage(outcome.message);
+      return;
+    }
+    if (outcome.remaining !== null) detect.onRemaining(outcome.remaining);
+    const { fixtures: next, added, skipped } = addCandidates(fixturesRef.current, outcome.candidates);
+    if (added.length === 0) {
+      setMessage(skipped > 0 ? 'AI가 찾은 것은 모두 이미 넣은 원래 가구와 겹칩니다.' : 'AI가 원래 가구를 찾지 못했습니다. 직접 넣어 주세요.');
+      return;
+    }
+    commit(next);
+    setAiIds((ids) => [...ids, ...added.map((f) => f.id)]);
+    setSelectedId(null);
+    setMessage(
+      `${AI_MESSAGE} ${added.length}개를 찾아 넣었습니다${skipped > 0 ? ` (이미 있는 것과 겹치거나 넘치는 ${skipped}개는 뺌)` : ''}. 3D 화면과 평면도에서 자리·이름·높이를 확인하고, 틀린 것은 고치거나 지운 뒤 저장하세요.`,
+    );
   };
 
   const lookAt = (f: Fixture) => {
@@ -239,7 +280,10 @@ export default function FixturesTool({
     const snapshot = fixtures;
     setSavePhase('saving');
     const ok = await onSave(snapshot);
-    if (ok) setSaved(snapshot);
+    if (ok) {
+      setSaved(snapshot);
+      setAiIds([]);
+    }
     setSavePhase(ok ? 'idle' : 'error');
   };
 
@@ -281,8 +325,12 @@ export default function FixturesTool({
         )}
 
         {message && editable && !locked && (
-          <p className="rounded-[14px] bg-warn-tint p-3.5 text-[13px] text-pretty text-warn" data-testid="fixtures-message">
-            {message}
+          <p
+            className={`flex gap-2.5 rounded-[14px] p-3.5 text-[13px] text-pretty ${message.startsWith(AI_MESSAGE) ? 'bg-accent-soft text-[#1a2140]' : 'bg-warn-tint text-warn'}`}
+            data-testid="fixtures-message"
+          >
+            {message.startsWith(AI_MESSAGE) && <AiBadge className="mt-0.5 self-start" />}
+            <span>{message}</span>
           </p>
         )}
 
@@ -326,81 +374,114 @@ export default function FixturesTool({
 
         {!(locked && editable) && fixtures.length > 0 && (
           <ul className="flex flex-col gap-1.5" data-testid="fixtures-list">
-            {fixtures.map((f) => (
-              <li
-                key={f.id}
-                className={`flex flex-col gap-1.5 rounded-xl border p-2 ${f.id === selectedId ? 'border-accent-line bg-accent-tint' : 'border-line'}`}
-                data-id={f.id}
-                data-remove={f.remove}
-                onClick={() => setSelectedId(f.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] ${f.remove ? 'bg-[#fde4dc] text-[#c4471f]' : 'bg-chip text-body'}`}
-                    aria-hidden="true"
-                  >
-                    <Icon name="cube" size={18} />
-                  </span>
-                  {editable && !locked ? (
-                    <select className={`${fieldClass} min-w-0 flex-1`} value={f.label} onChange={(e) => change(f.id, { label: e.target.value })} aria-label={`${f.id} 이름`} data-testid="fixture-label">
-                      {[...new Set([f.label, ...FIXTURE_LABELS])].map((label) => (
-                        <option key={label} value={label}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{f.label}</span>
-                  )}
-                  <span className="shrink-0 font-mono text-[11px] text-mute">
-                    {Math.round(f.w * 100)}×{Math.round(f.d * 100)}
-                  </span>
-                  <button className="btn btn-soft h-9 w-9 text-sub" onClick={() => lookAt(f)} aria-label={`${describeFixture(f)} 3D에서 보기`} title="3D에서 보기">
-                    <Icon name="target" />
-                  </button>
-                  {editable && !locked && (
-                    <button className="btn btn-danger h-9 w-9" onClick={() => remove(f.id)} aria-label={`${describeFixture(f)} 삭제`} title="삭제">
-                      <Icon name="close" size={11} />
+            {fixtures.map((f) => {
+              const fromAi = aiIds.includes(f.id);
+              return (
+                <li
+                  key={f.id}
+                  className={`flex flex-col gap-1.5 rounded-xl border p-2 ${f.id === selectedId || fromAi ? 'border-accent-line bg-accent-tint' : 'border-line'}`}
+                  data-id={f.id}
+                  data-remove={f.remove}
+                  data-ai={fromAi}
+                  onClick={() => setSelectedId(f.id)}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-[9px] ${f.remove ? 'bg-[#fde4dc] text-[#c4471f]' : 'bg-chip text-body'}`}
+                      aria-hidden="true"
+                    >
+                      <Icon name="cube" size={18} />
+                    </span>
+                    {editable && !locked ? (
+                      <select className={`${fieldClass} min-w-0 flex-1`} value={f.label} onChange={(e) => change(f.id, { label: e.target.value })} aria-label={`${f.id} 이름`} data-testid="fixture-label">
+                        {[...new Set([f.label, ...FIXTURE_LABELS])].map((label) => (
+                          <option key={label} value={label}>
+                            {label}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{f.label}</span>
+                    )}
+                    {fromAi && (
+                      <span className="shrink-0 rounded-md bg-accent px-1.5 py-px font-mono text-[10px] font-medium text-white" data-testid="fixtures-ai-tag">
+                        AI
+                      </span>
+                    )}
+                    <span className="shrink-0 font-mono text-[11px] text-mute">
+                      {Math.round(f.w * 100)}×{Math.round(f.d * 100)}
+                    </span>
+                    <button className="btn btn-soft h-9 w-9 text-sub" onClick={() => lookAt(f)} aria-label={`${describeFixture(f)} 3D에서 보기`} title="3D에서 보기">
+                      <Icon name="target" />
                     </button>
-                  )}
-                </div>
-                {editable && !locked ? (
-                  <div className="flex items-center gap-2 pl-10">
-                    <label className="flex items-center gap-1.5 text-xs font-semibold text-body">
-                      높이
-                      <input
-                        className="field h-8 w-[72px] rounded-lg px-2 font-mono text-[13px] font-normal"
-                        type="number"
-                        min={0.05}
-                        max={MAX_FIXTURE_HEIGHT}
-                        step={0.05}
-                        value={f.h}
-                        onChange={(e) => change(f.id, { h: Number(e.target.value) })}
-                        data-testid="fixture-height"
-                      />
-                      m
-                    </label>
-                    <label className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-body">
-                      <input type="checkbox" checked={f.remove} onChange={(e) => change(f.id, { remove: e.target.checked })} data-testid="fixture-remove" />
-                      치울 가구
-                    </label>
+                    {editable && !locked && (
+                      <button className="btn btn-danger h-9 w-9" onClick={() => remove(f.id)} aria-label={`${describeFixture(f)} 삭제`} title="삭제">
+                        <Icon name="close" size={11} />
+                      </button>
+                    )}
                   </div>
-                ) : (
-                  <span className="pl-10 text-xs text-sub">
-                    높이 {f.h.toFixed(2)} m{f.remove ? ' · 치울 가구' : ''}
-                  </span>
-                )}
-              </li>
-            ))}
+                  {editable && !locked ? (
+                    <div className="flex items-center gap-2 pl-10">
+                      <label className="flex items-center gap-1.5 text-xs font-semibold text-body">
+                        높이
+                        <input
+                          className="field h-8 w-[72px] rounded-lg px-2 font-mono text-[13px] font-normal"
+                          type="number"
+                          min={0.05}
+                          max={MAX_FIXTURE_HEIGHT}
+                          step={0.05}
+                          value={f.h}
+                          onChange={(e) => change(f.id, { h: Number(e.target.value) })}
+                          data-testid="fixture-height"
+                        />
+                        m
+                      </label>
+                      <label className="ml-auto flex items-center gap-1.5 text-xs font-semibold text-body">
+                        <input type="checkbox" checked={f.remove} onChange={(e) => change(f.id, { remove: e.target.checked })} data-testid="fixture-remove" />
+                        치울 가구
+                      </label>
+                    </div>
+                  ) : (
+                    <span className="pl-10 text-xs text-sub">
+                      높이 {f.h.toFixed(2)} m{f.remove ? ' · 치울 가구' : ''}
+                    </span>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         )}
       </PanelBody>
 
-      {editable && !locked && onSave && saveState !== 'saved' && (
+      {editable && !locked && (detect || (onSave && saveState !== 'saved')) && (
         <PanelFooter>
-          <button className="btn btn-primary h-11 text-sm" disabled={saveState === 'saving'} onClick={save} data-testid="fixtures-save">
-            {saveState === 'error' ? '다시 저장' : '저장'}
-          </button>
+          {detect && (
+            <div className="flex flex-col gap-2.5" data-testid="fixtures-detect" data-remaining={detect.remaining ?? ''} data-busy={detecting !== null}>
+              <p className="text-xs text-pretty text-sub">
+                방을 위에서 내려다본 그림을 Google Gemini로 보내 원래 가구 후보를 찾습니다. 틀리거나 빠뜨릴 수 있으니 꼭 확인하세요.
+                {detect.remaining !== null ? ` 오늘 ${detect.remaining}회 남음.` : ''}
+              </p>
+            </div>
+          )}
+          <div className="flex gap-2">
+            {detect && (
+              <button
+                className="btn h-11 min-w-0 flex-1 border border-accent-line bg-surface px-2 text-sm text-accent-strong hover:bg-accent-tint"
+                disabled={detecting !== null || detect.remaining === 0}
+                onClick={detectFixtures}
+                data-testid="fixtures-detect-run"
+              >
+                {detecting === null && 'AI로 찾기'}
+                {detecting !== null && detecting.done < detecting.total && `위에서 캡처 중 (${detecting.done}/${detecting.total})`}
+                {detecting !== null && detecting.done >= detecting.total && (detecting.total === 0 ? '준비 중…' : 'AI가 찾는 중… (10~30초)')}
+              </button>
+            )}
+            {onSave && saveState !== 'saved' && (
+              <button className="btn btn-primary h-11 flex-1 text-sm" disabled={saveState === 'saving'} onClick={save} data-testid="fixtures-save">
+                {saveState === 'error' ? '다시 저장' : '저장'}
+              </button>
+            )}
+          </div>
         </PanelFooter>
       )}
     </ToolPanel>
