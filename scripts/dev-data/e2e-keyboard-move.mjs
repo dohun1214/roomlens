@@ -10,11 +10,11 @@ const check = (name, ok, detail) => checks.push({ name, ok, detail });
 const pose = () =>
   page.evaluate(() => {
     const e = window.__roomlens;
-    return { position: e.camera.position.toArray(), target: e.controls.target.toArray() };
+    return { position: e.camera.position.toArray(), dir: e.camera.getWorldDirection(e.camera.position.clone()).toArray() };
   });
 const sub = (a, b) => a.map((v, i) => v - b[i]);
 const len = (v) => Math.hypot(...v);
-/** 키를 ms 동안 누르고 있는 동안 카메라와 바라보는 점이 움직인 만큼 */
+/** 키를 ms 동안 누르고 있는 동안 카메라가 움직인 만큼과, 보는 방향이 바뀐 만큼 */
 const hold = async (keys, ms) => {
   const before = await pose();
   for (const key of keys) await page.keyboard.down(key);
@@ -22,9 +22,10 @@ const hold = async (keys, ms) => {
   for (const key of [...keys].reverse()) await page.keyboard.up(key);
   await page.waitForTimeout(250);
   const after = await pose();
-  return { moved: sub(after.position, before.position), targetMoved: sub(after.target, before.target) };
+  return { moved: sub(after.position, before.position), turned: len(sub(after.dir, before.dir)) };
 };
-const sameMove = (m) => len(sub(m.moved, m.targetMoved)) < 1e-6;
+/** 걷는 동안 보는 방향은 그대로 (카메라와 바라보는 점이 같이 움직인다) */
+const sameMove = (m) => m.turned < 1e-6;
 
 try {
   check('큰 화면에는 키 안내가 보인다', (await page.getByTestId('stage-keys').innerText()).replace(/\s+/g, ' ').includes('W A S D'), null);
@@ -45,7 +46,7 @@ try {
   const w = await hold(['KeyW'], 1000);
   check('W: 보는 쪽(-z)으로 가고 높이는 그대로', w.moved[2] < -0.6 && Math.abs(w.moved[0]) < 0.02 && Math.abs(w.moved[1]) < 1e-6, w.moved.map((v) => round(v)));
   check('W 1초에 걷는 빠르기(1.6m)만큼 간다 (0.8~2.0m)', len(w.moved) > 0.8 && len(w.moved) < 2.0, round(len(w.moved)));
-  check('카메라와 바라보는 점이 같이 움직인다 (돌리는 중심이 따라옴)', sameMove(w), w.targetMoved.map((v) => round(v)));
+  check('걷는 동안 보는 방향은 그대로 (돌리는 중심이 따라옴)', sameMove(w), w.turned);
 
   const s = await hold(['KeyS'], 500);
   check('S: 뒤(+z)로', s.moved[2] > 0.3 && Math.abs(s.moved[1]) < 1e-6, s.moved.map((v) => round(v)));
@@ -65,15 +66,15 @@ try {
   const both = await hold(['KeyW', 'KeyS'], 400);
   check('반대 키를 같이 누르면 멈춘다', len(both.moved) < 1e-9, both.moved);
 
-  // 3) 키로 옮긴 뒤에도 마우스로 돌릴 수 있다
+  // 3) 키로 옮긴 뒤에도 마우스로 돌릴 수 있다 (제자리에서 고개 돌리기)
   const beforeDrag = await pose();
-  await page.mouse.move(700, 400);
+  await page.mouse.move(900, 400);
   await page.mouse.down();
-  await page.mouse.move(820, 420, { steps: 10 });
+  await page.mouse.move(1020, 420, { steps: 10 });
   await page.mouse.up();
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(600);
   const afterDrag = await pose();
-  check('옮긴 뒤 끌면 화면이 돌고, 바라보는 점은 그대로', len(sub(afterDrag.position, beforeDrag.position)) > 0.01 && len(sub(afterDrag.target, beforeDrag.target)) < 1e-6, null);
+  check('옮긴 뒤 끌면 제자리에서 돈다 (보는 방향이 바뀌고 자리는 15cm 안)', len(sub(afterDrag.dir, beforeDrag.dir)) > 0.05 && len(sub(afterDrag.position, beforeDrag.position)) < 0.15, [round(len(sub(afterDrag.dir, beforeDrag.dir))), round(len(sub(afterDrag.position, beforeDrag.position)))]);
 
   // 4) 위에서 똑바로 내려다볼 때: W는 화면의 위쪽으로
   await moveCamera(page, [0.001, 5, 0.001], [0, 0, 0], 800);
