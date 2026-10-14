@@ -3,7 +3,7 @@ import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag
 import type { Opening } from '@/lib/rooms/openings';
 import { findBlockedAccess } from './accessSide';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
-import { footprintInsideRoom, footprintsOverlap, interiorPoint } from './geometry';
+import { footprintInsideRoom, footprintsOverlap, interiorPoint, pointInPolygon } from './geometry';
 
 /**
  * h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다.
@@ -101,16 +101,19 @@ const SEARCH_RADIUS = 6;
  * 새 가구를 놓을 빈자리를 찾는다: 방 가운데에서 시작해 바깥으로 넓혀 가며
  * 방 안이고 다른 가구와 겹치지 않는 첫 위치. 못 찾으면 가운데(겹친 채로 두고 검사에서 알린다).
  * @param prefer 되도록 지키고 싶은 조건(예: 쓰는 쪽을 막지 않기). 이를 지키는 자리가 없으면 조건 없이 다시 찾는다
+ * @param start 방 가운데 대신 여기서부터 찾는다 (방 안일 때만)
  */
 export function findFreeSpot(
   size: Pick<Footprint, 'w' | 'd'>,
   others: Footprint[],
   floorPolygon: Point2[] | null,
   prefer?: (spot: Footprint) => boolean,
+  start?: Point2 | null,
 ): Footprint {
   const polygon = floorPolygon && floorPolygon.length >= 3 ? floorPolygon : null;
   // 사각형 방에서는 방 가운데(보정된 방은 정확히 원점), 오목한 방에서는 벽에서 가장 먼 곳
-  const center: Point2 = polygon ? interiorPoint(polygon) : [0, 0];
+  const usableStart = start && Number.isFinite(start[0]) && Number.isFinite(start[1]) && (!polygon || pointInPolygon(start, polygon)) ? start : null;
+  const center: Point2 = usableStart ?? (polygon ? interiorPoint(polygon) : [0, 0]);
   const at = (dx: number, dz: number) => placeOnFloor({ x: center[0] + dx, z: center[1] + dz, w: size.w, d: size.d, rotationDeg: 0 }, polygon);
   const fits = (f: Footprint) => (!polygon || footprintInsideRoom(f, polygon)) && others.every((o) => !footprintsOverlap(f, o));
 

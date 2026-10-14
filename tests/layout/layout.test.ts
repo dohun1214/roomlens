@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Footprint, Point2 } from '@/lib/three/floorDrag';
+import { lastInsideAlong } from '@/lib/layout/geometry';
 import { categoryColor, DEFAULT_CATALOG, fromCatalogRow } from '@/lib/layout/catalog';
 import { checkLayout, findFreeSpot, violatingIds, type LayoutItem } from '@/lib/layout/check';
 import {
@@ -118,6 +119,15 @@ describe('findFreeSpot', () => {
     expect(findFreeSpot({ w: 1.2, d: 0.6 }, [], room)).toMatchObject({ x: 0, z: 0, rotationDeg: 0 });
   });
 
+  it('시작점을 주면 거기서부터 (화면 가운데 바닥에 놓을 때)', () => {
+    const spot = findFreeSpot({ w: 0.6, d: 0.6 }, [], room, undefined, [1, 0.5]);
+    expect([spot.x, spot.z]).toEqual([1, 0.5]);
+  });
+
+  it('시작점이 방 밖이면 방 가운데부터', () => {
+    expect(findFreeSpot({ w: 0.6, d: 0.6 }, [], room, undefined, [50, 50])).toMatchObject({ x: 0, z: 0 });
+  });
+
   it('가운데에 가구가 있으면 겹치지 않는 가까운 자리', () => {
     const desk = box(0, 0, 1.2, 0.6);
     const spot = findFreeSpot({ w: 0.9, d: 0.6 }, [desk], room);
@@ -159,5 +169,18 @@ describe('카탈로그', () => {
   it('종류별 색, 모르는 종류는 회색', () => {
     expect(categoryColor('bed')).not.toBe(categoryColor('desk'));
     expect(categoryColor('unknown')).toBe(0xb7b7b7);
+  });
+});
+
+describe('lastInsideAlong', () => {
+  it('벽 너머까지 가는 선분은 벽 바로 앞에서 멈춘다', () => {
+    const p = lastInsideAlong([0, 0], [4, 0], room);
+    expect(p?.[0]).toBeGreaterThan(1.8);
+    expect(p?.[0]).toBeLessThanOrEqual(2);
+  });
+
+  it('끝까지 방 안이면 끝점, 시작이 방 밖이면 null', () => {
+    expect(lastInsideAlong([0, 0], [1, 1], room)).toEqual([1, 1]);
+    expect(lastInsideAlong([5, 5], [0, 0], room)).toBeNull();
   });
 });
