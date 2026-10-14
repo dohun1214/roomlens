@@ -155,6 +155,10 @@ describe('창문 가림 경고', () => {
     expect(types([item('wardrobe', -1.5, 1.2, 0.9, 0.6, { h: 2.0 })], [WINDOW])).toEqual([]);
   });
 
+  it('스탠드 조명은 키가 커도 가늘어서 창문 앞에 둬도 괜찮다', () => {
+    expect(types([item('lamp', 0.4, 1.3, 0.34, 0.34, { h: 1.54, category: 'lamp' })], [WINDOW])).toEqual([]);
+  });
+
   it('문제와 경고가 함께 있으면 문제로 센다', () => {
     const violations = checkLayout([item('wardrobe', 0.4, 1.2, 0.9, 0.6, { h: 2.0 }), item('desk', 0.4, 1.1, 1.2, 0.6)], ROOM, [WINDOW]);
     expect([...violatingIds(violations)].sort()).toEqual(['desk', 'wardrobe']);

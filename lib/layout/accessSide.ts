@@ -9,8 +9,9 @@ export type Side = 'front' | 'back' | 'left' | 'right';
 /**
  * sides 가운데 하나만 비면 되는지(any), 모두 비어야 하는지(all).
  * footHalf면 좌우 면의 앞쪽(발치) 절반만 본다: 침대 머리맡에 협탁을 붙여도 들어갈 수 있다.
+ * ignore에 든 분류의 가구는 그 자리에 있어도 막는 것으로 보지 않는다 (소파 앞의 커피테이블).
  */
-export type AccessRule = { sides: Side[]; mode: 'any' | 'all'; message: string; footHalf?: boolean };
+export type AccessRule = { sides: Side[]; mode: 'any' | 'all'; message: string; footHalf?: boolean; ignore?: string[] };
 
 /** category·clearance가 없으면 쓰는 쪽을 따지지 않는 가구로 본다 */
 export type AccessItem = Footprint & { id: string; category?: string; clearance?: number };
@@ -19,8 +20,9 @@ export type AccessItem = Footprint & { id: string; category?: string; clearance?
  * 가구 종류별로 비어 있어야 하는 쪽. 비워 둘 깊이는 카탈로그의 clearance(m)이고 0이면 검사하지 않는다.
  * - 침대: 긴 변 한쪽 (들어갈 자리). 머리(뒤)에서 먼 절반만 비면 된다
  * - 식탁: 긴 변 양쪽 (마주 앉는 자리)
- * - 책상·수납(옷장·행거·서랍장·책장): 앞
- * - 의자·내 가구: 검사하지 않음 (내 가구는 어느 쪽이 앞인지 모른다)
+ * - 책상·수납(옷장·행거·서랍장·책장·TV장·신발장, 화장대): 앞
+ * - 소파: 앞. 앞에 놓인 탁자(커피테이블·식탁)는 막는 것으로 보지 않는다
+ * - 의자·벤치·조명·내 가구: 검사하지 않음 (내 가구는 어느 쪽이 앞인지 모른다)
  */
 export function accessRule(item: Pick<AccessItem, 'category' | 'clearance' | 'w' | 'd'>): AccessRule | null {
   const clearance = item.clearance ?? 0;
@@ -35,6 +37,8 @@ export function accessRule(item: Pick<AccessItem, 'category' | 'clearance' | 'w'
     case 'desk':
     case 'storage':
       return { sides: ['front'], mode: 'all', message: `앞이 막혀 있습니다 (앞에 ${cm}cm 필요)` };
+    case 'sofa':
+      return { sides: ['front'], mode: 'all', ignore: ['table'], message: `앞이 막혀 있습니다 (앞에 ${cm}cm 필요)` };
     default:
       return null;
   }
@@ -69,7 +73,7 @@ export function frontDirection(rotationDeg: number): Point2 {
 
 /**
  * 가구의 쓰는 쪽이 막혔는지. 구역이 방 밖으로 나가거나(벽에 막힘) 다른 가구와 겹치면 그쪽은 막힌 것이다.
- * 의자는 옮기기 쉬우므로 막는 것으로 보지 않는다 (책상 앞의 의자).
+ * 의자는 옮기기 쉬우므로 막는 것으로 보지 않는다 (책상 앞의 의자). 규칙의 ignore에 든 분류도 마찬가지다.
  */
 export function accessBlocked(item: AccessItem, others: AccessItem[], polygon: Point2[] | null): boolean {
   const rule = accessRule(item);
@@ -78,7 +82,7 @@ export function accessBlocked(item: AccessItem, others: AccessItem[], polygon: P
   const free = (side: Side) => {
     const zone = sideZone(item, side, clearance, rule.footHalf);
     if (polygon && !footprintInsideRoom(zone, polygon)) return false;
-    return others.every((o) => o.id === item.id || o.category === 'chair' || !footprintsOverlap(zone, o));
+    return others.every((o) => o.id === item.id || o.category === 'chair' || rule.ignore?.includes(o.category ?? '') || !footprintsOverlap(zone, o));
   };
   return rule.mode === 'any' ? !rule.sides.some(free) : !rule.sides.every(free);
 }

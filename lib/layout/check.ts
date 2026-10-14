@@ -74,9 +74,10 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
     }
   }
 
-  // 창문 가림: 키 큰 가구가 창문 바로 앞에 있으면 경고
+  // 창문 가림: 키 큰 가구가 창문 바로 앞에 있으면 경고. 스탠드 조명은 가늘어서 창문을 가리지 않는다
   const windowZones = openings.filter((o) => o.type === 'window').map((w) => windowZone(w, polygon)).filter((zone) => zone !== null);
   for (const item of items) {
+    if (item.category === 'lamp') continue;
     if ((item.h ?? 0) > TALL_FURNITURE_HEIGHT && windowZones.some((zone) => footprintsOverlap(item, zone))) {
       violations.push({ itemId: item.id, type: 'window', severity: 'warning', message: `${item.name}: 창문을 가립니다` });
     }
