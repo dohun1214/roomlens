@@ -1,133 +1,121 @@
-// 카탈로그 가구의 3D 모델(GLB)을 준비해 R2의 furniture/catalog/{id}.glb 로 올린다.
+// 카탈로그 가구의 실사 3D 모델(GLB)을 받아 웹에 맞게 줄이고 R2의 furniture/catalog/v2/{id}.glb 로 올린다.
 //
-// 원본: Kenney "Furniture Kit" 2.0 (CC0, https://kenney.nl/assets/furniture-kit). 원본 파일은 저장소에 넣지 않는다.
-// 준비: ../roomlens-data/models/kenney 에 압축을 푼다 ("Models/GLTF format/*.glb").
-// 실행: node --env-file=.env.local scripts/dev-data/build-furniture-models.mjs [--upload]
+// 원본 (원본 파일은 저장소에 넣지 않는다. ../roomlens-data/models 아래에 받아 둔다)
+// - Amazon Berkeley Objects (ABO): 실제 판매 상품을 스캔·모델링한 GLB. CC BY 4.0, 출처 "Amazon.com".
+//   모든 모델이 위 = +y, 앞면 = +z, 바닥(y = 0)에 서 있도록 맞춰져 있다.
+//   https://amazon-berkeley-objects.s3.amazonaws.com/index.html
+// - Poly Haven: 스캔 기반 모델. CC0. https://polyhaven.com/models
 //
-// 하는 일: 모델을 Y축으로 돌려 "가로 = x, 깊이 = z, 앞면 = +z" 로 맞춘 GLB를 새로 쓴다(지오메트리는 그대로, 맨 위에 노드 하나만 추가).
-// 크기와 위치는 뷰어가 맞춘다: 경계 상자를 재서 가구의 가로·깊이·높이로 늘이고 바닥 가운데를 원점에 둔다.
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+// 실행: node --env-file=.env.local scripts/dev-data/build-furniture-models.mjs [--upload] [id ...]
+//
+// 하는 일: 원본을 받아(이미 있으면 건너뜀) 텍스처를 WebP(색 1024px, 나머지 512px)로, 메시를 meshopt로 압축한다(원본 5~45MB → 0.1~0.7MB).
+// 필요하면 Y축으로 돌려 앞면을 +z에 맞춘다. 크기와 위치는 뷰어가 맞춘다(경계 상자의 바닥 가운데를 원점에 두고 가구 치수로 늘인다).
+// 마지막에 모델의 실제 크기를 출력한다: 카탈로그 치수(DEFAULT_CATALOG, furniture_catalog)는 이 값을 cm로 반올림해 쓴다.
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { Logger, NodeIO } from '@gltf-transform/core';
+import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { dedup, flatten, getBounds, join, meshopt, prune, simplify, textureCompress, weld } from '@gltf-transform/functions';
+import { MeshoptDecoder, MeshoptEncoder, MeshoptSimplifier } from 'meshoptimizer';
+import sharp from 'sharp';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
-const sourceDir = path.join(dataDir, 'models', 'kenney', 'Models', 'GLTF format');
-const outDir = path.join(dataDir, 'models', 'catalog');
+const modelsDir = path.join(dataDir, 'models');
+const outDir = path.join(modelsDir, 'catalog');
 
-/** 카탈로그 id → 원본 모델과 Y축 회전(도). yaw는 원본의 앞면이 +z를 보도록 눈으로 확인해 정했다 */
-export const MODELS = {
-  'bed-single': { source: 'bedSingle', yaw: 0 },
-  'bed-super-single': { source: 'bedSingle', yaw: 0 },
-  'bed-queen': { source: 'bedDouble', yaw: 0 },
-  desk: { source: 'desk', yaw: 0 },
-  chair: { source: 'chairDesk', yaw: 0 },
-  wardrobe: { source: 'bookcaseClosedDoors', yaw: 0 },
-  drawer: { source: 'sideTableDrawers', yaw: 0 },
-  'table-2': { source: 'table', yaw: 0 },
-  bookcase: { source: 'bookcaseOpen', yaw: 0 },
+export const LICENSES = {
+  abo: 'Amazon Berkeley Objects (Amazon.com), CC BY 4.0',
+  polyhaven: 'Poly Haven (CC0)',
 };
-export const MODEL_LICENSE = 'Kenney Furniture Kit 2.0 (CC0)';
 
-// ── GLB 읽기·쓰기 (헤더 12바이트 + JSON 청크 + BIN 청크) ─────────────────────────
-function readGlb(file) {
-  const buffer = readFileSync(file);
-  if (buffer.readUInt32LE(0) !== 0x46546c67) throw new Error(`GLB가 아님: ${file}`);
-  const jsonLength = buffer.readUInt32LE(12);
-  const json = JSON.parse(buffer.subarray(20, 20 + jsonLength).toString('utf8'));
-  const rest = buffer.subarray(20 + jsonLength);
-  const bin = rest.length >= 8 ? rest.subarray(8, 8 + rest.readUInt32LE(0)) : Buffer.alloc(0);
-  return { json, bin };
+/**
+ * 카탈로그 id → 원본. key는 ABO의 3dmodel_id 또는 Poly Haven의 자산 id.
+ * yaw(도)는 원본의 앞면이 +z를 보도록 돌리는 각도 (ABO는 이미 +z라 0).
+ * 슈퍼싱글은 싱글과 같은 모델을 폭만 넓혀 쓴다 (뷰어가 치수에 맞춰 늘인다).
+ */
+export const MODELS = {
+  'bed-single': { source: 'abo', key: 'B07H8V7MQS', yaw: 0 }, // Movian Moselle 싱글
+  'bed-super-single': { source: 'abo', key: 'B07H8V7MQS', yaw: 0 },
+  'bed-queen': { source: 'abo', key: 'B07K7NXVXR', yaw: 0 }, // 원목 더블
+  desk: { source: 'abo', key: 'B07H4MM3TC', yaw: 0 }, // Movian Moselle 책상
+  chair: { source: 'abo', key: 'B07MDJYKXR', yaw: 0 }, // 패브릭 회전의자
+  wardrobe: { source: 'abo', key: 'B07H8V7P3H', yaw: 0 }, // Movian Moselle 2도어 옷장
+  hanger: { source: 'abo', key: 'B07TY5QHX1', yaw: 0 }, // 선반 달린 행거
+  drawer: { source: 'abo', key: 'B084ZB8L8W', yaw: 0 }, // 3단 원목 서랍장
+  'table-2': { source: 'abo', key: 'B07ML7P94G', yaw: 0 }, // 정사각 2인 식탁
+  bookcase: { source: 'abo', key: 'B075Z6YS1Z', yaw: 0 }, // 원목·철제 4단 책장
+};
+
+/** 텍스처의 긴 변 (px). 색은 1024, 요철·거칠기는 화면에서 덜 보이므로 512로 줄여 폰의 GPU 메모리를 아낀다 */
+const COLOR_TEXTURE_SIZE = 1024;
+const DETAIL_TEXTURE_SIZE = 512;
+/** 메시 단순화 허용 오차 (모델 크기에 대한 비율) */
+const SIMPLIFY_ERROR = 0.0001;
+const USER_AGENT = 'RoomLens-dev/1.0 (school project)';
+
+async function download(url, file) {
+  const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok) throw new Error(`받기 실패 ${res.status}: ${url}`);
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, Buffer.from(await res.arrayBuffer()));
 }
 
-function writeGlb(file, json, bin) {
-  const pad = (buffer, fill) => Buffer.concat([buffer, Buffer.alloc((4 - (buffer.length % 4)) % 4, fill)]);
-  const jsonChunk = pad(Buffer.from(JSON.stringify(json), 'utf8'), 0x20);
-  const binChunk = pad(bin, 0);
-  const header = Buffer.alloc(12);
-  header.writeUInt32LE(0x46546c67, 0);
-  header.writeUInt32LE(2, 4);
-  header.writeUInt32LE(12 + 8 + jsonChunk.length + (binChunk.length ? 8 + binChunk.length : 0), 8);
-  const chunkHeader = (length, type) => {
-    const b = Buffer.alloc(8);
-    b.writeUInt32LE(length, 0);
-    b.writeUInt32LE(type, 4);
-    return b;
-  };
-  const parts = [header, chunkHeader(jsonChunk.length, 0x4e4f534a), jsonChunk];
-  if (binChunk.length) parts.push(chunkHeader(binChunk.length, 0x004e4942), binChunk);
-  writeFileSync(file, Buffer.concat(parts));
-}
-
-// ── 경계 상자: 노드 변환을 따라 내려가며 각 메시의 POSITION min/max 여덟 꼭짓점을 변환한다 ──────
-const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
-function multiply(a, b) {
-  const out = new Array(16).fill(0);
-  for (let c = 0; c < 4; c += 1) for (let r = 0; r < 4; r += 1) for (let k = 0; k < 4; k += 1) out[c * 4 + r] += a[k * 4 + r] * b[c * 4 + k];
-  return out;
-}
-function nodeMatrix(node) {
-  if (node.matrix) return node.matrix;
-  const [tx, ty, tz] = node.translation ?? [0, 0, 0];
-  const [x, y, z, w] = node.rotation ?? [0, 0, 0, 1];
-  const [sx, sy, sz] = node.scale ?? [1, 1, 1];
-  return [
-    (1 - 2 * (y * y + z * z)) * sx, 2 * (x * y + z * w) * sx, 2 * (x * z - y * w) * sx, 0,
-    2 * (x * y - z * w) * sy, (1 - 2 * (x * x + z * z)) * sy, 2 * (y * z + x * w) * sy, 0,
-    2 * (x * z + y * w) * sz, 2 * (y * z - x * w) * sz, (1 - 2 * (x * x + y * y)) * sz, 0,
-    tx, ty, tz, 1,
-  ];
-}
-export function boundingBox(json) {
-  const min = [Infinity, Infinity, Infinity];
-  const max = [-Infinity, -Infinity, -Infinity];
-  const visit = (index, parent) => {
-    const node = json.nodes[index];
-    const matrix = multiply(parent, nodeMatrix(node));
-    if (node.mesh !== undefined) {
-      for (const primitive of json.meshes[node.mesh].primitives) {
-        const accessor = json.accessors[primitive.attributes.POSITION];
-        for (let corner = 0; corner < 8; corner += 1) {
-          const p = [0, 1, 2].map((k) => ((corner >> k) & 1 ? accessor.max[k] : accessor.min[k]));
-          for (let k = 0; k < 3; k += 1) {
-            const v = matrix[k] * p[0] + matrix[4 + k] * p[1] + matrix[8 + k] * p[2] + matrix[12 + k];
-            min[k] = Math.min(min[k], v);
-            max[k] = Math.max(max[k], v);
-          }
-        }
-      }
+/** 원본을 받아 두고 읽을 파일 경로를 돌려준다 */
+async function fetchSource({ source, key }) {
+  if (source === 'abo') {
+    // 저장소 안의 경로는 "<id의 마지막 글자>/<id>.glb"
+    const file = path.join(modelsDir, 'abo', `${key}.glb`);
+    if (!existsSync(file)) await download(`https://amazon-berkeley-objects.s3.amazonaws.com/3dmodels/original/${key.at(-1)}/${key}.glb`, file);
+    return file;
+  }
+  if (source === 'polyhaven') {
+    const dir = path.join(modelsDir, 'polyhaven', key);
+    const file = path.join(dir, `${key}.gltf`);
+    if (!existsSync(file)) {
+      const res = await fetch(`https://api.polyhaven.com/files/${key}`, { headers: { 'User-Agent': USER_AGENT } });
+      if (!res.ok) throw new Error(`Poly Haven 목록 실패 ${res.status}: ${key}`);
+      const gltf = (await res.json()).gltf['1k'].gltf;
+      for (const [rel, { url }] of Object.entries(gltf.include ?? {})) await download(url, path.join(dir, rel));
+      await download(gltf.url, file);
     }
-    for (const child of node.children ?? []) visit(child, matrix);
-  };
-  for (const root of json.scenes[json.scene ?? 0].nodes) visit(root, identity());
-  return { min, max, size: max.map((v, k) => v - min[k]) };
+    return file;
+  }
+  throw new Error(`모르는 원본: ${source}`);
 }
 
 /** 장면의 맨 위에 Y축 회전 노드를 하나 끼운다 */
-function withYaw(json, yawDeg) {
-  const out = structuredClone(json);
-  const scene = out.scenes[out.scene ?? 0];
+function addYaw(document, yawDeg) {
+  if (!yawDeg) return;
+  const scene = document.getRoot().getDefaultScene() ?? document.getRoot().listScenes()[0];
   const half = (yawDeg * Math.PI) / 360;
-  out.nodes.push({ name: 'roomlens-root', rotation: [0, Math.sin(half), 0, Math.cos(half)], children: scene.nodes });
-  scene.nodes = [out.nodes.length - 1];
-  return out;
+  const root = document.createNode('roomlens-root').setRotation([0, Math.sin(half), 0, Math.cos(half)]);
+  for (const child of scene.listChildren()) {
+    scene.removeChild(child);
+    root.addChild(child);
+  }
+  scene.addChild(root);
 }
 
 const round = (v) => +v.toFixed(3);
 
+/** 원본 크기 (Poly Haven은 .gltf 옆의 파일까지 더한다) */
+function sourceBytes(file) {
+  if (!file.endsWith('.gltf')) return statSync(file).size;
+  const dir = path.dirname(file);
+  return readdirSync(dir, { recursive: true }).reduce((sum, rel) => {
+    const stat = statSync(path.join(dir, rel));
+    return stat.isFile() ? sum + stat.size : sum;
+  }, 0);
+}
+
 async function main() {
   const upload = process.argv.includes('--upload');
-  const inspect = process.argv.includes('--inspect');
-  if (inspect) {
-    // 후보 모델의 크기를 본다: node ... --inspect bedSingle desk ...
-    for (const name of process.argv.slice(process.argv.indexOf('--inspect') + 1)) {
-      const { json } = readGlb(path.join(sourceDir, `${name}.glb`));
-      const box = boundingBox(json);
-      console.log(name, 'size', box.size.map(round), 'min', box.min.map(round), 'ext', json.extensionsUsed ?? [], 'tex', (json.images ?? []).length, 'mat', (json.materials ?? []).length);
-    }
-    return;
-  }
+  const only = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+  await Promise.all([MeshoptDecoder.ready, MeshoptEncoder.ready, MeshoptSimplifier.ready]);
+  const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.decoder': MeshoptDecoder, 'meshopt.encoder': MeshoptEncoder });
   mkdirSync(outDir, { recursive: true });
   const s3 = upload
     ? new S3Client({
@@ -138,22 +126,42 @@ async function main() {
         responseChecksumValidation: 'WHEN_REQUIRED',
       })
     : null;
-  for (const [id, { source, yaw }] of Object.entries(MODELS)) {
-    const { json, bin } = readGlb(path.join(sourceDir, `${source}.glb`));
-    const turned = withYaw(json, yaw);
+
+  const sizes = {};
+  for (const [id, model] of Object.entries(MODELS)) {
+    if (only.length && !only.includes(id)) continue;
+    const sourceFile = await fetchSource(model);
+    const document = await io.read(sourceFile);
+    document.setLogger(new Logger(Logger.Verbosity.WARN));
+    addYaw(document, model.yaw);
+    await document.transform(
+      dedup(),
+      flatten(),
+      join(),
+      weld(),
+      simplify({ simplifier: MeshoptSimplifier, error: SIMPLIFY_ERROR }),
+      textureCompress({ encoder: sharp, targetFormat: 'webp', slots: /^(normal|occlusion|metallicRoughness)/, resize: [DETAIL_TEXTURE_SIZE, DETAIL_TEXTURE_SIZE] }),
+      textureCompress({ encoder: sharp, targetFormat: 'webp', resize: [COLOR_TEXTURE_SIZE, COLOR_TEXTURE_SIZE] }),
+      prune(),
+      meshopt({ encoder: MeshoptEncoder, level: 'high' }),
+    );
     const outFile = path.join(outDir, `${id}.glb`);
-    writeGlb(outFile, turned, bin);
-    const box = boundingBox(readGlb(outFile).json);
-    const bytes = readFileSync(outFile).length;
-    console.log(`${id} ← ${source} (yaw ${yaw}°): 가로 ${round(box.size[0])} × 깊이 ${round(box.size[2])} × 높이 ${round(box.size[1])}, ${bytes} bytes`);
+    await io.write(outFile, document);
+    const scene = document.getRoot().getDefaultScene() ?? document.getRoot().listScenes()[0];
+    const { min, max } = getBounds(scene);
+    const size = max.map((v, k) => v - min[k]);
+    sizes[id] = { source: model.source, key: model.key, license: LICENSES[model.source], width: round(size[0]), depth: round(size[2]), height: round(size[1]) };
+    const mb = (bytes) => (bytes / 1e6).toFixed(2);
+    console.log(`${id} ← ${model.source}:${model.key}: 가로 ${round(size[0])} × 깊이 ${round(size[2])} × 높이 ${round(size[1])} m, ${mb(sourceBytes(sourceFile))}MB → ${mb(statSync(outFile).size)}MB`);
     if (s3) {
-      await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: `furniture/catalog/${id}.glb`, Body: readFileSync(outFile), ContentType: 'model/gltf-binary' }));
-      console.log(`  → R2 furniture/catalog/${id}.glb`);
+      await s3.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET, Key: `furniture/catalog/v2/${id}.glb`, Body: readFileSync(outFile), ContentType: 'model/gltf-binary' }));
+      console.log(`  → R2 furniture/catalog/v2/${id}.glb`);
     }
   }
+  writeFileSync(path.join(outDir, 'sizes.json'), JSON.stringify(sizes, null, 2));
 }
 
 main().catch((err) => {
-  console.error(String(err));
+  console.error(String(err?.stack ?? err));
   process.exitCode = 1;
 });

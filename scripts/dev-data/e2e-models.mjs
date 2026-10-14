@@ -1,4 +1,4 @@
-// 가구 3D 모델 실측: 카탈로그 가구 10종을 놓은 방을 열어 모델이 불러와지는지, 치수에 맞는지 본다.
+// 가구 3D 모델 실측: 카탈로그 가구 10종(실사 모델)을 놓은 방을 열어 모델이 불러와지는지, 치수에 맞는지 본다.
 // 보정 값은 secret key로 직접 넣으므로(탭 자동화 없음) 운영 주소에서도 돌릴 수 있다.
 // 방은 비공개로만 만든다. 개발 서버에서는 스플랫을 숨기고 가구만 찍은 그림도 남긴다 (../roomlens-data/_e2e/models-*.png).
 // 준비: ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/studio11_1m_up.sog
@@ -85,15 +85,16 @@ const LAYOUT = [
   piece('f9', 'table-2', 1.4, 1.0),
   piece('f10', 'hanger', 2.4, 1.0),
 ];
-const WITH_MODEL = ['bed-single', 'bed-super-single', 'bed-queen', 'desk', 'chair', 'wardrobe', 'drawer', 'table-2', 'bookcase'];
+const WITH_MODEL = ['bed-single', 'bed-super-single', 'bed-queen', 'desk', 'chair', 'wardrobe', 'hanger', 'drawer', 'table-2', 'bookcase'];
+const MODEL_PREFIX = 'furniture/catalog/v2/';
 
 try {
   // 0) 카탈로그와 R2
   const { data: catalog } = await admin.from('furniture_catalog').select('id, model_key, license').order('sort_order');
   const keyed = catalog.filter((c) => c.model_key);
-  check('DB: 9종에 모델 경로와 라이선스(CC0), 행거는 없음', keyed.length === 9 && keyed.every((c) => c.model_key === `furniture/catalog/${c.id}.glb` && c.license.includes('CC0')) && catalog.find((c) => c.id === 'hanger').model_key === null, keyed.map((c) => c.id));
-  const stored = await listKeys('furniture/catalog/');
-  check('R2: furniture/catalog/ 에 모델 파일 9개', WITH_MODEL.every((id) => stored.includes(`furniture/catalog/${id}.glb`)) && stored.length === 9, stored.length);
+  check('DB: 10종 모두 실사 모델 경로와 라이선스(ABO, CC BY 4.0)', keyed.length === 10 && keyed.every((c) => c.model_key === `${MODEL_PREFIX}${c.id}.glb` && c.license.includes('Amazon Berkeley Objects') && c.license.includes('CC BY 4.0')), keyed.map((c) => c.id));
+  const stored = await listKeys(MODEL_PREFIX);
+  check(`R2: ${MODEL_PREFIX} 에 모델 파일 10개`, WITH_MODEL.every((id) => stored.includes(`${MODEL_PREFIX}${id}.glb`)) && stored.length === 10, stored.length);
 
   // 준비: 방 주인이 가입 → 방 만들고 파일 올리기 → 보정 값·배치 넣기
   const page = await newPage();
@@ -101,7 +102,7 @@ try {
   page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 200)));
   const glbResponses = [];
   page.on('response', (res) => {
-    if (res.url().includes('/furniture/catalog/')) glbResponses.push({ status: res.status(), id: res.url().split('/furniture/catalog/')[1].split('.glb')[0] });
+    if (res.url().includes(`/${MODEL_PREFIX}`)) glbResponses.push({ status: res.status(), id: res.url().split(`/${MODEL_PREFIX}`)[1].split('.glb')[0], bytes: Number(res.headers()['content-length'] ?? 0) });
   });
   await signUp(page, emails.owner);
   await page.route('**/__e2e_scene', (route) => route.fulfill({ path: scenePath, contentType: 'application/octet-stream' }));
@@ -122,12 +123,15 @@ try {
 
   // 1) 방을 열면 모델을 받아 그린다
   await openRoom(page, roomId);
-  await page.waitForFunction(() => JSON.parse(document.querySelector('[data-testid=furniture-panel]').getAttribute('data-json')).filter((i) => i.model).length >= 9, null, { timeout: 30000 }).catch(() => {});
+  await page.waitForFunction(() => JSON.parse(document.querySelector('[data-testid=furniture-panel]').getAttribute('data-json')).filter((i) => i.model).length >= 10, null, { timeout: 30000 }).catch(() => {});
   const shown = await items();
-  check('9종은 3D 모델로, 행거는 상자로 그려짐', shown.length === 10 && shown.filter((i) => i.model).map((i) => i.furnitureRef).sort().join() === [...WITH_MODEL].sort().join() && shown.find((i) => i.furnitureRef === 'hanger').model === false, shown.map((i) => [i.name, i.model]));
+  check('10종 모두 3D 모델로 그려짐', shown.length === 10 && shown.filter((i) => i.model).map((i) => i.furnitureRef).sort().join() === [...WITH_MODEL].sort().join(), shown.map((i) => [i.name, i.model]));
   const okIds = [...new Set(glbResponses.filter((r) => r.status === 200).map((r) => r.id))];
-  check('모델 파일 9개를 한 번씩만 받음 (모두 200)', okIds.length === 9 && glbResponses.length === 9, glbResponses.map((r) => r.status));
-  check('치수·위치는 카탈로그·저장값 그대로 (모델이 가구 크기를 바꾸지 않음)', shown[0].w === 1 && shown[0].d === 2 && shown[2].w === 1.5 && shown[5].name === '책상' && shown[5].w === 1.2 && shown[5].h === 0.73 && shown[5].x === -2.2, shown.slice(0, 3).map((i) => [i.name, i.w, i.d, i.h]));
+  check('모델 파일 10개를 한 번씩만 받음 (모두 200)', okIds.length === 10 && glbResponses.length === 10, glbResponses.map((r) => r.status));
+  const totalBytes = glbResponses.reduce((sum, r) => sum + r.bytes, 0);
+  check('모델 파일은 작다 (하나 1MB 미만, 10개 합 3MB 미만)', glbResponses.every((r) => r.bytes > 0 && r.bytes < 1e6) && totalBytes < 3e6, `${(totalBytes / 1e6).toFixed(2)}MB`);
+  check('치수·위치는 카탈로그(실사 모델의 실제 크기)·저장값 그대로', shown[0].w === 0.99 && shown[0].d === 2.14 && shown[2].w === 1.47 && shown[5].name === '책상' && shown[5].w === 1.25 && shown[5].h === 0.77 && shown[5].x === -2.2, shown.slice(0, 3).map((i) => [i.name, i.w, i.d, i.h]));
+  check('가구 추가 칸 아래에 모델 출처(ABO, CC BY 4.0)가 보임', (await page.getByTestId('furniture-credit').innerText()).includes('Amazon Berkeley Objects (Amazon.com), CC BY 4.0'), await page.getByTestId('furniture-credit').innerText().catch(() => null));
   // 침대 셋을 나란히 붙여 놓아 "옆으로 들어갈 자리" 경고는 나온다. 고쳐야 하는 문제(겹침·방 밖)는 없어야 한다
   check('배치에 고쳐야 할 문제 없음, 화면 오류 없음', (await page.getByTestId('layout-violations').getAttribute('data-errors')) === '0' && pageErrors.length === 0, pageErrors);
 
@@ -140,6 +144,7 @@ try {
       e.scene.traverse((node) => {
         if (!node.userData?.id || !node.isMesh) return;
         const model = node.children.find((c) => c.isGroup);
+        const shadow = node.children.find((c) => c.isMesh && c.material?.map && c.material.transparent);
         if (!model) return;
         model.updateMatrixWorld(true);
         // 모델의 메시만으로 경계 상자를 잰다
@@ -155,7 +160,9 @@ try {
             max = max.map((v, k) => Math.max(v, p.getComponent(k)));
           }
         });
-        out.push({ id: node.userData.id, size: max.map((v, k) => +(v - min[k]).toFixed(3)), floor: +min[1].toFixed(3), center: [+((min[0] + max[0]) / 2).toFixed(3), +((min[2] + max[2]) / 2).toFixed(3)] });
+        shadow?.updateMatrixWorld(true);
+        const shadowY = shadow ? +shadow.getWorldPosition(shadow.position.clone()).y.toFixed(4) : null;
+        out.push({ id: node.userData.id, size: max.map((v, k) => +(v - min[k]).toFixed(3)), floor: +min[1].toFixed(3), center: [+((min[0] + max[0]) / 2).toFixed(3), +((min[2] + max[2]) / 2).toFixed(3)], shadowY });
       });
       return out;
     });
@@ -164,12 +171,14 @@ try {
       const m = byId[i.id];
       return m && Math.abs(m.size[0] - i.w) < 0.002 && Math.abs(m.size[1] - i.h) < 0.002 && Math.abs(m.size[2] - i.d) < 0.002 && Math.abs(m.floor) < 0.002 && Math.abs(m.center[0] - i.x) < 0.002 && Math.abs(m.center[1] - i.z) < 0.002;
     });
-    check('그려진 모델 9개의 크기가 가구의 가로·높이·깊이와 같고, 바닥(y=0) 위 제자리에 있음', measured.length === 9 && fits, measured.map((m) => [m.id, ...m.size]));
+    check('그려진 모델 10개의 크기가 가구의 가로·높이·깊이와 같고, 바닥(y=0) 위 제자리에 있음', measured.length === 10 && fits, measured.map((m) => [m.id, ...m.size]));
+    check('모델마다 바닥 바로 위(0~1cm)에 그림자 판이 있음', measured.every((m) => m.shadowY !== null && m.shadowY > 0 && m.shadowY < 0.01), measured.map((m) => m.shadowY));
 
     const shot = async (name, position, target) => {
       await page.evaluate(
         async ({ position, target }) => {
           const e = window.__roomlens;
+          e.freeCamera = true; // 방 밖에서 내려다보도록 "방 안에서만"을 끈다
           e.splat.visible = false;
           e.scene.background = e.scene.background ?? null;
           e.camera.position.set(...position);
@@ -190,6 +199,7 @@ try {
     // 3) 모델로 그려진 가구도 3D에서 끌 수 있다 (보이지 않는 상자를 잡는다)
     await page.evaluate(async () => {
       const e = window.__roomlens;
+      e.freeCamera = true;
       e.camera.position.set(0, 6, 3);
       e.controls.target.set(0, 0, 0.5);
       e.controls.update();
@@ -234,7 +244,7 @@ try {
     }
     await admin.auth.admin.deleteUser(u.id);
   }
-    check('시험용 계정·방·R2 파일 삭제 (모델 파일은 그대로)', mine.length === 1 && (await listKeys('furniture/catalog/')).length === 9, `계정 ${mine.length}, 지운 파일 ${removed}`);
+    check('시험용 계정·방·R2 파일 삭제 (모델 파일은 그대로)', mine.length === 1 && (await listKeys(MODEL_PREFIX)).length === 10, `계정 ${mine.length}, 지운 파일 ${removed}`);
 }
 
 for (const c of checks) console.log(c.ok ? 'PASS' : 'FAIL', c.name, c.detail ? JSON.stringify(c.detail) : '');

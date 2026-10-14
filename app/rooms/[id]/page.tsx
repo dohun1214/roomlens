@@ -47,7 +47,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     supabase.from('profiles').select('nickname').eq('id', room.owner_id).maybeSingle(),
     supabase
       .from('furniture_catalog')
-      .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m, model_key')
+      .select('id, name_ko, category, width_m, depth_m, height_m, clearance_m, model_key, license')
       .order('sort_order'),
     // 이 방에 내가 저장해 둔 가구 배치들 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
     ready && user ? loadMyLayouts(supabase, room.id, user.id) : undefined,
