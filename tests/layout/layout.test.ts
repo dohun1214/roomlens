@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Footprint, Point2 } from '@/lib/three/floorDrag';
 import { lastInsideAlong } from '@/lib/layout/geometry';
-import { categoryColor, DEFAULT_CATALOG, fromCatalogRow } from '@/lib/layout/catalog';
+import { readFileSync } from 'node:fs';
+import { categoryColor, DEFAULT_CATALOG, fromCatalogRow, modelCredits } from '@/lib/layout/catalog';
 import { checkLayout, findFreeSpot, violatingIds, type LayoutItem } from '@/lib/layout/check';
 import {
   distanceToPolygon,
@@ -159,6 +160,31 @@ describe('카탈로그', () => {
   it('DB 행을 화면에서 쓰는 모양으로 바꾼다 (numeric이 문자열로 와도 숫자로)', () => {
     const row = { id: 'desk', name_ko: '책상', category: 'desk', width_m: '1.20' as unknown as number, depth_m: 0.6, height_m: 0.73, clearance_m: 0.7 };
     expect(fromCatalogRow(row)).toEqual({ id: 'desk', nameKo: '책상', category: 'desk', w: 1.2, d: 0.6, h: 0.73, clearance: 0.7 });
+  });
+
+  it('모델 출처가 있으면 함께 넘긴다', () => {
+    const row = { id: 'desk', name_ko: '책상', category: 'desk', width_m: 1.25, depth_m: 0.6, height_m: 0.77, clearance_m: 0.7, license: 'ABO, CC BY 4.0' };
+    expect(fromCatalogRow(row, 'https://r2/desk.glb')).toMatchObject({ modelUrl: 'https://r2/desk.glb', license: 'ABO, CC BY 4.0' });
+    expect(fromCatalogRow({ ...row, license: null })).not.toHaveProperty('license');
+  });
+
+  it('출처 목록: 모델이 있는 가구의 출처만, 겹치지 않게', () => {
+    const base = DEFAULT_CATALOG[0];
+    expect(
+      modelCredits([
+        { ...base, id: 'a', modelUrl: 'u1', license: 'ABO' },
+        { ...base, id: 'b', modelUrl: 'u2', license: 'ABO' },
+        { ...base, id: 'c', modelUrl: 'u3', license: 'Poly Haven' },
+        { ...base, id: 'd', license: 'Kenney' }, // 모델 주소가 없으면 화면에 모델이 없으므로 뺀다
+        { ...base, id: 'e', modelUrl: 'u4' },
+      ]),
+    ).toEqual(['ABO', 'Poly Haven']);
+  });
+
+  it('기본 카탈로그 치수는 실사 모델 마이그레이션과 같다', () => {
+    const sql = readFileSync('supabase/migrations/20261014123558_furniture_catalog_real_models.sql', 'utf8');
+    const rows = [...sql.matchAll(/\('([a-z0-9-]+)', ([\d.]+), ([\d.]+), ([\d.]+)\)/g)].map((m) => [m[1], +m[2], +m[3], +m[4]]);
+    expect(rows).toEqual(DEFAULT_CATALOG.map((c) => [c.id, c.w, c.d, c.h]));
   });
 
   it('기본 카탈로그는 10종이고 id가 겹치지 않는다', () => {
