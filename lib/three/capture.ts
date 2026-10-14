@@ -18,7 +18,7 @@ export type CaptureEngine = {
  * ms만큼 기다린다. 탭이 뒤에 있으면 브라우저가 setTimeout을 1초~1분에 한 번으로 늦추므로
  * (그대로 두면 캡처 한 장에 몇 분이 걸린다), 그때는 늦춰지지 않는 MessageChannel로 시간을 잰다.
  */
-function wait(ms: number): Promise<void> {
+export function wait(ms: number): Promise<void> {
   if (typeof document === 'undefined' || !document.hidden) return new Promise((resolve) => setTimeout(resolve, ms));
   return new Promise((resolve) => {
     const until = performance.now() + ms;
@@ -36,7 +36,7 @@ function wait(ms: number): Promise<void> {
 }
 
 /** 캡처한 JPEG의 base64가 이보다 짧으면 "거의 빈 그림"으로 본다 (한 가지 색뿐인 1024px 그림이 약 4~8KB) */
-const BLANK_BASE64 = 12_000;
+export const BLANK_BASE64 = 12_000;
 
 /** canvas를 긴 변 longSide 이하의 JPEG로 줄여 base64(머리말 없이)로 돌려준다 */
 export function canvasToJpegBase64(source: HTMLCanvasElement | ImageBitmap, longSide: number, quality: number): string {

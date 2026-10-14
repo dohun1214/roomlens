@@ -5,7 +5,7 @@ import { DAILY_AI_LIMIT, kstDayStart, remainingCalls } from './limits';
 // AI 호출 기록(ai_calls)을 쓰고 센다. 기록은 서버 전용 클라이언트로만 쓴다
 // (브라우저가 자기 횟수를 지우거나 고칠 수 없게). 부르기 전에 반드시 로그인한 사용자를 확인한다.
 
-export type AiCallKind = 'layout' | 'analysis' | 'openings';
+export type AiCallKind = 'layout' | 'analysis' | 'openings' | 'fixtures';
 
 /** 오늘(한국 시간) 쓴 횟수: 진행 중이거나 끝난 호출. 실패한 호출은 세지 않는다. 읽지 못하면 null */
 export async function countCallsToday(userId: string): Promise<number | null> {

@@ -20,7 +20,24 @@ export const MIN_TOP_HEIGHT = 0.15;
 export const DEFAULT_FIXTURE_HEIGHT = 0.8;
 export const FIXTURE_LABEL_MAX = 12;
 /** 이름을 고르는 칸의 보기 */
-export const FIXTURE_LABELS = ['침대', '소파', '책상', '식탁', '옷장', '수납장', '책장', '냉장고', '세탁기', '가구'] as const;
+export const FIXTURE_LABELS = ['침대', '소파', '책상', '식탁', '테이블', '의자', '옷장', '수납장', '책장', '냉장고', '세탁기', 'TV장', '가구'] as const;
+export type FixtureLabel = (typeof FIXTURE_LABELS)[number];
+/** 이름별로 흔한 높이 (m). 스플랫에서 높이를 재지 못했을 때 쓴다 */
+export const LABEL_HEIGHTS: Record<FixtureLabel, number> = {
+  침대: 0.5,
+  소파: 0.8,
+  책상: 0.75,
+  식탁: 0.75,
+  테이블: 0.5,
+  의자: 0.9,
+  옷장: 2,
+  수납장: 0.9,
+  책장: 1.8,
+  냉장고: 1.8,
+  세탁기: 0.9,
+  TV장: 0.5,
+  가구: DEFAULT_FIXTURE_HEIGHT,
+};
 
 export type Fixture = { id: string; label: string; x: number; z: number; w: number; d: number; rotationDeg: number; h: number; remove: boolean };
 
@@ -59,7 +76,7 @@ export function fixtureRotation(polygon: Point2[]): number {
 }
 
 /** 회전 r의 가로·깊이 방향 */
-function axes(rotationDeg: number): [Point2, Point2] {
+export function fixtureAxes(rotationDeg: number): [Point2, Point2] {
   const r = (rotationDeg * Math.PI) / 180;
   return [
     [Math.cos(r), -Math.sin(r)],
@@ -82,7 +99,7 @@ export function fixtureFromCorners(a: Point2, b: Point2, h: number, polygon: Poi
   if (existing.length >= MAX_FIXTURES) return fail(`원래 가구는 ${MAX_FIXTURES}개까지 넣을 수 있습니다.`);
   if (![...a, ...b, h].every(Number.isFinite)) return fail('위치를 알 수 없습니다. 다시 찍어 주세요.');
   const rotationDeg = fixtureRotation(polygon);
-  const [ux, uz] = axes(rotationDeg);
+  const [ux, uz] = fixtureAxes(rotationDeg);
   const along = (p: Point2, u: Point2) => p[0] * u[0] + p[1] * u[1];
   const [a1, a2] = [along(a, ux), along(b, ux)];
   const [b1, b2] = [along(a, uz), along(b, uz)];

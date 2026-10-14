@@ -26,7 +26,7 @@ export function pointerToNdc(event: { clientX: number; clientY: number }, elemen
  * - lod: true 로 열었으면 원본 배열은 비어 있고, LOD 트리(lodSplats) 중 현재 선택된 인덱스만 쓴다
  *   (트리 전체를 쓰면 같은 표면이 여러 단계로 중복된다)
  */
-function visitRenderedSplats(mesh: SplatMesh): ((visit: SplatVisitor) => void) | null {
+export function visitRenderedSplats(mesh: SplatMesh): ((visit: SplatVisitor) => void) | null {
   const packed: PackedSplats | undefined = mesh.packedSplats;
   if (!packed) return null;
 
