@@ -5,11 +5,12 @@ import { createPortal } from 'react-dom';
 import Icon, { type IconName } from '@/components/ui/Icon';
 
 /** 방 화면의 도구. 왼쪽 도구 줄(폰은 아래 탭)에서 하나를 고르면 그 도구의 패널만 보인다 */
-export type ToolId = 'furniture' | 'openings' | 'calibration' | 'analysis';
+export type ToolId = 'furniture' | 'openings' | 'fixtures' | 'calibration' | 'analysis';
 
 export const TOOLS: { id: ToolId; label: string; icon: IconName; testId: string }[] = [
   { id: 'furniture', label: '가구', icon: 'sofa', testId: 'tool-furniture' },
   { id: 'openings', label: '문·창문', icon: 'door', testId: 'openings-toggle' },
+  { id: 'fixtures', label: '원래 가구', icon: 'cube', testId: 'fixtures-toggle' },
   { id: 'calibration', label: '크기 보정', icon: 'ruler', testId: 'calibration-toggle' },
   { id: 'analysis', label: '방 분석', icon: 'report', testId: 'analysis-toggle' },
 ];

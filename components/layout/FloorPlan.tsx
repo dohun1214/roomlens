@@ -5,12 +5,14 @@ import { doorZone } from '@/lib/layout/access';
 import { dragPlacement, gridLines, planViewBox, pointsAttr, wallLabels } from '@/lib/layout/plan';
 import type { PlacedItem } from '@/lib/layout/saved';
 import { openingSegment, type Opening } from '@/lib/rooms/openings';
-import { footprintCorners, type Point2 } from '@/lib/three/floorDrag';
+import { MIN_FIXTURE_SIZE, type Fixture } from '@/lib/rooms/fixtures';
+import { footprintCorners, snapToGrid, type Point2 } from '@/lib/three/floorDrag';
 import { furnitureTone } from '@/lib/layout/furnitureLook';
 
 /** 이 거리(px)보다 적게 움직이면 끌기가 아니라 선택으로 본다 */
 const TAP_MOVE_PX = 4;
 const NO_KEYS: string[] = [];
+const NO_FIXTURES: Fixture[] = [];
 /** 이보다 짧은 벽에는 평면도에 번호를 적지 않는다 (m) */
 const MIN_LABELED_WALL = 0.45;
 
@@ -25,8 +27,12 @@ type Drag = {
   z: number;
 };
 
+/** 원래 가구 사각형을 그리는 중: 누른 점과 지금 점 (5cm 격자) */
+type Sketch = { pointerId: number; a: Point2; b: Point2 };
+
 /**
  * 방을 위에서 내려다본 평면도. 가구를 눌러 고르고 끌어서 옮긴다 (3D와 같은 5cm 격자·벽 붙이기).
+ * 방에 원래 있는 가구는 빗금 사각형으로 그리고, onDrawFixture를 주면 끌어서 새 사각형을 그린다 (그동안 가구는 잡히지 않는다).
  * 좌표는 방 좌표(m)를 그대로 쓴다: 오른쪽 +x, 아래쪽 +z.
  */
 export default function FloorPlan({
@@ -34,6 +40,8 @@ export default function FloorPlan({
   items,
   openings,
   aiOpeningKeys = NO_KEYS,
+  fixtures = NO_FIXTURES,
+  onDrawFixture,
   badIds,
   warnIds,
   selectedId,
@@ -45,6 +53,10 @@ export default function FloorPlan({
   openings: Opening[];
   /** AI가 찾아 아직 확인하지 않은 문·창문 (`벽 번호|시작`). 점선으로 그린다 */
   aiOpeningKeys?: string[];
+  /** 방에 원래 있는 가구 */
+  fixtures?: Fixture[];
+  /** 원래 가구 사각형을 그리는 중이면 그린 두 모서리를 받는다 */
+  onDrawFixture?: (a: Point2, b: Point2) => void;
   /** 문제가 있는 가구 (빨강) */
   badIds: Set<string>;
   /** 경고만 있는 가구 (노랑) */
@@ -56,6 +68,9 @@ export default function FloorPlan({
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [sketch, setSketch] = useState<Sketch | null>(null);
+  const drawing = Boolean(onDrawFixture);
+  const snap = (p: Point2): Point2 => [snapToGrid(p[0]), snapToGrid(p[1])];
 
   const viewBox = useMemo(() => planViewBox(floorPolygon), [floorPolygon]);
   const grid = useMemo(() => gridLines(viewBox), [viewBox]);
@@ -89,7 +104,25 @@ export default function FloorPlan({
     });
   };
 
+  const onBackgroundDown = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (!onDrawFixture) {
+      onSelect(null);
+      return;
+    }
+    if (e.button !== 0) return;
+    const point = toPlan(e);
+    if (!point) return;
+    svgRef.current?.setPointerCapture(e.pointerId);
+    const a = snap(point);
+    setSketch({ pointerId: e.pointerId, a, b: a });
+  };
+
   const onMovePointer = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (sketch && e.pointerId === sketch.pointerId) {
+      const point = toPlan(e);
+      if (point) setSketch({ ...sketch, b: snap(point) });
+      return;
+    }
     if (!drag || e.pointerId !== drag.pointerId) return;
     const item = items.find((i) => i.id === drag.id);
     const point = toPlan(e);
@@ -101,6 +134,14 @@ export default function FloorPlan({
   };
 
   const onUp = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (sketch && e.pointerId === sketch.pointerId) {
+      if (svgRef.current?.hasPointerCapture(e.pointerId)) svgRef.current.releasePointerCapture(e.pointerId);
+      const { a, b } = sketch;
+      setSketch(null);
+      // 너무 작으면(그냥 누른 것) 넣지 않는다
+      if (Math.abs(b[0] - a[0]) >= MIN_FIXTURE_SIZE && Math.abs(b[1] - a[1]) >= MIN_FIXTURE_SIZE) onDrawFixture?.(a, b);
+      return;
+    }
     if (!drag || e.pointerId !== drag.pointerId) return;
     if (svgRef.current?.hasPointerCapture(e.pointerId)) svgRef.current.releasePointerCapture(e.pointerId);
     if (drag.moved) onMove(drag.id, drag.x, drag.z);
@@ -112,13 +153,14 @@ export default function FloorPlan({
   return (
     <svg
       ref={svgRef}
-      className="h-full w-full touch-none select-none"
+      className={`h-full w-full touch-none select-none ${drawing ? 'cursor-crosshair' : ''}`}
       viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.width} ${viewBox.height}`}
       preserveAspectRatio="xMidYMid meet"
       role="img"
       aria-label="방 평면도"
       data-testid="floor-plan"
-      onPointerDown={() => onSelect(null)}
+      data-drawing={drawing}
+      onPointerDown={onBackgroundDown}
       onPointerMove={onMovePointer}
       onPointerUp={onUp}
       onPointerCancel={onUp}
@@ -202,6 +244,48 @@ export default function FloorPlan({
         );
       })}
 
+      {/* 방에 원래 있는 가구: 빗금 사각형. 치울 가구는 주황 점선 테두리만 */}
+      <defs>
+        <pattern id="fixture-hatch" width={0.12} height={0.12} patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+          <line x1={0} y1={0} x2={0} y2={0.12} stroke="#8a94a6" strokeWidth={0.03} />
+        </pattern>
+      </defs>
+      {fixtures.map((f) => {
+        const corners = footprintCorners(f);
+        return (
+          <g key={f.id} pointerEvents="none" data-testid="plan-fixture" data-id={f.id} data-remove={f.remove}>
+            <polygon
+              points={pointsAttr(corners)}
+              fill={f.remove ? 'none' : 'url(#fixture-hatch)'}
+              stroke={f.remove ? '#e0603a' : '#5b6478'}
+              strokeWidth={2}
+              strokeDasharray={f.remove ? '6 4' : undefined}
+              strokeLinejoin="round"
+              {...stroke}
+            />
+            <text x={f.x} y={f.z} fontSize={0.14} fontWeight={600} fill={f.remove ? '#c4471f' : '#3b4356'} textAnchor="middle" dominantBaseline="central">
+              {f.remove ? `${f.label} (치움)` : f.label}
+            </text>
+          </g>
+        );
+      })}
+      {sketch && (
+        <rect
+          x={Math.min(sketch.a[0], sketch.b[0])}
+          y={Math.min(sketch.a[1], sketch.b[1])}
+          width={Math.abs(sketch.b[0] - sketch.a[0])}
+          height={Math.abs(sketch.b[1] - sketch.a[1])}
+          fill="#3350e8"
+          fillOpacity={0.12}
+          stroke="#3350e8"
+          strokeWidth={2}
+          strokeDasharray="6 4"
+          pointerEvents="none"
+          {...stroke}
+          data-testid="plan-fixture-sketch"
+        />
+      )}
+
       {/* 가구 */}
       {items.map((item) => {
         const shown = drag && drag.id === item.id ? { ...item, x: drag.x, z: drag.z } : item;
@@ -217,7 +301,8 @@ export default function FloorPlan({
               stroke={state === 'error' ? '#d93a2e' : state === 'warning' ? '#d99a0b' : selected ? '#3350e8' : tone.stroke}
               strokeWidth={state !== 'ok' || selected ? 3.5 : 2}
               strokeLinejoin="round"
-              className="cursor-grab"
+              className={drawing ? undefined : 'cursor-grab'}
+              pointerEvents={drawing ? 'none' : undefined}
               {...stroke}
               data-testid="plan-item"
               data-id={item.id}

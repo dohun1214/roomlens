@@ -15,6 +15,7 @@ import { loadMyLayouts } from '@/lib/layout/store';
 import { loadUserFurniture } from '@/lib/layout/userFurniture';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { parseOpenings } from '@/lib/rooms/openings';
+import { parseFixtures } from '@/lib/rooms/fixtures';
 import { RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
@@ -32,7 +33,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
   const supabase = await createClient();
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon, openings')
+    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon, openings, fixtures')
     .eq('id', id)
     .maybeSingle();
   if (!room) notFound();
@@ -126,6 +127,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             initialReport={report && reportRow ? { id: reportRow.id, model: reportRow.model, createdAt: reportRow.created_at, report } : null}
             userFurniture={myFurniture}
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
+            initialFixtures={parseFixtures(room.fixtures, calibration?.floorPolygon ?? null)}
             credit={room.credit}
           />
         ) : (
