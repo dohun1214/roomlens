@@ -321,6 +321,7 @@ export type Database = {
           created_at: string;
           credit: string;
           description: string;
+          fixtures: Json;
           floor_polygon: Json | null;
           id: string;
           is_public: boolean;
@@ -340,6 +341,7 @@ export type Database = {
           created_at?: string;
           credit?: string;
           description?: string;
+          fixtures?: Json;
           floor_polygon?: Json | null;
           id?: string;
           is_public?: boolean;
@@ -359,6 +361,7 @@ export type Database = {
           created_at?: string;
           credit?: string;
           description?: string;
+          fixtures?: Json;
           floor_polygon?: Json | null;
           id?: string;
           is_public?: boolean;

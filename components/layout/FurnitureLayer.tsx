@@ -20,6 +20,7 @@ import {
   type UserFurnitureValue,
 } from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
+import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
 import {
   MAX_LAYOUT_ITEMS,
   nextItemNumber,
@@ -54,6 +55,7 @@ const WARNING_EMISSIVE = 0x4a3800;
 const SHADOW_OPACITY = 0.45;
 const SHADOW_LIFT = 0.004;
 const NO_OPENINGS: Opening[] = [];
+const NO_FIXTURES: Fixture[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
 const NO_LAYOUTS: LayoutChoice[] = [];
 const NO_KEYS: string[] = [];
@@ -86,6 +88,8 @@ export default function FurnitureLayer({
   catalog = DEFAULT_CATALOG,
   openings = NO_OPENINGS,
   aiOpeningKeys = NO_KEYS,
+  fixtures = NO_FIXTURES,
+  onDrawFixture,
   userFurniture = NO_FURNITURE,
   onCreateFurniture,
   onDeleteFurniture,
@@ -115,6 +119,10 @@ export default function FurnitureLayer({
   openings?: Opening[];
   /** 그 가운데 AI가 찾아 아직 확인하지 않은 것 (평면도에서 점선으로 그린다) */
   aiOpeningKeys?: string[];
+  /** 방에 원래 있는 가구. 새 가구는 피해서 놓고, 겹치면 문제로 알린다 ("치울 가구"는 없는 것으로 본다) */
+  fixtures?: Fixture[];
+  /** 평면도에서 원래 가구 사각형을 그리는 중이면 그린 두 모서리를 받는다 */
+  onDrawFixture?: (a: Point2, b: Point2) => void;
   /** 내가 만들어 둔 가구. 처음 한 번만 읽는다 */
   userFurniture?: CatalogItem[];
   /** 내 가구를 만든다 (주면 "내 가구" 칸이 생긴다). 실패하면 null */
@@ -174,7 +182,8 @@ export default function FurnitureLayer({
     itemsRef.current = items;
   }, [items]);
 
-  const violations = useMemo(() => checkLayout(items, floorPolygon, openings), [items, floorPolygon, openings]);
+  const obstacles = useMemo(() => fixtureObstacles(fixtures), [fixtures]);
+  const violations = useMemo(() => checkLayout(items, floorPolygon, openings, obstacles), [items, floorPolygon, openings, obstacles]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
   const warnIds = useMemo(() => warningIds(violations), [violations]);
   const errorCount = violations.filter((v) => v.severity === 'error').length;
@@ -373,9 +382,10 @@ export default function FurnitureLayer({
     // 되도록 가구의 쓰는 쪽(책상·수납의 앞 등)이 서로 막히지 않는 자리를 고른다
     const others = itemsRef.current;
     const doorZones = openings.flatMap((o) => (o.type === 'door' ? [doorZone(o, floorPolygon)] : [])).filter((zone) => zone !== null);
-    const obstacles = [...others, ...doorZones];
-    const prefer = (spot: Footprint) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, others, floorPolygon);
-    let placed = findFreeSpot(entry, obstacles, floorPolygon, prefer);
+    // 방에 원래 있는 가구 자리도 피한다
+    const avoid = [...others, ...obstacles, ...doorZones];
+    const prefer = (spot: Footprint) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, [...others, ...obstacles], floorPolygon);
+    let placed = findFreeSpot(entry, avoid, floorPolygon, prefer);
     // 3D로 보는 중인데 그 자리가 화면 밖이면(창문을 가까이 보고 있을 때 등) 추가된 줄 모른다 → 화면 가운데 바닥부터 찾는다
     const engine = engineRef.current;
     if (engine && !showPlan && !inView(engine, placed.x, entry.h / 2, placed.z)) {
@@ -385,7 +395,7 @@ export default function FurnitureLayer({
       // 화면 가운데 광선이 바닥에 닿는 곳(바닥을 안 보면 2m 앞). 벽 너머면 벽 바로 앞까지 당긴다
       const ahead = rayFloorPoint(ray.ray.origin, ray.ray.direction) ?? [eye[0] + ray.ray.direction.x * 2, eye[1] + ray.ray.direction.z * 2];
       const start = floorPolygon ? lastInsideAlong(eye, ahead, floorPolygon) : ahead;
-      if (start) placed = findFreeSpot(entry, obstacles, floorPolygon, prefer, start);
+      if (start) placed = findFreeSpot(entry, avoid, floorPolygon, prefer, start);
     }
     setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
@@ -510,6 +520,8 @@ export default function FurnitureLayer({
                 items={items}
                 openings={openings}
                 aiOpeningKeys={aiOpeningKeys}
+                fixtures={fixtures}
+                onDrawFixture={onDrawFixture}
                 badIds={badIds}
                 warnIds={warnIds}
                 selectedId={selectedId}

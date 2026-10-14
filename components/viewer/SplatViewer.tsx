@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import OpeningsTool from './OpeningsTool';
+import FixturesTool from './FixturesTool';
 import AnalysisPanel from './AnalysisPanel';
 import type { SavedReport } from '@/components/rooms/RoomReportView';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
@@ -24,6 +25,7 @@ import { pickPoint } from '@/lib/three/pickPoint';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
 import { sameOpenings, type Opening } from '@/lib/rooms/openings';
+import { sameFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
@@ -71,11 +73,14 @@ type Props = {
   userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
   initialOpenings?: Opening[];
+  /** 방에 원래 있는 가구 (저장된 보정의 방 좌표) */
+  initialFixtures?: Fixture[];
   /** 방의 출처·라이선스 (데이터셋 방). 3D 화면 아래에 표시한다 */
   credit?: string | null;
 };
 
 const NO_OPENINGS: Opening[] = [];
+const NO_FIXTURES: Fixture[] = [];
 const NO_LAYOUTS: MyLayout[] = [];
 const NO_KEYS: string[] = [];
 
@@ -92,6 +97,7 @@ export default function SplatViewer({
   initialReport = null,
   userFurniture,
   initialOpenings = NO_OPENINGS,
+  initialFixtures = NO_FIXTURES,
   credit = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -114,6 +120,11 @@ export default function SplatViewer({
   const [openings, setOpenings] = useState({ key: savedPolygonKey, items: initialOpenings });
   // 화면에서 넣거나 지운(아직 저장 전일 수 있는) 문·창문. 가구 검사는 이것을 쓴다
   const [liveOpenings, setLiveOpenings] = useState<{ key: string | null; items: Opening[]; aiKeys: string[] } | null>(null);
+  // 방에 원래 있는 가구도 방 좌표로 저장하므로 문·창문처럼 평면도와 함께 기억하고, 보정을 새로 저장하면 비운다
+  const [fixtures, setFixtures] = useState({ key: savedPolygonKey, items: initialFixtures });
+  const [liveFixtures, setLiveFixtures] = useState<{ key: string | null; items: Fixture[] } | null>(null);
+  // 평면도에서 원래 가구 사각형을 그리는 중이면 그린 결과를 받을 곳
+  const [planDraw, setPlanDraw] = useState<{ onDraw: (a: Point2, b: Point2) => void } | null>(null);
   // 고른 도구 (아직 고르지 않았으면 보정된 방은 가구, 아니면 크기 보정)
   const [tool, setTool] = useState<ToolId | null>(null);
   // 도구들이 패널과 3D 화면 위에 자기 화면을 그려 넣을 자리
@@ -492,17 +503,19 @@ export default function SplatViewer({
   const roomPolygonKey = room ? JSON.stringify(room.polygon) : null;
   const savedOpenings = roomPolygonKey === openings.key ? openings.items : NO_OPENINGS;
   const shownOpenings = liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.items : savedOpenings;
+  const savedFixtures = roomPolygonKey === fixtures.key ? fixtures.items : NO_FIXTURES;
+  const shownFixtures = liveFixtures && liveFixtures.key === roomPolygonKey ? liveFixtures.items : savedFixtures;
 
   // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
   const saveCalibration = useCallback(
     async (applied: AppliedCalibration) => {
       if (!roomId) return false;
-      // 평면도가 바뀌면 벽 번호가 달라지므로 문·창문도 함께 비운다
+      // 평면도가 바뀌면 벽 번호와 방 좌표가 달라지므로 문·창문과 원래 가구도 함께 비운다
       const key = JSON.stringify(applied.floorPolygon);
       const wallsChanged = key !== savedPolygonKeyRef.current;
       const { data, error } = await createClient()
         .from('rooms')
-        .update({ ...toCalibrationColumns({ ...applied, flipX: flippedRef.current }), ...(wallsChanged ? { openings: [] } : {}) })
+        .update({ ...toCalibrationColumns({ ...applied, flipX: flippedRef.current }), ...(wallsChanged ? { openings: [], fixtures: [] } : {}) })
         .eq('id', roomId)
         .select('id')
         .maybeSingle();
@@ -512,6 +525,8 @@ export default function SplatViewer({
       if (wallsChanged) {
         setOpenings({ key, items: [] });
         setLiveOpenings(null);
+        setFixtures({ key, items: [] });
+        setLiveFixtures(null);
       }
       return true;
     },
@@ -529,6 +544,23 @@ export default function SplatViewer({
     },
     [roomId],
   );
+
+  // 방 주인이 원래 가구를 저장한다 (지금 저장돼 있는 평면도 기준)
+  const saveFixtures = useCallback(
+    async (items: Fixture[]) => {
+      if (!roomId) return false;
+      const { data, error } = await createClient().from('rooms').update({ fixtures: items }).eq('id', roomId).select('id').maybeSingle();
+      if (error || data === null) return false;
+      setFixtures({ key: savedPolygonKeyRef.current, items });
+      return true;
+    },
+    [roomId],
+  );
+  // 원래 가구 도구가 평면도 그리기를 켜면 평면도를 연다
+  const changePlanDraw = useCallback((handler: ((a: Point2, b: Point2) => void) | null) => {
+    setPlanDraw(handler ? { onDraw: handler } : null);
+    if (handler) setShowPlan(true);
+  }, []);
 
   // 내 가구 만들기·지우기 (본인 권한으로 user_furniture에 직접)
   const createFurniture = useCallback((value: UserFurnitureValue) => createUserFurniture(createClient(), value), []);
@@ -612,7 +644,7 @@ export default function SplatViewer({
     boundsRef.current = { polygon: roomPolygon, ceilingY: engine.splat ? sceneTopY(engine.splat) : null };
   }, [roomPolygon, stayInside]);
   const tools: ToolId[] = [];
-  if (calibrated) tools.push('furniture', 'openings');
+  if (calibrated) tools.push('furniture', 'openings', 'fixtures');
   // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
   if (ready && (!url || canEdit)) tools.push('calibration');
   if (ready && roomId) tools.push('analysis');
@@ -621,6 +653,7 @@ export default function SplatViewer({
   const slots: Slots = { panel: panelEl, stage: stageEl, active };
   const calibrationUnsaved = Boolean(roomId) && calibrated && roomPolygonKey !== savedPolygonKey;
   const openingsUnsaved = Boolean(roomId) && canEdit && liveOpenings !== null && liveOpenings.key === roomPolygonKey && !sameOpenings(liveOpenings.items, savedOpenings);
+  const fixturesUnsaved = Boolean(roomId) && canEdit && liveFixtures !== null && liveFixtures.key === roomPolygonKey && !sameFixtures(liveFixtures.items, savedFixtures);
 
   const selectTool = (next: ToolId) => {
     // 폰에서 고른 탭을 다시 누르면 패널을 접었다 편다
@@ -637,6 +670,7 @@ export default function SplatViewer({
         marks={{
           ...(calibrationUnsaved ? { calibration: 'warn' as const } : {}),
           ...(openingsUnsaved ? { openings: 'warn' as const } : {}),
+          ...(fixturesUnsaved ? { fixtures: 'warn' as const } : {}),
           ...(hasReport ? { analysis: 'ok' as const } : {}),
         }}
       />
@@ -819,6 +853,8 @@ export default function SplatViewer({
           catalog={catalog}
           openings={shownOpenings}
           aiOpeningKeys={liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.aiKeys : NO_KEYS}
+          fixtures={shownFixtures}
+          onDrawFixture={planDraw?.onDraw}
           userFurniture={userFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
@@ -849,6 +885,21 @@ export default function SplatViewer({
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
+        />
+      )}
+      {calibrated && room && (
+        <FixturesTool
+          key={`fixtures|${sceneKey}|${roomPolygonKey}`}
+          slots={slots}
+          engineRef={engineRef}
+          floorPolygon={room.polygon}
+          initial={savedFixtures}
+          onChange={(items) => setLiveFixtures({ key: roomPolygonKey, items })}
+          onLook={() => setShowPlan(false)}
+          onPlanDraw={changePlanDraw}
+          editable={!url || canEdit}
+          locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
+          onSave={roomId && canEdit ? saveFixtures : undefined}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}

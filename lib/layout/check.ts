@@ -1,6 +1,7 @@
-// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
+// 배치 검사: 가구끼리 겹침, 원래 있던 가구와 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
 import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import type { Opening } from '@/lib/rooms/openings';
+import type { FixtureObstacle } from '@/lib/rooms/fixtures';
 import { findBlockedAccess } from './accessSide';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
 import { footprintInsideRoom, footprintsOverlap, interiorPoint, pointInPolygon } from './geometry';
@@ -24,8 +25,13 @@ export type Violation = {
   message: string;
 };
 
-export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, openings: Opening[] = []): Violation[] {
+/**
+ * @param fixtures 방에 원래 있던 가구 (lib/rooms/fixtures의 fixtureObstacles). 옮길 수 없는 장애물로 본다:
+ *   가구와 겹치면 문제, 통로와 쓰는 쪽을 막는다. 원래 가구 자체의 문제는 알리지 않는다
+ */
+export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, openings: Opening[] = [], fixtures: FixtureObstacle[] = []): Violation[] {
   const violations: Violation[] = [];
+  const ids = new Set(items.map((item) => item.id));
   const polygon = floorPolygon !== null && floorPolygon.length >= 3 ? floorPolygon : null;
 
   for (const item of items) {
@@ -42,9 +48,17 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       );
     }
   }
+  for (const item of items) {
+    for (const fixture of fixtures) {
+      if (!footprintsOverlap(item, fixture)) continue;
+      violations.push({ itemId: item.id, type: 'overlap', severity: 'error', otherId: fixture.id, message: `${item.name}: ${fixture.name}와(과) 겹칩니다` });
+    }
+  }
   // 쓰는 쪽(책상·수납의 앞, 침대의 긴 변 한쪽, 식탁의 긴 변 양쪽)이 벽이나 다른 가구에 막혀 있으면 경고. 다른 문제 뒤에 붙인다
   const names = new Map(items.map((item) => [item.id, item.name]));
-  const access: Violation[] = findBlockedAccess(items, polygon).map(({ id, message }) => ({
+  const access: Violation[] = findBlockedAccess([...items, ...fixtures], polygon)
+    .filter(({ id }) => ids.has(id))
+    .map(({ id, message }) => ({
     itemId: id,
     type: 'access',
     severity: 'warning',
@@ -61,8 +75,8 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
     }
   }
 
-  // 통로: 문에서 각 가구 옆까지 60cm 폭으로 갈 수 있어야 한다
-  const unreachable = new Set(findUnreachable(items, polygon, doors) ?? []);
+  // 통로: 문에서 각 가구 옆까지 60cm 폭으로 갈 수 있어야 한다 (원래 가구도 길을 막는다)
+  const unreachable = new Set(findUnreachable([...items, ...fixtures], polygon, doors) ?? []);
   for (const item of items) {
     if (unreachable.has(item.id)) {
       violations.push({

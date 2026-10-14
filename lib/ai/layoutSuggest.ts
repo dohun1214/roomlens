@@ -44,7 +44,7 @@ export async function suggestLayout(
   generate: GenerateIntent,
   maxAttempts = MAX_ATTEMPTS,
 ): Promise<Suggestion> {
-  const summaryText = summarizeRoom(room.polygon, room.openings, items, request);
+  const summaryText = summarizeRoom(room.polygon, room.openings, items, request, room.fixtures ?? []);
   let problems: string[] = [];
   let best: { result: ReturnType<typeof solveLayout>; summary: string; cost: number } | null = null;
   let inputTokens = 0;
