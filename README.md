@@ -24,3 +24,7 @@ npm run dev
 ```
 
 http://localhost:3000 에서 확인합니다. 필요한 환경변수는 `.env.example`을 참고해 `.env.local`에 넣습니다.
+
+## 사용한 데이터
+
+- 가구 3D 모델: [Amazon Berkeley Objects](https://amazon-berkeley-objects.s3.amazonaws.com/index.html) (Amazon.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). 웹용으로 메시·텍스처를 압축하고 크기를 맞췄습니다 (`scripts/dev-data/build-furniture-models.mjs`). 원본은 저장소에 넣지 않습니다.
