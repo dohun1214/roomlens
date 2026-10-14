@@ -126,7 +126,7 @@ try {
   await owner.getByTestId('furniture-panel').waitFor({ timeout: 120000 });
   const reopened = await panelItems(owner);
   check('다시 열면: 같은 가구가 같은 자리에', JSON.stringify(positions(reopened)) === JSON.stringify(positions(placed)), positions(reopened));
-  check('다시 열면: 이름·치수는 카탈로그에서 되살림', reopened[0].name === '책상' && reopened[0].w === 1.2 && reopened[1].name === '옷장' && reopened[1].h === 2, reopened.map((i) => [i.name, i.w, i.d, i.h]));
+  check('다시 열면: 이름·치수는 카탈로그에서 되살림', reopened[0].name === '책상' && reopened[0].w === 1.25 && reopened[1].name === '옷장' && reopened[1].h === 1.96, reopened.map((i) => [i.name, i.w, i.d, i.h]));
   check('다시 열면: "배치 저장됨"으로 시작, 문제 없음', (await saveState(owner)) === 'saved' && (await owner.getByTestId('layout-violations').getAttribute('data-count')) === '0', null);
   await owner.waitForTimeout(1500);
   await owner.screenshot({ path: path.join(dataDir, '_e2e', 'layout-saved.png') });

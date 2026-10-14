@@ -36,7 +36,8 @@ const ITEMS = [
   { id: 'f3', furnitureRef: 'wardrobe', kind: 'catalog' },
   { id: 'f4', furnitureRef: 'chair', kind: 'catalog' },
 ];
-const SIZES = { 'bed-single': [1.0, 2.0], desk: [1.2, 0.6], wardrobe: [0.9, 0.6], chair: [0.5, 0.5] };
+// 카탈로그 치수 (DEFAULT_CATALOG, 실사 모델의 실제 크기)
+const SIZES = { 'bed-single': [0.99, 2.14], desk: [1.25, 0.6], wardrobe: [1.0, 0.6], chair: [0.66, 0.6] };
 
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, {
   auth: { persistSession: false },
