@@ -103,8 +103,8 @@ try {
   check('처음 연 방: 가구 0개, 저장 표시 없음', (await panelItems(owner)).length === 0 && (await owner.getByTestId('layout-save-state').count()) === 0, null);
 
   // 2) 가구를 놓으면 "저장 안 됨"
-  await addFurniture(owner, '책상');
-  await addFurniture(owner, '옷장');
+  await addFurniture(owner, '책상 · 서랍형');
+  await addFurniture(owner, '옷장 · 원목');
   check('가구 2개를 놓으면 "저장 안 됨", DB에는 아직 없음', (await saveState(owner)) === 'dirty' && (await layoutsOf(roomId)).length === 0, null);
 
   // 3) 저장
@@ -132,11 +132,11 @@ try {
   await owner.screenshot({ path: path.join(dataDir, '_e2e', 'layout-saved.png') });
 
   // 5) 고치기: 추가했다가 지우면 저장된 것과 같아지고, 추가한 채 저장하면 같은 배치가 바뀐다
-  await addFurniture(owner, '의자');
+  await addFurniture(owner, '의자 · 회전');
   const dirtyAfterAdd = await saveState(owner);
   await owner.getByTestId('selection-bar').getByRole('button', { name: '삭제', exact: true }).click();
   check('추가했다가 지우면 다시 "배치 저장됨"', dirtyAfterAdd === 'dirty' && (await saveState(owner)) === 'saved', dirtyAfterAdd);
-  await addFurniture(owner, '의자');
+  await addFurniture(owner, '의자 · 회전');
   check('새 가구 id는 이어서 붙음 (f3)', (await panelItems(owner)).map((i) => i.id).join() === 'f1,f2,f3', null);
   await saveAndWait(owner);
   const second = await layoutsOf(roomId);
@@ -147,7 +147,7 @@ try {
   const guest = await newPage();
   await openRoom(guest, roomId);
   check('비로그인: 방 주인의 배치는 보이지 않음 (빈 방에서 시작)', (await panelItems(guest)).length === 0, null);
-  await addFurniture(guest, '책장');
+  await addFurniture(guest, '책장 · 철제');
   check('비로그인: 가구는 놓을 수 있고, 저장 버튼 대신 로그인 안내', (await panelItems(guest)).length === 1 && (await guest.getByTestId('layout-login-hint').isVisible()) && (await guest.getByTestId('layout-save').count()) === 0, null);
   await guest.context().close();
 
@@ -156,7 +156,7 @@ try {
   await signUp(visitor, emails.visitor);
   await openRoom(visitor, roomId);
   check('다른 사람: 빈 방에서 시작, 보정 도구는 없음', (await panelItems(visitor)).length === 0 && (await visitor.getByTestId('calibration-save-state').count()) === 0, null);
-  await addFurniture(visitor, '싱글 침대');
+  await addFurniture(visitor, '싱글 침대 · 원목');
   await saveAndWait(visitor);
   const third = await layoutsOf(roomId);
   const ownerRow = third.find((l) => l.id === row.id);

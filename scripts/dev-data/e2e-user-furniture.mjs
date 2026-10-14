@@ -130,7 +130,7 @@ try {
 
   // 4) 방에 놓고 저장
   await panel.getByRole('button', { name: '+ 수납장', exact: true }).click();
-  await panel.getByRole('button', { name: '+ 책상', exact: true }).click();
+  await panel.getByRole('button', { name: '+ 책상 · 서랍형', exact: true }).click();
   const placed = await items();
   check("놓은 가구: 수납장은 kind 'user', 넣은 치수 그대로", placed.length === 2 && placed[0].kind === 'user' && placed[0].furnitureRef === created[0].id && placed[0].name === '수납장' && near(placed[0].w, 0.8) && near(placed[0].d, 0.4) && near(placed[0].h, 1.2) && placed[1].kind === 'catalog', placed.map((i) => [i.name, i.kind, i.w, i.d, i.h]));
   check('카탈로그 가구와 겹치지 않는 자리에 놓임', (await page.getByTestId('layout-violations').getAttribute('data-count')) === '0', null);

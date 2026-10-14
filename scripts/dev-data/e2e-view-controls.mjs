@@ -117,7 +117,7 @@ try {
   // 6) 창가 가까이에서 가구를 추가하면 지금 보이는 곳에 놓인다 (방 가운데가 화면 밖일 때)
   await page.getByTestId('tool-furniture').click();
   await moveCamera(page, [-half[0] + 2.4, 1.5, 0], [-half[0], 1.2, 0], 1500); // "3D에서 보기"처럼 왼쪽 벽(창문)을 2.4m 앞에서 본다
-  await page.getByRole('button', { name: '+ 책상', exact: true }).click();
+  await page.getByRole('button', { name: '+ 책상 · 서랍형', exact: true }).click();
   await page.waitForTimeout(500);
   const [desk] = JSON.parse(await page.getByTestId('furniture-panel').getAttribute('data-json'));
   const visible = await page.evaluate(({ x, z }) => {

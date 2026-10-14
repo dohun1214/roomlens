@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
-import { DEFAULT_CATALOG, modelCredits, type CatalogItem } from '@/lib/layout/catalog';
+import { catalogLabel, catalogThumbnail, DEFAULT_CATALOG, modelCredits, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { blocksAccess } from '@/lib/layout/accessSide';
 import type { AiResultView } from '@/lib/ai/suggestClient';
@@ -36,6 +36,7 @@ import { pointerToNdc } from '@/lib/three/pickPoint';
 import { makeShadowTexture, shadowSize } from '@/lib/three/softShadow';
 import type { Engine } from '@/components/viewer/engine';
 import FurnitureGlyph from '@/components/ui/FurnitureGlyph';
+import FurnitureThumb from '@/components/ui/FurnitureThumb';
 import Icon from '@/components/ui/Icon';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
 import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
@@ -540,7 +541,7 @@ export default function FurnitureLayer({
             data-testid="selection-bar"
             data-id={selected.id}
           >
-            <FurnitureGlyph furnitureRef={selected.furnitureRef} category={selected.category} size={34} />
+            <FurnitureThumb furnitureRef={selected.furnitureRef} category={selected.category} src={catalogThumbnail({ id: selected.furnitureRef, kind: selected.kind })} size={34} />
             <span className="flex min-w-0 flex-col">
               <span className="truncate font-bold">{selected.name}</span>
               <span className="font-mono text-[11px] text-mute" title={`위치 x ${selected.x.toFixed(2)}, z ${selected.z.toFixed(2)} · ${selected.rotationDeg}°`}>
@@ -672,7 +673,11 @@ export default function FurnitureLayer({
                     const item = items.find((i) => i.id === r.itemId);
                     return (
                       <li key={r.itemId} className="flex gap-3">
-                        <FurnitureGlyph furnitureRef={item?.furnitureRef ?? ''} category={item?.category ?? ''} />
+                        <FurnitureThumb
+                          furnitureRef={item?.furnitureRef ?? ''}
+                          category={item?.category ?? ''}
+                          src={item ? catalogThumbnail({ id: item.furnitureRef, kind: item.kind }) : null}
+                        />
                         <span className="flex min-w-0 flex-col gap-px">
                           <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => setSelectedId(r.itemId)}>
                             {r.name}
@@ -722,13 +727,16 @@ export default function FurnitureLayer({
                   className="flex h-[52px] items-center gap-2.5 rounded-xl border border-line bg-surface px-2 text-left hover:border-line-strong hover:bg-accent-tint disabled:opacity-40"
                   disabled={full}
                   onClick={() => add(entry)}
-                  aria-label={`+ ${entry.nameKo}`}
+                  aria-label={`+ ${catalogLabel(entry)}`}
                   title={dims(entry.w, entry.d, entry.h)}
                 >
-                  <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
+                  <FurnitureThumb furnitureRef={entry.id} category={entry.category} src={catalogThumbnail(entry)} />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
-                    <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
+                    <span className="truncate text-[11px] text-mute">
+                      {entry.styleKo && <span className="text-body">{entry.styleKo} · </span>}
+                      <span className="font-mono">{sizeLabel(entry.w, entry.d)}</span>
+                    </span>
                   </span>
                 </button>
               ))}

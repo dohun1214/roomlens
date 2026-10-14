@@ -174,7 +174,7 @@ try {
   await admin.from('layouts').update({ items: [] }).eq('id', layout.id);
   await admin.from('rooms').update({ openings: [centerDoor] }).eq('id', roomId);
   await openRoom(owner, roomId);
-  await owner.getByTestId('furniture-panel').getByRole('button', { name: '+ 의자', exact: true }).click();
+  await owner.getByTestId('furniture-panel').getByRole('button', { name: '+ 의자 · 회전', exact: true }).click();
   const placed = JSON.parse(await owner.getByTestId('furniture-panel').getAttribute('data-json'))[0];
   const after = await readPanel();
   // 문 앞 구역: x -0.8 ~ 0.8, z -1.5 ~ 0.1. 방 가운데(0, 0)는 그 안이다

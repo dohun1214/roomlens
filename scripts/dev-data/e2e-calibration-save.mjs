@@ -119,7 +119,7 @@ try {
   check('다시 열면: 보정 표시가 "저장됨"으로 시작', (await page.getByTestId('calibration-save-state').getAttribute('data-state')) === 'saved', null);
   check('다시 열면: 바로 가구를 놓을 수 있음 (가구 패널 표시)', await page.getByTestId('furniture-panel').isVisible(), null);
   const catalogButtons = await page.getByTestId('furniture-catalog').getByRole('button', { name: /^\+ / }).evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label')));
-  check('가구 패널에 DB 카탈로그 10종이 나옴', catalogButtons.length === 10 && catalogButtons.includes('+ 책장') && catalogButtons[0] === '+ 싱글 침대', catalogButtons);
+  check('가구 패널에 DB 카탈로그 36칸(18종 × 두 모양)이 나옴', catalogButtons.length === 36 && catalogButtons.includes('+ 책장 · 철제') && catalogButtons[0] === '+ 싱글 침대 · 원목', catalogButtons.slice(0, 4));
   check('보정된 방에는 X축 뒤집기 버튼이 없음', (await page.getByRole('button', { name: /X축 180/ }).count()) === 0, null);
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'calibration-saved.png') });
