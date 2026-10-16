@@ -19,8 +19,30 @@ export type TopViewOptions = {
   onProgress?: (done: number, total: number) => void;
 };
 
-/** 칸마다 위에서 본 그림을 찍는다. 끝나면 카메라·그리는 크기·숨긴 것들을 되돌린다. 그림 위쪽이 칸의 -down 방향 */
-export async function captureTopViews(engine: CaptureEngine, tiles: TopTile[], options: TopViewOptions): Promise<string[]> {
+/** 고정된 카메라 하나: 자리·본 곳·위쪽·세로 시야각(°)·near·far (방 좌표) */
+export type FixedView = {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+  fovDeg: number;
+  near: number;
+  far: number;
+};
+
+export type FixedViewOptions = {
+  /** 그림 한 변 (px, 정사각형) */
+  px: number;
+  quality?: number;
+  /** 카메라를 옮긴 뒤 스플랫이 그 시점에 맞게 다시 그려지기를 기다리는 시간 */
+  settleMs?: number;
+  onProgress?: (done: number, total: number) => void;
+};
+
+/**
+ * 정해 둔 카메라마다 정사각형 그림을 찍는다 (위에서 본 그림, 벽 정면 그림).
+ * 끝나면 카메라·그리는 크기·숨긴 것들을 되돌린다.
+ */
+export async function captureFixedViews(engine: CaptureEngine, views: FixedView[], options: FixedViewOptions): Promise<string[]> {
   const { renderer, scene, camera, controls } = engine;
   const saved = {
     position: camera.position.clone(),
@@ -42,18 +64,16 @@ export async function captureTopViews(engine: CaptureEngine, tiles: TopTile[], o
   // 화면(CSS) 크기는 두고 그리는 크기만 바꾼다
   renderer.setSize(options.px, options.px, false);
   camera.aspect = 1;
-  camera.near = options.height - options.cut;
-  camera.far = options.height + 0.5;
   try {
-    for (let i = 0; i < tiles.length; i += 1) {
-      const tile = tiles[i];
-      const { down } = tileAxes(tile.rotationDeg);
-      camera.fov = (2 * Math.atan(tile.size / 2 / options.height) * 180) / Math.PI;
+    for (let i = 0; i < views.length; i += 1) {
+      const view = views[i];
+      camera.fov = view.fovDeg;
+      camera.near = view.near;
+      camera.far = view.far;
       camera.updateProjectionMatrix();
-      // 그림의 위쪽이 -down이 되게 (오른쪽은 right)
-      camera.up.set(-down[0], 0, -down[1]);
-      camera.position.set(tile.center[0], options.height, tile.center[1]);
-      controls.target.set(tile.center[0], 0, tile.center[1]);
+      camera.up.set(...view.up);
+      camera.position.set(...view.position);
+      controls.target.set(...view.target);
       camera.lookAt(controls.target);
       const settle = async (rounds: number) => {
         for (let round = 0; round < rounds; round += 1) {
@@ -72,7 +92,7 @@ export async function captureTopViews(engine: CaptureEngine, tiles: TopTile[], o
         image = grab();
       }
       images.push(image);
-      options.onProgress?.(i + 1, tiles.length);
+      options.onProgress?.(i + 1, views.length);
     }
   } finally {
     for (const child of hidden) child.visible = true;
@@ -92,4 +112,21 @@ export async function captureTopViews(engine: CaptureEngine, tiles: TopTile[], o
     controls.update();
   }
   return images;
+}
+
+/** 칸마다 위에서 본 그림을 찍는다. 끝나면 카메라·그리는 크기·숨긴 것들을 되돌린다. 그림 위쪽이 칸의 -down 방향 */
+export function captureTopViews(engine: CaptureEngine, tiles: TopTile[], options: TopViewOptions): Promise<string[]> {
+  const views = tiles.map((tile): FixedView => {
+    const { down } = tileAxes(tile.rotationDeg);
+    return {
+      position: [tile.center[0], options.height, tile.center[1]],
+      target: [tile.center[0], 0, tile.center[1]],
+      // 그림의 위쪽이 -down이 되게 (오른쪽은 right)
+      up: [-down[0], 0, -down[1]],
+      fovDeg: (2 * Math.atan(tile.size / 2 / options.height) * 180) / Math.PI,
+      near: options.height - options.cut,
+      far: options.height + 0.5,
+    };
+  });
+  return captureFixedViews(engine, views, { px: options.px, quality: options.quality, settleMs: options.settleMs, onProgress: options.onProgress });
 }

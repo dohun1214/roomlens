@@ -1,12 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import OpeningsTool from './OpeningsTool';
 import FixturesTool from './FixturesTool';
+import RoomPrepBanner from './RoomPrepBanner';
+import type { AutoDetect, AutoDetectResult, RoomPrep } from './roomPrep';
 import AnalysisPanel from './AnalysisPanel';
 import type { SavedReport } from '@/components/rooms/RoomReportView';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
@@ -136,6 +138,8 @@ export default function SplatViewer({
   const [sheetClosed, setSheetClosed] = useState(false);
   // 3D 대신 평면도를 보고 있는지
   const [showPlan, setShowPlan] = useState(false);
+  // "AI로 방 준비하기" 진행 (보정 저장 → 문·창문 찾기 → 원래 가구 찾기 → 확인)
+  const [prep, setPrep] = useState<RoomPrep | null>(null);
   const [hasReport, setHasReport] = useState(initialReport !== null);
   const [debug] = useState(() => new URLSearchParams(window.location.search).has('debug'));
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
@@ -595,6 +599,26 @@ export default function SplatViewer({
     },
     [roomId],
   );
+  // "AI로 방 준비하기": 보정을 저장한 뒤 부른다. 문·창문 도구가 먼저 찾고, 끝나면 원래 가구 도구가 이어서 찾는다
+  const startPrep = useCallback(() => {
+    setPrep({ step: 'openings', token: String(Date.now()) });
+    setShowPlan(false);
+    setTool('openings');
+  }, []);
+  const openingsDone = useCallback((result: AutoDetectResult) => {
+    setPrep((p) => (p && p.step === 'openings' ? { ...p, step: 'fixtures', openings: result, bundleOf: (result.ok && result.callId) || undefined } : p));
+    setTool('fixtures');
+  }, []);
+  const fixturesDone = useCallback((result: AutoDetectResult) => {
+    setPrep((p) => (p && p.step === 'fixtures' ? { ...p, step: 'review', fixtures: result } : p));
+    setTool('openings');
+  }, []);
+  const openingsAuto = useMemo<AutoDetect | undefined>(() => (prep?.step === 'openings' ? { token: prep.token, onDone: openingsDone } : undefined), [prep, openingsDone]);
+  const fixturesAuto = useMemo<AutoDetect | undefined>(
+    () => (prep?.step === 'fixtures' ? { token: prep.token, bundleOf: prep.bundleOf, onDone: fixturesDone } : undefined),
+    [prep, fixturesDone],
+  );
+
   // 원래 가구 도구가 평면도 그리기를 켜면 평면도를 연다
   const changePlanDraw = useCallback((handler: ((a: Point2, b: Point2) => void) | null) => {
     setPlanDraw(handler ? { onDraw: handler } : null);
@@ -731,6 +755,20 @@ export default function SplatViewer({
         >
           <span className="h-1 w-10 rounded-full bg-line-strong" aria-hidden="true" />
         </button>
+        {prep && calibrated && (
+          <RoomPrepBanner
+            prep={prep}
+            active={active}
+            saved={{ openings: !openingsUnsaved, fixtures: !fixturesUnsaved }}
+            hidden={sheetClosed}
+            onSelect={(next) => {
+              // 단계 버튼은 패널을 접지 않고 그 도구를 연다
+              setSheetClosed(false);
+              setTool(next);
+            }}
+            onClose={() => setPrep(null)}
+          />
+        )}
         <div ref={setPanelEl} className={`flex min-h-0 flex-1 flex-col ${sheetClosed ? 'max-lg:hidden' : ''}`}>
           {tools.length === 0 && <p className="p-5 text-sm text-sub">{stats.status === 'error' ? '3D 파일을 열지 못했습니다.' : '3D를 불러오는 중입니다…'}</p>}
         </div>
@@ -924,6 +962,7 @@ export default function SplatViewer({
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveOpenings : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
+          auto={openingsAuto}
         />
       )}
       {calibrated && room && (
@@ -940,6 +979,7 @@ export default function SplatViewer({
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
           onSave={roomId && canEdit ? saveFixtures : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
+          auto={fixturesAuto}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
@@ -963,6 +1003,7 @@ export default function SplatViewer({
           engineRef={engineRef}
           initial={url && calibration ? { transform: calibration.transform, floorPolygon: calibration.floorPolygon } : null}
           onSave={roomId && canEdit ? saveCalibration : undefined}
+          onPrepare={roomId && canEdit && signedIn && aiRemaining !== 0 ? startPrep : undefined}
           onApplied={(polygon) => setRoom(polygon ? { key: sceneKey, polygon } : null)}
         />
       )}

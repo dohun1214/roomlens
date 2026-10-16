@@ -54,6 +54,8 @@ export const DetectFixturesInput = z.object({
     )
     .min(1, '그림이 없습니다.')
     .max(MAX_TILES, `그림은 ${MAX_TILES}장까지 보낼 수 있습니다.`),
+  /** "AI로 방 준비하기": 바로 앞의 문·창문 찾기 호출. 같은 1회로 센다 */
+  bundleOf: z.uuid().optional(),
 });
 export type DetectFixturesInput = z.infer<typeof DetectFixturesInput>;
 
@@ -282,7 +284,15 @@ const MIN_SAMPLES = 20;
  * 표본이 충분한(20% 이상) 가장 낮은 덩어리의 꼭대기: 식탁 밑의 바닥 부스러기나 위에 매달린 조명은 보지 않는다.
  * 표본이 너무 적으면 null.
  */
-export function topHeight(heights: ArrayLike<number>): number | null {
+/**
+ * 윗면 높이를 재는 이름: 위에 스탠드·TV·화분을 올려 두는 가구. 빽빽한 윗면을 높이로 보고 그 위의 듬성한 물건은 뺀다
+ * (의자 등받이·침대 머리판은 듬성해도 가구의 일부라 이 목록에 넣지 않는다)
+ */
+export const SURFACE_LABELS: ReadonlySet<string> = new Set(['테이블', '수납장', 'TV장', '책상', '식탁']);
+/** 윗면으로 보는 층: 덩어리 안에서 가장 빽빽한 칸의 이 비율 이상 */
+const SURFACE_SHARE = 0.35;
+
+export function topHeight(heights: ArrayLike<number>, surface = false): number | null {
   const bins = Math.ceil(MAX_FIXTURE_HEIGHT / HEIGHT_BIN);
   const counts = new Array<number>(bins).fill(0);
   let total = 0;
@@ -311,7 +321,18 @@ export function topHeight(heights: ArrayLike<number>): number | null {
   }
   const main = clusters.find((c) => c[2] >= total * MAIN_SHARE) ?? clusters.reduce<[number, number, number] | undefined>((best, c) => (!best || c[2] > best[2] ? c : best), undefined);
   if (!main) return null;
-  const top = main[1];
+  let top = main[1];
+  if (surface) {
+    // 덩어리 안에서 빽빽한(윗면) 칸 가운데 가장 높은 칸. 위에 올려 둔 물건은 칸마다 표본이 적다
+    let densest = 0;
+    for (let i = main[0]; i <= main[1]; i += 1) densest = Math.max(densest, counts[i]);
+    for (let i = main[1]; i >= main[0]; i -= 1) {
+      if (counts[i] >= densest * SURFACE_SHARE) {
+        top = i;
+        break;
+      }
+    }
+  }
   // 꼭대기 층 안에서 위쪽 끝(상위 10%)을 높이로 본다
   const ceiling = (top + 1) * HEIGHT_BIN;
   const inTop: number[] = [];

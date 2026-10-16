@@ -1,19 +1,20 @@
 import 'server-only';
 import { createAdminClient } from '@/lib/supabase/admin';
-import { DAILY_AI_LIMIT, kstDayStart, remainingCalls } from './limits';
+import { canBundle, DAILY_AI_LIMIT, kstDayStart, remainingCalls } from './limits';
 
 // AI 호출 기록(ai_calls)을 쓰고 센다. 기록은 서버 전용 클라이언트로만 쓴다
 // (브라우저가 자기 횟수를 지우거나 고칠 수 없게). 부르기 전에 반드시 로그인한 사용자를 확인한다.
 
 export type AiCallKind = 'layout' | 'analysis' | 'openings' | 'fixtures';
 
-/** 오늘(한국 시간) 쓴 횟수: 진행 중이거나 끝난 호출. 실패한 호출은 세지 않는다. 읽지 못하면 null */
+/** 오늘(한국 시간) 쓴 횟수: 진행 중이거나 끝난 호출. 실패한 호출, 앞 호출에 이어 붙인 호출(bundle_of)은 세지 않는다. 읽지 못하면 null */
 export async function countCallsToday(userId: string): Promise<number | null> {
   const { count, error } = await createAdminClient()
     .from('ai_calls')
     .select('id', { count: 'exact', head: true })
     .eq('owner_id', userId)
     .in('status', ['running', 'done'])
+    .is('bundle_of', null)
     .gte('created_at', kstDayStart().toISOString());
   return error || count === null ? null : count;
 }
@@ -24,16 +25,29 @@ export async function remainingToday(userId: string): Promise<number | null> {
   return used === null ? null : remainingCalls(used);
 }
 
-export type StartedCall = { ok: true; callId: string; remaining: number } | { ok: false; reason: 'limit' | 'db' };
+export type StartedCall = { ok: true; callId: string; remaining: number; bundled: boolean } | { ok: false; reason: 'limit' | 'db' };
 
-/** 횟수를 확인하고 호출 기록을 시작한다. 한도를 넘었으면 시작하지 않는다 */
-export async function startAiCall(userId: string, roomId: string, kind: AiCallKind, model: string): Promise<StartedCall> {
+/**
+ * 횟수를 확인하고 호출 기록을 시작한다. 한도를 넘었으면 시작하지 않는다.
+ * bundleOf: "AI로 방 준비하기"에서 바로 앞의 문·창문 찾기 호출. 이어 붙일 수 있으면 횟수를 더 쓰지 않는다
+ * (붙일 수 없으면 보통 호출처럼 센다).
+ */
+export async function startAiCall(userId: string, roomId: string, kind: AiCallKind, model: string, options: { bundleOf?: string } = {}): Promise<StartedCall> {
+  const admin = createAdminClient();
   const used = await countCallsToday(userId);
   if (used === null) return { ok: false, reason: 'db' };
+  if (options.bundleOf) {
+    const { data: parent } = await admin.from('ai_calls').select('owner_id, room_id, kind, status, created_at, bundle_of').eq('id', options.bundleOf).maybeSingle();
+    if (canBundle(parent, userId, roomId)) {
+      // 앞 호출 하나에 하나만 붙는다 (유일 색인). 이미 붙은 것이 있으면 insert가 실패하고 보통 호출로 넘어간다
+      const { data } = await admin.from('ai_calls').insert({ owner_id: userId, room_id: roomId, kind, model, bundle_of: options.bundleOf }).select('id').maybeSingle();
+      if (data) return { ok: true, callId: data.id, remaining: remainingCalls(used), bundled: true };
+    }
+  }
   if (used >= DAILY_AI_LIMIT) return { ok: false, reason: 'limit' };
-  const { data, error } = await createAdminClient().from('ai_calls').insert({ owner_id: userId, room_id: roomId, kind, model }).select('id').maybeSingle();
+  const { data, error } = await admin.from('ai_calls').insert({ owner_id: userId, room_id: roomId, kind, model }).select('id').maybeSingle();
   if (error || !data) return { ok: false, reason: 'db' };
-  return { ok: true, callId: data.id, remaining: remainingCalls(used + 1) };
+  return { ok: true, callId: data.id, remaining: remainingCalls(used + 1), bundled: false };
 }
 
 /** 호출이 끝났음을 기록한다. 실패(failed)로 끝난 호출은 횟수에서 빠진다. 기록 실패는 무시한다 */

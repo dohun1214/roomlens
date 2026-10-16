@@ -23,6 +23,7 @@ import {
 import { requestOpeningsDetection } from '@/lib/ai/openingsClient';
 import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
+import type { AutoDetect, AutoDetectResult } from './roomPrep';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다. */
@@ -47,6 +48,7 @@ export default function OpeningsTool({
   onChange,
   onLook,
   detect,
+  auto,
 }: {
   /** 패널을 그려 넣을 자리. 이 도구를 골랐을 때만 넣고 지울 수 있다 */
   slots: Slots;
@@ -66,6 +68,8 @@ export default function OpeningsTool({
   onLook?: () => void;
   /** AI로 문·창문 후보 찾기 (주면 버튼이 생긴다). remaining은 오늘 남은 AI 횟수 */
   detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
+  /** "AI로 방 준비하기": 이 신호가 오면 스스로 한 번 AI로 찾고 결과를 알린다 */
+  auto?: AutoDetect;
 }) {
   const [openings, setOpenings] = useState<Opening[]>(initial);
   const [savedOpenings, setSavedOpenings] = useState<Opening[]>(initial);
@@ -259,9 +263,9 @@ export default function OpeningsTool({
   };
 
   /** AI가 찾은 후보를 목록에 넣는다. 이미 있는 것과 겹치는 후보는 뺀다. 저장은 사용자가 확인한 뒤 직접 한다 */
-  const detectOpenings = async () => {
+  const detectOpenings = async (): Promise<AutoDetectResult> => {
     const engine = engineRef.current;
-    if (!engine || !detect || detecting) return;
+    if (!engine || !detect || detecting) return { ok: false, found: 0 };
     setMessage(null);
     setPicking(false);
     setFirstPoint(null);
@@ -271,10 +275,10 @@ export default function OpeningsTool({
     if (!outcome.ok) {
       if (outcome.code === 'AI_LIMIT') detect.onRemaining(0);
       setMessage(outcome.message);
-      return;
+      return { ok: false, found: 0, message: outcome.message };
     }
     if (outcome.remaining !== null) detect.onRemaining(outcome.remaining);
-    let next = openings;
+    let next = openingsRef.current;
     const added: Opening[] = [];
     for (const candidate of outcome.candidates) {
       const result = addOpening(next, candidate);
@@ -285,7 +289,7 @@ export default function OpeningsTool({
     const skipped = outcome.candidates.length - added.length;
     if (added.length === 0) {
       setMessage(skipped > 0 ? 'AI가 찾은 것은 모두 이미 넣은 것과 겹칩니다.' : 'AI가 문·창문을 찾지 못했습니다. 직접 넣어 주세요.');
-      return;
+      return { ok: true, found: 0, callId: outcome.callId };
     }
     const keys = [...aiKeys, ...added.map(keyOf)];
     setOpenings(next);
@@ -295,7 +299,32 @@ export default function OpeningsTool({
     setMessage(
       `AI가 문 ${doors}개, 창문 ${added.length - doors}개를 찾아 넣었습니다${skipped > 0 ? ` (이미 있는 것과 겹치는 ${skipped}개는 뺌)` : ''}. 3D 화면에서 위치를 확인하고, 틀린 것은 지우거나 종류를 바꾼 뒤 저장하세요.`,
     );
+    return { ok: true, found: added.length, callId: outcome.callId };
   };
+
+  // "AI로 방 준비하기": 신호마다 한 번만 (개발 모드에서 effect가 두 번 돌아도)
+  const autoRan = useRef<string | null>(null);
+  const runDetect = useRef(detectOpenings);
+  useEffect(() => {
+    runDetect.current = detectOpenings;
+  });
+  const canDetect = editable && !locked && Boolean(detect);
+  useEffect(() => {
+    if (!auto || !canDetect || autoRan.current === auto.token) return;
+    autoRan.current = auto.token;
+    const { token, onDone } = auto;
+    let started = false;
+    // 렌더가 끝난 뒤에 시작한다
+    const timer = setTimeout(() => {
+      started = true;
+      void runDetect.current().then(onDone);
+    }, 0);
+    return () => {
+      // 시작하기 전에 정리되면(개발 모드의 두 번째 실행) 다시 돌 수 있게 한다
+      clearTimeout(timer);
+      if (!started && autoRan.current === token) autoRan.current = null;
+    };
+  }, [auto, canDetect]);
 
   /** 문 ↔ 창문 (유리문을 창문으로 잘못 넣었을 때 등) */
   const switchType = (index: number) => {
@@ -493,7 +522,7 @@ export default function OpeningsTool({
           {detect && (
             <div className="flex flex-col gap-2.5" data-testid="openings-detect" data-remaining={detect.remaining ?? ''} data-busy={detecting !== null}>
               <p className="text-xs text-pretty text-sub">
-                방 안을 여러 방향에서 캡처한 그림을 Google Gemini로 보내 문·창문 후보를 찾습니다. 틀리거나 빠뜨릴 수 있으니 꼭 확인하세요.
+                벽마다 정면에서 캡처한 그림(가구는 잘라 냄)을 Google Gemini로 보내 문·창문 후보를 찾습니다. 틀리거나 빠뜨릴 수 있으니 꼭 확인하세요.
                 {detect.remaining !== null ? ` 오늘 ${detect.remaining}회 남음.` : ''}
               </p>
             </div>
@@ -503,7 +532,7 @@ export default function OpeningsTool({
               <button
                 className="btn h-11 min-w-0 flex-1 border border-accent-line bg-surface px-2 text-sm text-accent-strong hover:bg-accent-tint"
                 disabled={detecting !== null || detect.remaining === 0}
-                onClick={detectOpenings}
+                onClick={() => void detectOpenings()}
                 data-testid="openings-detect-run"
               >
                 {detecting === null && 'AI로 찾기'}

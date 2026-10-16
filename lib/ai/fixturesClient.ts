@@ -22,12 +22,14 @@ const FALLBACK = '원래 가구를 찾지 못했습니다. 잠시 뒤에 다시 
 /**
  * @param polygon 저장된 보정의 평면도 (지금 화면에 적용된 것과 같아야 한다)
  * @param onProgress 캡처가 한 장 끝날 때마다, 그리고 보낼 때(done === total)
+ * @param bundleOf "AI로 방 준비하기": 바로 앞의 문·창문 찾기 호출. 같은 1회로 센다
  */
 export async function requestFixturesDetection(
   engine: CaptureEngine & { splat: SplatMesh | null },
   roomId: string,
   polygon: Point2[],
   onProgress?: (done: number, total: number) => void,
+  bundleOf?: string,
 ): Promise<FixturesDetectOutcome> {
   const tiles = topViewPlan(polygon);
   if (tiles.length === 0)
@@ -64,7 +66,7 @@ export async function requestFixturesDetection(
     res = await fetch(`/api/rooms/${roomId}/fixtures-suggest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ images: images.map((data) => ({ data })) }),
+      body: JSON.stringify({ images: images.map((data) => ({ data })), ...(bundleOf ? { bundleOf } : {}) }),
     });
   } catch {
     return {

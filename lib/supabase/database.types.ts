@@ -12,6 +12,7 @@ export type Database = {
       ai_calls: {
         Row: {
           attempts: number;
+          bundle_of: string | null;
           created_at: string;
           error: string | null;
           finished_at: string | null;
@@ -26,6 +27,7 @@ export type Database = {
         };
         Insert: {
           attempts?: number;
+          bundle_of?: string | null;
           created_at?: string;
           error?: string | null;
           finished_at?: string | null;
@@ -40,6 +42,7 @@ export type Database = {
         };
         Update: {
           attempts?: number;
+          bundle_of?: string | null;
           created_at?: string;
           error?: string | null;
           finished_at?: string | null;
@@ -53,6 +56,13 @@ export type Database = {
           status?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: 'ai_calls_bundle_of_fkey';
+            columns: ['bundle_of'];
+            isOneToOne: false;
+            referencedRelation: 'ai_calls';
+            referencedColumns: ['id'];
+          },
           {
             foreignKeyName: 'ai_calls_room_id_fkey';
             columns: ['room_id'];
