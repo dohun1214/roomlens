@@ -39,6 +39,13 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
+// R2의 CORS는 정해진 주소만 허락한다. 다른 포트의 개발 서버로 열 때를 위해 허락 머리말을 붙인다
+await page.route(/r2\.cloudflarestorage\.com/, async (route) => {
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, HEAD, PUT, OPTIONS', 'access-control-expose-headers': '*' };
+  if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+  const response = await route.fetch();
+  return route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+});
 
 const api = (method, url, body) =>
   page.evaluate(
