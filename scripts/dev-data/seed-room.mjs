@@ -5,6 +5,7 @@
 //     --file ../roomlens-data/samples/studio11_2m_up.sog --title "Studio 11 (200만)" \
 //     --credit "Studio 11 by milanoski (SuperSplat), CC BY 4.0" [--description "..."] [--public]
 //   --credit 을 주면 데이터셋 방(source=dataset), 없으면 직접 찍은 방(source=scaniverse)으로 만든다.
+//   --setup <결과.json> 을 주면 setup-sample-room.mjs가 만든 보정·문창문·원래 가구 값을 그대로 넣는다 (같은 파일이어야 한다).
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -20,6 +21,7 @@ const { values } = parseArgs({
     description: { type: 'string', default: '' },
     credit: { type: 'string', default: '' },
     public: { type: 'boolean', default: false },
+    setup: { type: 'string', default: '' },
   },
 });
 await main();
@@ -87,6 +89,16 @@ try {
 } catch (err) {
   await admin.from('rooms').delete().eq('id', room.id); // 올리다 실패한 방은 남기지 않는다
   throw err;
+}
+
+if (values.setup) {
+  const setup = JSON.parse(readFileSync(path.resolve(values.setup), 'utf8'));
+  const { error: setupError } = await admin
+    .from('rooms')
+    .update({ transform: setup.transform, floor_polygon: setup.floor_polygon, openings: setup.openings ?? [], fixtures: setup.fixtures ?? [] })
+    .eq('id', room.id);
+  if (setupError) throw setupError;
+  console.log(`보정·문창문 ${setup.openings?.length ?? 0}개·원래 가구 ${setup.fixtures?.length ?? 0}개 넣음`);
 }
 
 const appUrl = process.env.APP_URL ?? 'https://roomlens-seven.vercel.app';
