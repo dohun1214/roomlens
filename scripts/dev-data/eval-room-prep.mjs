@@ -166,6 +166,39 @@ async function runDetect(owner, truth) {
   return { pred, runs: { openings: openingsRun, fixtures: fixturesRun } };
 }
 
+/** 사용자가 하는 그대로: 보정 전 방 → "AI로 방 준비하기"(자동 보정 → 저장하고 찾기) → 결과를 손대지 않고 저장 */
+async function runFull(owner, truth) {
+  const roomId = await ensureRoom(owner, truth);
+  await admin.from('rooms').update({ transform: null, floor_polygon: null, openings: [], fixtures: [] }).eq('id', roomId);
+  await admin.from('ai_calls').delete().eq('owner_id', owner.id);
+  await page.goto(`${appUrl}/rooms/${roomId}`);
+  await waitReady();
+  await page.waitForTimeout(3000);
+  if ((await page.getByTestId('calibration-toggle').getAttribute('aria-pressed')) !== 'true') await page.getByTestId('calibration-toggle').click();
+  const t0 = Date.now();
+  await page.getByTestId('calibration-auto').click();
+  await page.getByTestId('calibration-auto-info').waitFor({ timeout: 60000 });
+  const layoutMs = Date.now() - t0;
+  await page.getByTestId('calibration-save-prepare').click();
+  await page.waitForFunction(() => document.querySelector('[data-testid=prep-banner]')?.getAttribute('data-step') === 'review', null, { timeout: 300000 });
+  const prepMs = Date.now() - t0;
+  const runs = { layoutMs, prepMs };
+  for (const tool of ['openings', 'fixtures']) {
+    const el = page.getByTestId(`prep-${tool}`);
+    runs[tool] = { state: await el.getAttribute('data-state'), found: Number(await el.getAttribute('data-found')) };
+    if (runs[tool].state !== 'review') continue;
+    await el.click();
+    await page.getByTestId(`${tool}-save`).click();
+    await page.waitForFunction((t) => document.querySelector(`[data-testid=prep-${t}]`)?.getAttribute('data-state') === 'saved', tool, { timeout: 15000 });
+  }
+  const { data: calls } = await admin.from('ai_calls').select('kind, bundle_of').eq('owner_id', owner.id);
+  runs.counted = calls.filter((c) => !c.bundle_of).length;
+  const { data } = await admin.from('rooms').select('transform, floor_polygon, openings, fixtures').eq('id', roomId).single();
+  const { flipX, ...transform } = data.transform;
+  const pred = { frame: { transform, flipX: Boolean(flipX) }, polygon: data.floor_polygon, openings: data.openings, fixtures: data.fixtures };
+  return { pred, runs };
+}
+
 async function runPoints(truth) {
   await page.goto(`${appUrl}/viewer?url=${encodeURIComponent(`${dataUrl}/${truth.file}`)}`);
   await waitReady();
@@ -194,11 +227,19 @@ async function runLayout(truth) {
 }
 
 const owner = values.mode === 'layout' || values.mode === 'points' ? null : await signIn();
+if (!['detect', 'full', 'layout', 'points'].includes(values.mode)) throw new Error(`모르는 --mode: ${values.mode}`);
 const rows = [];
 for (const truth of truths) {
   log(truth.name, values.mode);
   try {
-    const out = values.mode === 'detect' ? await runDetect(owner, truth) : values.mode === 'points' ? await runPoints(truth) : await runLayout(truth);
+    const out =
+      values.mode === 'detect'
+        ? await runDetect(owner, truth)
+        : values.mode === 'full'
+          ? await runFull(owner, truth)
+          : values.mode === 'points'
+            ? await runPoints(truth)
+            : await runLayout(truth);
     const score = out.pred ? scoreAll(truth, out.pred) : null;
     rows.push({ name: truth.name, kind: truth.kind, score, runs: out.runs, pred: out.pred });
     if (score) log('  ', JSON.stringify({ layout: round(score.layout), openings: round(score.openings), fixtures: round(score.fixtures) }));
