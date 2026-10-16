@@ -28,7 +28,7 @@ export async function POST(request: Request, { params }: Context) {
   if (!id.success) return notFound();
   const parsed = DetectFixturesInput.safeParse(await readJson(request));
   if (!parsed.success) return badRequest(firstIssueMessage(parsed.error));
-  const { images } = parsed.data;
+  const { images, bundleOf } = parsed.data;
   if (!images.every((image) => isJpegBase64(image.data))) return badRequest('JPEG 그림만 보낼 수 있습니다.');
   if (totalBase64(images) > MAX_TOTAL_BASE64) return apiError(413, 'TOO_LARGE', '그림이 너무 큽니다.');
 
@@ -42,7 +42,7 @@ export async function POST(request: Request, { params }: Context) {
   const tiles = topViewPlan(calibration.floorPolygon);
   if (images.length !== tiles.length) return badRequest('그림 수가 방의 크기와 맞지 않습니다. 화면을 새로 고친 뒤 다시 해 주세요.');
 
-  const call = await startAiCall(user.id, room.id, 'fixtures', GEMINI_MODEL);
+  const call = await startAiCall(user.id, room.id, 'fixtures', GEMINI_MODEL, { bundleOf });
   if (!call.ok) {
     return call.reason === 'limit'
       ? apiError(429, 'AI_LIMIT', `오늘 쓸 수 있는 AI 횟수(${DAILY_AI_LIMIT}회)를 모두 썼습니다. 내일 다시 해 주세요.`)
