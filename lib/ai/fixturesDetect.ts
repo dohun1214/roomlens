@@ -29,6 +29,12 @@ export const TOP_VIEW_CUT = 1.9;
 export const TILE_METERS = 9;
 /** 이웃한 칸이 겹치는 길이 (m) */
 export const TILE_OVERLAP = 0.8;
+/**
+ * 긴 변이 이 길이까지인 방은 칸을 조금 키워 한 칸에 담는다 (m). 1280px에 약 9mm/px.
+ * TILE_METERS를 조금 넘는 방을 두 칸으로 나누면 두 그림이 거의 같아져 Gemini가 같은 상자를 두 번 돌려주고,
+ * 칸이 조금만 어긋나 있어 같은 가구가 두 개로 잡힌다.
+ */
+export const SINGLE_TILE_MAX = 11;
 /** 한 번에 보내는 그림 수 */
 export const MAX_TILES = 4;
 /** 방 둘레에 더 넣는 여백 (m) */
@@ -74,7 +80,7 @@ export function tileAxes(rotationDeg: number): { right: Point2; down: Point2 } {
   return { right, down };
 }
 
-/** 방 전체를 덮는 칸들. 방이 작으면 한 칸, 크면 겹치게 나눈다 (최대 MAX_TILES칸) */
+/** 방 전체를 덮는 칸들. 긴 변이 SINGLE_TILE_MAX까지면 한 칸, 더 크면 겹치게 나눈다 (최대 MAX_TILES칸) */
 export function topViewPlan(polygon: Point2[]): TopTile[] {
   if (polygon.length < 3) return [];
   const rotationDeg = fixtureRotation(polygon);
@@ -86,7 +92,11 @@ export function topViewPlan(polygon: Point2[]): TopTile[] {
   const spanA = a1 - a0;
   const spanB = b1 - b0;
   const count = (span: number, size: number) => (span <= size ? 1 : Math.ceil((span - TILE_OVERLAP) / (size - TILE_OVERLAP)));
-  let size = Math.min(TILE_METERS, Math.max(spanA, spanB));
+  const longest = Math.max(spanA, spanB);
+  if (longest <= SINGLE_TILE_MAX) {
+    return [{ center: [round3(right[0] * (a0 + spanA / 2) + down[0] * (b0 + spanB / 2)), round3(right[1] * (a0 + spanA / 2) + down[1] * (b0 + spanB / 2))], size: round3(longest), rotationDeg }];
+  }
+  let size = Math.min(TILE_METERS, longest);
   while (count(spanA, size) * count(spanB, size) > MAX_TILES) size += 0.5;
   const [na, nb] = [count(spanA, size), count(spanB, size)];
   const centers = (lo: number, span: number, n: number) => (n === 1 ? [lo + span / 2] : Array.from({ length: n }, (_, i) => lo + size / 2 + ((span - size) * i) / (n - 1)));
