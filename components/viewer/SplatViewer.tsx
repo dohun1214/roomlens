@@ -22,6 +22,8 @@ import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
 import { LOOK_ROTATE_SPEED, lookTarget, panDelta, pinchDistance, wheelDistance } from '@/lib/three/viewMove';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { sampleScenePoints } from '@/lib/three/scenePoints';
+import { autoCalibrate } from '@/lib/three/autoCalibrate';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
 import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
 import { sameOpenings, type Opening } from '@/lib/rooms/openings';
@@ -372,7 +374,44 @@ export default function SplatViewer({
 
     engineRef.current = { renderer, scene, camera, controls, spark, roomGroup, splat: null };
     if (process.env.NODE_ENV !== 'production') {
-      Object.assign(window, { __roomlens: engineRef.current, __roomlensPick: pickPoint });
+      Object.assign(window, {
+        __roomlens: engineRef.current,
+        __roomlensPick: pickPoint,
+        // 성능 재기용 (scripts/dev-data/eval-room-prep.mjs): 장면의 표면 점, 자동 보정 결과
+        __roomlensScenePoints: () => {
+          const splat = engineRef.current?.splat;
+          const points = splat ? sampleScenePoints(splat) : null;
+          if (!points) return null;
+          const b64 = (a: Float32Array) => {
+            const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+            let out = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            return btoa(out);
+          };
+          return {
+            count: points.count,
+            positions: b64(points.positions),
+            normals: b64(points.normals),
+            weights: b64(points.weights),
+            brightness: points.brightness ? b64(points.brightness) : null,
+          };
+        },
+        __roomlensAutoCalibrate: () => {
+          const splat = engineRef.current?.splat;
+          if (!splat) return { ok: false, message: '장면이 없습니다.' };
+          const t0 = performance.now();
+          const result = autoCalibrate(splat);
+          if (!result.ok) return result;
+          const { estimate } = result;
+          return {
+            ok: true,
+            transform: result.transform,
+            flipX: flippedRef.current,
+            floorPolygon: result.floorPolygon,
+            info: { ms: Math.round(performance.now() - t0), height: result.height, scaleGuessed: result.scaleGuessed, scale: estimate.scale, up: estimate.up, ...estimate.info },
+          };
+        },
+      });
     }
 
     return () => {

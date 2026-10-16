@@ -18,6 +18,10 @@ import {
   type TapCalibration,
 } from '@/lib/three/floorPlane';
 import { pickPoint, pointerToNdc } from '@/lib/three/pickPoint';
+import { autoCalibrate } from '@/lib/three/autoCalibrate';
+import { scaleCalibration } from '@/lib/rooms/wallEdit';
+import type { Point2 } from '@/lib/three/floorDrag';
+import WallEditor from './WallEditor';
 import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
 import { PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
@@ -77,6 +81,12 @@ export default function CalibrationTool({
   const [appliedPolygon, setAppliedPolygon] = useState<[number, number][] | null>(initial?.floorPolygon ?? null);
   const [saveState, setSaveState] = useState<SaveState>(initial ? 'saved' : 'dirty');
   const [message, setMessage] = useState<string | null>(null);
+  // 자동 보정: 찾는 중인지, 찾은 결과의 설명 (천장 높이, 크기를 짐작했는지)
+  const [autoBusy, setAutoBusy] = useState(false);
+  const [autoInfo, setAutoInfo] = useState<{ height: number; scaleGuessed: boolean; rooms: number; pick: number; flipUp: boolean } | null>(null);
+  // 크기 맞추기: 고른 벽과 실제 길이
+  const [scaleWall, setScaleWall] = useState(0);
+  const [scaleLength, setScaleLength] = useState('');
 
   const floorCount = Math.min(taps.length, FLOOR_TAPS);
   const cornerCount = Math.max(0, taps.length - FLOOR_TAPS);
@@ -239,20 +249,74 @@ export default function CalibrationTool({
     engine.controls.update();
   };
 
-  const apply = () => {
+  /** 보정을 화면에 적용한다. 보는 장면이 그대로 유지되도록 카메라도 같은 변환으로 옮긴다 */
+  const applyCalibration = (tr: RoomTransform, polygon: [number, number][]) => {
     const engine = engineRef.current;
-    if (!engine || !outcome.cal) return;
-    const tr = outcome.cal.transform;
-    // 보는 장면이 그대로 유지되도록 카메라도 같은 변환으로 옮긴다.
-    moveCamera(engine, (p) => applyRoomTransform(p, tr));
+    if (!engine) return;
+    // 이미 적용된 보정이 있으면(자동 보정을 다시 할 때) 그 보정을 풀고 새 보정을 적용한 자리로 옮긴다
+    const before = applied;
+    moveCamera(engine, (p) => applyRoomTransform(before ? invertRoomTransform(p, before) : p, tr));
     setObjectRoomTransform(engine.roomGroup, tr);
     engine.camera.near = 0.05;
     engine.camera.far = 200;
     engine.camera.updateProjectionMatrix();
     setApplied(tr);
-    setAppliedPolygon(outcome.cal.floorPolygon);
+    setAppliedPolygon(polygon);
     setSaveState('dirty');
-    onApplied?.(outcome.cal.floorPolygon);
+    onApplied?.(polygon);
+  };
+
+  const apply = () => {
+    if (!outcome.cal) return;
+    setAutoInfo(null);
+    applyCalibration(outcome.cal.transform, outcome.cal.floorPolygon);
+  };
+
+  // AI 자동 보정: 장면의 표면에서 바닥·천장·벽을 찾아 바로 적용한다 (저장은 사용자가 확인한 뒤)
+  const runAuto = (choice: { pick?: number; flipUp?: boolean } = {}) => {
+    const engine = engineRef.current;
+    if (!engine?.splat || autoBusy) return;
+    setAutoBusy(true);
+    setMessage(null);
+    // "찾는 중"이 먼저 그려지게 한 박자 쉰 뒤 계산한다 (계산은 1~2초 화면을 붙잡는다)
+    setTimeout(() => {
+      const splat = engineRef.current?.splat;
+      const result = splat ? autoCalibrate(splat, choice) : null;
+      setAutoBusy(false);
+      if (!result?.ok) {
+        setMessage(result?.message ?? '방을 찾지 못했습니다. 아래처럼 직접 찍어 주세요.');
+        return;
+      }
+      setTaps([]);
+      setCornersDone(false);
+      setAutoInfo({
+        height: Math.round(result.height * 100) / 100,
+        scaleGuessed: result.scaleGuessed,
+        rooms: result.estimate.rooms,
+        pick: choice.pick ?? 0,
+        flipUp: choice.flipUp ?? false,
+      });
+      applyCalibration(result.transform, result.floorPolygon);
+    }, 60);
+  };
+
+  // 평면도에서 벽을 옮겼을 때
+  const changePolygon = (next: Point2[]) => {
+    setAppliedPolygon(next);
+    setSaveState('dirty');
+    onApplied?.(next);
+  };
+
+  // 크기 맞추기: 벽 하나의 실제 길이로 방 전체의 크기를 바꾼다
+  const rescale = (k: number) => {
+    const engine = engineRef.current;
+    if (!engine || !applied || !appliedPolygon || !(k > 0) || !Number.isFinite(k)) return;
+    const next = scaleCalibration(applied, appliedPolygon, k);
+    moveCamera(engine, (p) => p.clone().multiplyScalar(k));
+    setObjectRoomTransform(engine.roomGroup, next.transform);
+    setApplied(next.transform);
+    setAutoInfo((info) => (info ? { ...info, height: Math.round(info.height * k * 100) / 100, scaleGuessed: false } : info));
+    changePolygon(next.floorPolygon);
   };
 
   const reset = () => {
@@ -269,6 +333,7 @@ export default function CalibrationTool({
     setCornersDone(false);
     setLength('');
     setMessage(null);
+    setAutoInfo(null);
   };
 
   // "파일 단위 그대로": 크기 배율이 1이 되는 벽 1의 길이를 채운다 (직각으로 맞추면 벽 1의 길이가 찍은 두 점 사이와 조금 다르다)
@@ -335,23 +400,90 @@ export default function CalibrationTool({
           >
             크기 보정
           </PanelTitle>
-          <p className="flex gap-2.5 rounded-xl bg-ok-soft p-3.5 text-[13px] text-ok">
-            <Icon name="check" className="mt-1" />
-            <span>보정 적용됨 · 격자 한 칸 1m. 이제 가구를 실제 크기로 놓을 수 있습니다.</span>
-          </p>
-          {walls.length > 0 && (
-            <div className="flex flex-col gap-2.5">
+          {autoInfo ? (
+            <div className="flex flex-col gap-1.5 rounded-xl bg-accent-soft p-3.5 text-[13px]" data-testid="calibration-auto-info" data-height={autoInfo.height} data-guessed={autoInfo.scaleGuessed}>
+              <span className="flex items-center gap-2 font-semibold text-accent-strong">
+                <Icon name="check" />
+                AI가 방을 찾았습니다 · 벽 {walls.length}개 · 천장 {autoInfo.height.toFixed(2)} m
+              </span>
+              <span className="text-body">3D와 아래 평면도에서 벽 위치를 확인해 주세요. 어긋난 벽은 평면도에서 끌어 옮기면 됩니다.</span>
+              <span className="flex flex-wrap gap-2 pt-1">
+                {autoInfo.rooms > 1 && (
+                  <button
+                    type="button"
+                    className="btn btn-outline h-9 px-3 text-[13px]"
+                    disabled={autoBusy}
+                    onClick={() => runAuto({ pick: (autoInfo.pick + 1) % autoInfo.rooms, flipUp: autoInfo.flipUp })}
+                    data-testid="calibration-auto-next-room"
+                  >
+                    다른 방 고르기 ({autoInfo.pick + 1}/{autoInfo.rooms})
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="btn btn-outline h-9 px-3 text-[13px]"
+                  disabled={autoBusy}
+                  onClick={() => runAuto({ pick: autoInfo.pick, flipUp: !autoInfo.flipUp })}
+                  data-testid="calibration-auto-flip"
+                >
+                  위아래가 뒤집혔어요
+                </button>
+              </span>
+              {autoInfo.scaleGuessed && (
+                <span className="text-warn" data-testid="calibration-scale-guessed">
+                  이 파일은 크기 단위를 알 수 없어 천장 높이를 보통 집의 높이로 맞췄습니다. 실제 길이를 아는 벽이 있으면 아래에서 넣어 주세요.
+                </span>
+              )}
+            </div>
+          ) : (
+            <p className="flex gap-2.5 rounded-xl bg-ok-soft p-3.5 text-[13px] text-ok">
+              <Icon name="check" className="mt-1" />
+              <span>보정 적용됨 · 격자 한 칸 1m. 이제 가구를 실제 크기로 놓을 수 있습니다.</span>
+            </p>
+          )}
+          {appliedPolygon && appliedPolygon.length >= 3 && (
+            <div className="flex flex-col gap-2">
               <SectionTitle right={<span className="font-mono text-[11px] text-mute">m</span>}>
-                벽 길이 <span className="font-mono font-medium text-mute">{walls.length}</span>
+                벽 <span className="font-mono font-medium text-mute">{walls.length}</span>
               </SectionTitle>
-              <ul className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-xl bg-ground p-3 text-[13px]">
-                {walls.map((length, i) => (
-                  <li key={i} className="flex justify-between gap-2">
-                    <span className="text-body">벽 {i + 1}</span>
-                    <span className="font-mono">{length.toFixed(2)}</span>
-                  </li>
-                ))}
-              </ul>
+              <WallEditor polygon={appliedPolygon} onChange={changePolygon} />
+              <span className="text-xs text-sub">벽을 끌면 그 벽만 안쪽·바깥쪽으로 옮겨집니다.</span>
+            </div>
+          )}
+          {walls.length > 0 && (
+            <div className="flex flex-col gap-2 rounded-xl bg-ground p-3 text-[13px]">
+              <span className="font-semibold">크기 맞추기</span>
+              <span className="flex flex-wrap items-center gap-2">
+                <select className="field h-10 rounded-[10px] px-2 text-sm" value={scaleWall} onChange={(e) => setScaleWall(Number(e.target.value))} data-testid="calibration-scale-wall" aria-label="실제 길이를 아는 벽">
+                  {walls.map((len, i) => (
+                    <option key={i} value={i}>
+                      벽 {i + 1} ({len.toFixed(2)} m)
+                    </option>
+                  ))}
+                </select>
+                <input
+                  className="field h-10 w-20 rounded-[10px] px-2 font-mono text-sm"
+                  inputMode="decimal"
+                  placeholder="실제 m"
+                  value={scaleLength}
+                  onChange={(e) => setScaleLength(e.target.value)}
+                  data-testid="calibration-scale-length"
+                  aria-label="그 벽의 실제 길이 (m)"
+                />
+                <button
+                  type="button"
+                  className="btn btn-outline h-10 px-3 text-[13px]"
+                  disabled={!(Number(scaleLength) > 0) || !walls[scaleWall]}
+                  onClick={() => {
+                    rescale(Number(scaleLength) / walls[scaleWall]);
+                    setScaleLength('');
+                  }}
+                  data-testid="calibration-scale-apply"
+                >
+                  맞추기
+                </button>
+              </span>
+              <span className="text-xs text-sub">줄자로 잰 벽 하나의 길이를 넣으면 방 전체 크기가 그만큼 바뀝니다.</span>
             </div>
           )}
           <p className="text-xs text-sub">다시 찍으면 화면의 보정이 풀립니다. 새로 저장하기 전까지는 저장된 값이 그대로 남습니다.</p>
@@ -380,6 +512,14 @@ export default function CalibrationTool({
           <p className="text-[13px] text-sub">3D 화면을 탭해서 바닥과 방 모서리를 알려 주세요. 방이 미터 단위가 되면 가구를 실제 크기로 놓을 수 있습니다.</p>
         </div>
 
+        <div className="flex flex-col gap-2 rounded-xl border border-accent/30 bg-accent-soft p-3.5 text-[13px]">
+          <span className="font-semibold text-accent-strong">AI 자동 보정 (추천)</span>
+          <span className="text-body">바닥·천장·벽을 3D에서 찾아 바로 맞춥니다. 찾은 뒤 벽 위치만 확인하면 됩니다.</span>
+          <button type="button" className="btn btn-primary h-11 text-sm" disabled={autoBusy} onClick={() => runAuto()} data-testid="calibration-auto" data-busy={autoBusy}>
+            {autoBusy ? '방을 찾는 중…' : '자동으로 찾기'}
+          </button>
+        </div>
+        <SectionTitle>직접 찍기</SectionTitle>
         <ol className="flex flex-col gap-2 text-[13px]">
           <li className={stepCard(1)}>
             {stepNumber(1)}
