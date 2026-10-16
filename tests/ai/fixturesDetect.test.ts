@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCandidates, locateFixtures, MAX_TILES, TILE_METERS, TILE_OVERLAP, tileAxes, topHeight, topViewPlan, type FixtureDetection } from '@/lib/ai/fixturesDetect';
+import { addCandidates, locateFixtures, MAX_TILES, SINGLE_TILE_MAX, TILE_METERS, TILE_OVERLAP, tileAxes, topHeight, topViewPlan, type FixtureDetection } from '@/lib/ai/fixturesDetect';
 import { MAX_FIXTURES, type Fixture } from '@/lib/rooms/fixtures';
 import type { Point2 } from '@/lib/three/floorDrag';
 
@@ -22,6 +22,13 @@ describe('topViewPlan', () => {
   it('작은 방은 방 전체를 덮는 한 칸 (벽과 나란하게)', () => {
     expect(topViewPlan(ROOM)).toEqual([{ center: [0, 0], size: 4, rotationDeg: 0 }]);
     expect(topViewPlan(rect(4, 3))).toEqual([{ center: [0, 0], size: 4.3, rotationDeg: 0 }]);
+  });
+
+  it('TILE_METERS를 조금 넘는 방은 거의 같은 두 칸 대신 한 칸을 키워 찍는다', () => {
+    // 9.2 × 3.1 m 거실: 여백을 더하면 9.5 m. 두 칸이면 0.5 m만 어긋난 거의 같은 그림 두 장이 된다
+    expect(topViewPlan(rect(3.1, 9.2, 0.2, -0.6))).toEqual([{ center: [0.2, -0.6], size: 9.5, rotationDeg: 0 }]);
+    expect(topViewPlan(rect(SINGLE_TILE_MAX - 0.3, 4))).toHaveLength(1);
+    expect(topViewPlan(rect(SINGLE_TILE_MAX, 4)).length).toBeGreaterThan(1);
   });
 
   it('긴 방은 겹치게 나눈 칸들이 방 끝까지 덮는다', () => {
