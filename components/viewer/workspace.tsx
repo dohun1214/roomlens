@@ -122,7 +122,7 @@ export function SectionTitle({ children, right }: { children: ReactNode; right?:
 
 /** "AI" 표시 */
 export function AiBadge({ className = '' }: { className?: string }) {
-  return <span className={`rounded-md bg-accent px-1.5 py-px font-mono text-[11px] font-medium text-white ${className}`}>AI</span>;
+  return <span className={`shrink-0 rounded-md bg-accent px-1.5 py-px font-mono text-[11px] font-medium text-white ${className}`}>AI</span>;
 }
 
 /** 저장 상태 표시 (저장됨·저장 안 됨·저장하는 중·실패) */

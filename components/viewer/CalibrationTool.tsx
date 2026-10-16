@@ -59,6 +59,7 @@ export default function CalibrationTool({
   onApplied,
   initial = null,
   onSave,
+  onPrepare,
 }: {
   /** 패널을 그려 넣을 자리. 이 도구를 골랐을 때만 화면을 탭해 점을 찍을 수 있다 */
   slots: Slots;
@@ -69,6 +70,8 @@ export default function CalibrationTool({
   initial?: AppliedCalibration | null;
   /** 주면 적용 후 "저장" 버튼이 생긴다. 저장에 성공하면 true */
   onSave?: (calibration: AppliedCalibration) => Promise<boolean>;
+  /** "AI로 방 준비하기": 주면 저장한 뒤 이어서 문·창문·원래 가구를 AI로 찾는 버튼이 생긴다 */
+  onPrepare?: () => void;
 }) {
   const active = slots.active === 'calibration';
   const [taps, setTaps] = useState<Tap[]>([]);
@@ -353,11 +356,17 @@ export default function CalibrationTool({
     }
   };
 
-  const save = async () => {
-    if (!onSave || !applied || !appliedPolygon || saveState === 'saving') return;
+  const save = async (): Promise<boolean> => {
+    if (!onSave || !applied || !appliedPolygon || saveState === 'saving') return false;
+    if (saveState === 'saved') return true;
     setSaveState('saving');
     const ok = await onSave({ transform: applied, floorPolygon: appliedPolygon });
     setSaveState(ok ? 'saved' : 'error');
+    return ok;
+  };
+  // 저장하고 이어서 문·창문·원래 가구 찾기
+  const saveAndPrepare = async () => {
+    if (await save()) onPrepare?.();
   };
 
   const cal = outcome.cal;
@@ -489,16 +498,32 @@ export default function CalibrationTool({
           <p className="text-xs text-sub">다시 찍으면 화면의 보정이 풀립니다. 새로 저장하기 전까지는 저장된 값이 그대로 남습니다.</p>
         </PanelBody>
         <PanelFooter>
+          {onSave && onPrepare && (
+            <button
+              className="btn btn-primary h-11 w-full text-sm"
+              disabled={saveState === 'saving'}
+              onClick={() => void saveAndPrepare()}
+              data-testid="calibration-save-prepare"
+            >
+              {saveState === 'saved' ? '문·창문·원래 가구 AI로 찾기' : '저장하고 문·창문·원래 가구 찾기'}
+            </button>
+          )}
           <div className="flex gap-2">
             <button className="btn btn-outline h-11 flex-1 text-sm" onClick={reset}>
               다시 찍기
             </button>
             {onSave && saveState !== 'saved' && (
-              <button className="btn btn-primary h-11 flex-1 text-sm" disabled={saveState === 'saving'} onClick={save} data-testid="calibration-save">
-                {saveState === 'error' ? '다시 저장' : '저장'}
+              <button
+                className={`btn h-11 flex-1 text-sm ${onPrepare ? 'btn-outline' : 'btn-primary'}`}
+                disabled={saveState === 'saving'}
+                onClick={() => void save()}
+                data-testid="calibration-save"
+              >
+                {saveState === 'error' ? '다시 저장' : onPrepare ? '저장만' : '저장'}
               </button>
             )}
           </div>
+          {onSave && onPrepare && <p className="text-xs text-sub">AI 찾기는 문·창문과 원래 가구를 합쳐 AI 1회로 셉니다.</p>}
         </PanelFooter>
       </ToolPanel>
     );
@@ -513,8 +538,12 @@ export default function CalibrationTool({
         </div>
 
         <div className="flex flex-col gap-2 rounded-xl border border-accent/30 bg-accent-soft p-3.5 text-[13px]">
-          <span className="font-semibold text-accent-strong">AI 자동 보정 (추천)</span>
-          <span className="text-body">바닥·천장·벽을 3D에서 찾아 바로 맞춥니다. 찾은 뒤 벽 위치만 확인하면 됩니다.</span>
+          <span className="font-semibold text-accent-strong">{onPrepare ? 'AI로 방 준비하기 (추천)' : 'AI 자동 보정 (추천)'}</span>
+          <span className="text-body">
+            {onPrepare
+              ? '바닥·천장·벽을 3D에서 찾아 바로 맞춥니다. 벽 위치를 확인하고 저장하면 문·창문과 원래 가구도 AI가 찾아 넣습니다.'
+              : '바닥·천장·벽을 3D에서 찾아 바로 맞춥니다. 찾은 뒤 벽 위치만 확인하면 됩니다.'}
+          </span>
           <button type="button" className="btn btn-primary h-11 text-sm" disabled={autoBusy} onClick={() => runAuto()} data-testid="calibration-auto" data-busy={autoBusy}>
             {autoBusy ? '방을 찾는 중…' : '자동으로 찾기'}
           </button>

@@ -20,6 +20,7 @@ import { addCandidates } from '@/lib/ai/fixturesDetect';
 import { requestFixturesDetection } from '@/lib/ai/fixturesClient';
 import Icon from '@/components/ui/Icon';
 import type { Engine } from './engine';
+import type { AutoDetect, AutoDetectResult } from './roomPrep';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, ToolPanel, type Slots } from './workspace';
 
 /** 이 거리(px)보다 많이 움직이면 탭이 아니라 화면 돌리기로 본다 */
@@ -51,6 +52,7 @@ export default function FixturesTool({
   onLook,
   onPlanDraw,
   detect,
+  auto,
 }: {
   slots: Slots;
   engineRef: RefObject<Engine | null>;
@@ -71,6 +73,8 @@ export default function FixturesTool({
   onPlanDraw?: (handler: ((a: Point2, b: Point2) => void) | null) => void;
   /** AI로 원래 가구 후보 찾기 (주면 버튼이 생긴다). remaining은 오늘 남은 AI 횟수 */
   detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
+  /** "AI로 방 준비하기": 이 신호가 오면 스스로 한 번 AI로 찾고 결과를 알린다 (bundleOf: 같은 1회로 셀 문·창문 찾기 호출) */
+  auto?: AutoDetect;
 }) {
   const [fixtures, setFixtures] = useState<Fixture[]>(initial);
   const [saved, setSaved] = useState<Fixture[]>(initial);
@@ -236,25 +240,25 @@ export default function FixturesTool({
   };
 
   /** AI가 찾은 후보를 목록에 넣는다. 이미 있는 것과 겹치는 후보는 뺀다. 저장은 사용자가 확인한 뒤 직접 한다 */
-  const detectFixtures = async () => {
+  const detectFixtures = async (bundleOf?: string): Promise<AutoDetectResult> => {
     const engine = engineRef.current;
-    if (!engine || !detect || detecting) return;
+    if (!engine || !detect || detecting) return { ok: false, found: 0 };
     setMessage(null);
     setMode(null);
     setFirstPoint(null);
     setDetecting({ done: 0, total: 0 });
-    const outcome = await requestFixturesDetection(engine, detect.roomId, floorPolygon, (done, total) => setDetecting({ done, total }));
+    const outcome = await requestFixturesDetection(engine, detect.roomId, floorPolygon, (done, total) => setDetecting({ done, total }), bundleOf);
     setDetecting(null);
     if (!outcome.ok) {
       if (outcome.code === 'AI_LIMIT') detect.onRemaining(0);
       setMessage(outcome.message);
-      return;
+      return { ok: false, found: 0, message: outcome.message };
     }
     if (outcome.remaining !== null) detect.onRemaining(outcome.remaining);
     const { fixtures: next, added, skipped } = addCandidates(fixturesRef.current, outcome.candidates);
     if (added.length === 0) {
       setMessage(skipped > 0 ? 'AI가 찾은 것은 모두 이미 넣은 원래 가구와 겹칩니다.' : 'AI가 원래 가구를 찾지 못했습니다. 직접 넣어 주세요.');
-      return;
+      return { ok: true, found: 0 };
     }
     commit(next);
     setAiIds((ids) => [...ids, ...added.map((f) => f.id)]);
@@ -262,7 +266,30 @@ export default function FixturesTool({
     setMessage(
       `${AI_MESSAGE} ${added.length}개를 찾아 넣었습니다${skipped > 0 ? ` (이미 있는 것과 겹치거나 넘치는 ${skipped}개는 뺌)` : ''}. 3D 화면과 평면도에서 자리·이름·높이를 확인하고, 틀린 것은 고치거나 지운 뒤 저장하세요.`,
     );
+    return { ok: true, found: added.length };
   };
+
+  // "AI로 방 준비하기": 신호마다 한 번만 (개발 모드에서 effect가 두 번 돌아도)
+  const autoRan = useRef<string | null>(null);
+  const runDetect = useRef(detectFixtures);
+  useEffect(() => {
+    runDetect.current = detectFixtures;
+  });
+  const canDetect = editable && !locked && Boolean(detect);
+  useEffect(() => {
+    if (!auto || !canDetect || autoRan.current === auto.token) return;
+    autoRan.current = auto.token;
+    const { token, bundleOf, onDone } = auto;
+    let started = false;
+    const timer = setTimeout(() => {
+      started = true;
+      void runDetect.current(bundleOf).then(onDone);
+    }, 0);
+    return () => {
+      clearTimeout(timer);
+      if (!started && autoRan.current === token) autoRan.current = null;
+    };
+  }, [auto, canDetect]);
 
   const lookAt = (f: Fixture) => {
     const engine = engineRef.current;
@@ -468,7 +495,7 @@ export default function FixturesTool({
               <button
                 className="btn h-11 min-w-0 flex-1 border border-accent-line bg-surface px-2 text-sm text-accent-strong hover:bg-accent-tint"
                 disabled={detecting !== null || detect.remaining === 0}
-                onClick={detectFixtures}
+                onClick={() => void detectFixtures()}
                 data-testid="fixtures-detect-run"
               >
                 {detecting === null && 'AI로 찾기'}
