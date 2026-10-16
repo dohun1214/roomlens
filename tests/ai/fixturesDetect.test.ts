@@ -180,6 +180,15 @@ describe('addCandidates', () => {
 describe('topHeight', () => {
   const layer = (from: number, to: number, n: number) => Array.from({ length: n }, (_, i) => from + ((to - from) * i) / Math.max(1, n - 1));
 
+  it('윗면을 재는 가구는 위에 올려 둔 스탠드·TV를 빼고 빽빽한 윗면 높이', () => {
+    // 협탁: 다리·옆면(0.1~0.55, 듬성) + 윗면(0.55~0.6, 빽빽) + 스탠드(0.6~1.3, 듬성)
+    const table = [...layer(0.1, 0.55, 120), ...layer(0.55, 0.6, 400), ...layer(0.6, 1.3, 90)];
+    expect(topHeight(table)).toBeGreaterThan(1);
+    expect(topHeight(table, true)).toBeCloseTo(0.6, 1);
+    // 옷장처럼 고르게 이어진 것은 그대로 꼭대기
+    expect(topHeight(layer(0.1, 2, 400), true)).toBeCloseTo(2, 1);
+  });
+
   it('바닥은 빼고, 위로 이어진 층의 꼭대기', () => {
     // 옷장: 바닥부터 2 m까지 이어진다
     expect(topHeight([...layer(0, 0.02, 300), ...layer(0.1, 2, 400)])).toBeCloseTo(2, 1);

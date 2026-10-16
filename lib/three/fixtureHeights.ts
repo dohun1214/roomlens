@@ -2,7 +2,7 @@
 // "바닥 위에서 위로 이어진 층의 꼭대기"를 구한다 (lib/ai/fixturesDetect.ts의 topHeight).
 // 지금 그리고 있는 스플랫 전체를 한 번 훑는다 (100만 개에 수백 ms). 브라우저 전용.
 import type { SplatMesh } from '@sparkjsdev/spark';
-import { HEIGHT_INSET, topHeight } from '@/lib/ai/fixturesDetect';
+import { HEIGHT_INSET, SURFACE_LABELS, topHeight } from '@/lib/ai/fixturesDetect';
 import { fixtureAxes, type Fixture } from '@/lib/rooms/fixtures';
 import { visitRenderedSplats } from './pickPoint';
 
@@ -49,5 +49,5 @@ export function measureFixtureHeights(mesh: SplatMesh, fixtures: Fixture[]): (nu
       area.heights.push(y);
     }
   });
-  return areas.map((area) => topHeight(area.heights));
+  return areas.map((area) => topHeight(area.heights, SURFACE_LABELS.has(area.f.label)));
 }
