@@ -755,12 +755,17 @@ export default function SplatViewer({
         >
           <span className="h-1 w-10 rounded-full bg-line-strong" aria-hidden="true" />
         </button>
-        {prep && calibrated && !sheetClosed && (
+        {prep && calibrated && (
           <RoomPrepBanner
             prep={prep}
             active={active}
             saved={{ openings: !openingsUnsaved, fixtures: !fixturesUnsaved }}
-            onSelect={selectTool}
+            hidden={sheetClosed}
+            onSelect={(next) => {
+              // 단계 버튼은 패널을 접지 않고 그 도구를 연다
+              setSheetClosed(false);
+              setTool(next);
+            }}
             onClose={() => setPrep(null)}
           />
         )}

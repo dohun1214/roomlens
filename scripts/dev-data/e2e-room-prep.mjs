@@ -103,7 +103,9 @@ try {
   const remaining = await page.getByTestId('openings-detect').getAttribute('data-remaining');
   check('화면의 남은 횟수가 9 (1회만 씀)', remaining === '9', remaining);
 
-  // 4) 확인하고 저장: 문·창문 → 원래 가구
+  // 4) 확인하고 저장: 문·창문 → 원래 가구 (지금 열린 단계를 다시 눌러도 안내·패널이 접히지 않는다)
+  await page.getByTestId('prep-openings').click();
+  check('열린 단계를 다시 눌러도 안내가 남는다', (await page.getByTestId('prep-banner').isVisible()) && (await page.getByTestId('openings-save').isVisible()));
   await page.getByTestId('openings-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=prep-openings]')?.getAttribute('data-state') === 'saved', null, { timeout: 15000 });
   await page.getByTestId('prep-fixtures').click();

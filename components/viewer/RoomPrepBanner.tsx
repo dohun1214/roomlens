@@ -12,6 +12,7 @@ export default function RoomPrepBanner({
   prep,
   active,
   saved,
+  hidden = false,
   onSelect,
   onClose,
 }: {
@@ -19,6 +20,8 @@ export default function RoomPrepBanner({
   active: ToolId | null;
   /** 각 도구의 결과를 저장했는지 */
   saved: { openings: boolean; fixtures: boolean };
+  /** 폰에서 패널을 접었을 때 */
+  hidden?: boolean;
   onSelect: (tool: ToolId) => void;
   onClose: () => void;
 }) {
@@ -30,7 +33,11 @@ export default function RoomPrepBanner({
   const allSaved = saved.openings && saved.fixtures;
 
   return (
-    <div className="mx-3 mt-3 flex shrink-0 flex-col gap-2 rounded-[14px] bg-accent-soft p-3 text-[13px]" data-testid="prep-banner" data-step={prep.step}>
+    <div
+      className={`mx-3 mt-3 flex shrink-0 flex-col gap-2 rounded-[14px] bg-accent-soft p-3 text-[13px] ${hidden ? 'max-lg:hidden' : ''}`}
+      data-testid="prep-banner"
+      data-step={prep.step}
+    >
       <div className="flex items-center gap-2">
         <AiBadge />
         <span className="min-w-0 flex-1 font-semibold text-accent-strong">
