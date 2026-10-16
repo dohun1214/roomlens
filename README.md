@@ -29,3 +29,4 @@ http://localhost:3000 에서 확인합니다. 필요한 환경변수는 `.env.ex
 ## 사용한 데이터
 
 - 가구 3D 모델: [Amazon Berkeley Objects](https://amazon-berkeley-objects.s3.amazonaws.com/index.html) (Amazon.com), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) / 책장 하나는 [Poly Haven](https://polyhaven.com/a/Shelf_01) (CC0). 웹용으로 메시·텍스처를 압축하고 크기를 맞췄습니다 (`scripts/dev-data/build-furniture-models.mjs`). 목록의 작은 사진(`public/furniture/`)은 이 모델을 그린 것입니다 (`scripts/dev-data/render-furniture-thumbs.mjs`). 원본은 저장소에 넣지 않습니다.
+- 샘플 방(3D 장면): [SuperSplat](https://superspl.at)에 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)으로 올라온 장면들입니다 (milanoski, ethan3111, tosolini, adamassets, leninlpg777, andriishramko). 방향을 바꾸고 스플랫 수를 줄여 쓰며, 방 화면에 장면마다 출처를 표시합니다. 보정·문창문·원래 가구는 `scripts/dev-data/setup-sample-room.mjs`로 준비합니다. 원본·변환 파일은 저장소에 넣지 않습니다.
