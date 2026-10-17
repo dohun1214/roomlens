@@ -53,6 +53,7 @@ export default function FixturesTool({
   onPlanDraw,
   detect,
   auto,
+  shown = true,
 }: {
   slots: Slots;
   engineRef: RefObject<Engine | null>;
@@ -75,6 +76,8 @@ export default function FixturesTool({
   detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
   /** "AI로 방 준비하기": 이 신호가 오면 스스로 한 번 AI로 찾고 결과를 알린다 (bundleOf: 같은 1회로 셀 문·창문 찾기 호출) */
   auto?: AutoDetect;
+  /** 3D에 원래 가구 상자를 보일지 (사용자가 끌 수 있다). 이 도구를 쓰는 중에는 꺼 두었어도 보인다 */
+  shown?: boolean;
 }) {
   const [fixtures, setFixtures] = useState<Fixture[]>(initial);
   const [saved, setSaved] = useState<Fixture[]>(initial);
@@ -174,12 +177,13 @@ export default function FixturesTool({
       disposables.push(markerGeometry, markerMaterial);
     }
     group.userData.fixtures = true;
+    group.visible = shown || open;
     engine.scene.add(group);
     return () => {
       engine.scene.remove(group);
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, fixtures, selectedId, open, firstPoint, activeMode]);
+  }, [engineRef, fixtures, selectedId, open, firstPoint, activeMode, shown]);
 
   // 3D 화면에서 가구 윗면의 마주 보는 두 모서리 찍기
   useEffect(() => {

@@ -49,6 +49,7 @@ export default function OpeningsTool({
   onLook,
   detect,
   auto,
+  shown = true,
 }: {
   /** 패널을 그려 넣을 자리. 이 도구를 골랐을 때만 넣고 지울 수 있다 */
   slots: Slots;
@@ -70,6 +71,8 @@ export default function OpeningsTool({
   detect?: { roomId: string; remaining: number | null; onRemaining: (remaining: number) => void };
   /** "AI로 방 준비하기": 이 신호가 오면 스스로 한 번 AI로 찾고 결과를 알린다 */
   auto?: AutoDetect;
+  /** 3D에 문·창문 판을 보일지 (사용자가 끌 수 있다). 이 도구를 쓰는 중에는 꺼 두었어도 보인다 */
+  shown?: boolean;
 }) {
   const [openings, setOpenings] = useState<Opening[]>(initial);
   const [savedOpenings, setSavedOpenings] = useState<Opening[]>(initial);
@@ -156,12 +159,14 @@ export default function OpeningsTool({
       disposables.push(markerGeometry, markerMaterial);
     }
 
+    group.visible = shown || open;
+    group.userData.openings = true;
     engine.scene.add(group);
     return () => {
       engine.scene.remove(group);
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, openings, floorPolygon, editing, walls, wallIndex, firstPoint, type]);
+  }, [engineRef, openings, floorPolygon, editing, walls, wallIndex, firstPoint, type, shown, open]);
 
   // 화면에서 양 끝 두 점 찍기
   useEffect(() => {

@@ -8,6 +8,7 @@ import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import OpeningsTool from './OpeningsTool';
 import FixturesTool from './FixturesTool';
 import RoomPrepBanner from './RoomPrepBanner';
+import Icon from '@/components/ui/Icon';
 import type { AutoDetect, AutoDetectResult, RoomPrep } from './roomPrep';
 import AnalysisPanel from './AnalysisPanel';
 import type { SavedReport } from '@/components/rooms/RoomReportView';
@@ -157,6 +158,13 @@ export default function SplatViewer({
   const rawSpeedRef = useRef(WALK_SPEED);
   /** 카메라를 방 안에 머물게 할지 (보정된 방에서만 쓸 수 있다) */
   const [stayInside, setStayInside] = useState(true);
+  // 3D에 문·창문 판과 원래 가구 상자를 보일지 (브라우저에 기억한다)
+  const [markers, setMarkers] = useState<Markers>(readMarkers);
+  const [markersOpen, setMarkersOpen] = useState(false);
+  const changeMarkers = (next: Markers) => {
+    setMarkers(next);
+    writeMarkers(next);
+  };
   /** 카메라가 머물 범위: 바닥 평면도와 천장 높이. null이면 막지 않는다 */
   const boundsRef = useRef<{ polygon: Point2[]; ceilingY: number | null } | null>(null);
   const [urlInput, setUrlInput] = useState(
@@ -780,6 +788,50 @@ export default function SplatViewer({
         {/* 도구들이 3D 위에 띄우는 것 (평면도, 보기 전환, 고른 가구의 띠) */}
         <div ref={setStageEl} className="pointer-events-none absolute inset-0 *:pointer-events-auto" />
 
+        {/* 3D에 보이는 표시(문·창문 판, 원래 가구 상자) 켜고 끄기 */}
+        {ready && calibrated && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
+          <div className="absolute top-3 right-3 flex flex-col items-end gap-2" data-testid="markers">
+            <button
+              type="button"
+              className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft"
+              aria-expanded={markersOpen}
+              onClick={() => setMarkersOpen((v) => !v)}
+              data-testid="markers-toggle"
+            >
+              <Icon name="eye" />
+              표시
+            </button>
+            {markersOpen && (
+              <div className="flex w-56 flex-col gap-1 rounded-xl bg-surface p-2 text-[13px] shadow-float" data-testid="markers-menu">
+                {(
+                  [
+                    ['openings', '문·창문', shownOpenings.length],
+                    ['fixtures', '원래 가구 상자', shownFixtures.length],
+                  ] as const
+                ).map(([key, label, count]) =>
+                  count > 0 ? (
+                    <button
+                      key={key}
+                      type="button"
+                      role="switch"
+                      aria-checked={markers[key]}
+                      className="flex h-10 items-center justify-between gap-2 rounded-[10px] px-2.5 hover:bg-soft"
+                      onClick={() => changeMarkers({ ...markers, [key]: !markers[key] })}
+                      data-testid={`show-${key}`}
+                    >
+                      <span>
+                        {label} <span className="font-mono text-mute">{count}</span>
+                      </span>
+                      <span className={`rounded-full px-2 py-px text-[11px] font-semibold ${markers[key] ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{markers[key] ? '보임' : '숨김'}</span>
+                    </button>
+                  ) : null,
+                )}
+                <p className="px-2.5 pt-1 pb-1.5 text-xs text-sub">숨겨도 그 도구를 쓰는 동안에는 보이고, 평면도와 배치 검사에는 그대로 쓰입니다.</p>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* 개발용 뷰어(/viewer): 파일 열기. 방 화면에서는 주소에 ?debug 를 붙였을 때만 수치를 보여준다 */}
         <div
           className={
@@ -963,6 +1015,7 @@ export default function SplatViewer({
           onSave={roomId && canEdit ? saveOpenings : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
           auto={openingsAuto}
+          shown={markers.openings}
         />
       )}
       {calibrated && room && (
@@ -980,6 +1033,7 @@ export default function SplatViewer({
           onSave={roomId && canEdit ? saveFixtures : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
           auto={fixturesAuto}
+          shown={markers.fixtures}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
@@ -1067,4 +1121,26 @@ function frameCamera(engine: Engine, splat: SplatMesh): number | null {
   engine.camera.updateProjectionMatrix();
   engine.controls.update();
   return size;
+}
+
+/** 3D에 보일 표시 */
+type Markers = { openings: boolean; fixtures: boolean };
+const MARKERS_KEY = 'roomlens.markers';
+
+/** 브라우저에 기억해 둔 표시 설정 (없거나 읽지 못하면 모두 보임) */
+function readMarkers(): Markers {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(MARKERS_KEY) ?? 'null') as Partial<Markers> | null;
+    return { openings: saved?.openings !== false, fixtures: saved?.fixtures !== false };
+  } catch {
+    return { openings: true, fixtures: true };
+  }
+}
+
+function writeMarkers(markers: Markers) {
+  try {
+    window.localStorage.setItem(MARKERS_KEY, JSON.stringify(markers));
+  } catch {
+    // 저장할 수 없는 브라우저(사생활 보호 모드 등)에서는 이번에만 적용된다
+  }
 }
