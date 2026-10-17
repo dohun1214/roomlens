@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
@@ -12,6 +12,8 @@ import { MAX_SUGGEST_ITEMS } from '@/lib/ai/layoutSuggest';
 import { MAX_REQUEST_LENGTH } from '@/lib/ai/roomSummary';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
 import { lastInsideAlong } from '@/lib/layout/geometry';
+import { emptyHistory, historyShortcut, record, redo, undo, type History } from '@/lib/layout/history';
+import { isTypingTarget } from '@/lib/three/keyboardMove';
 import {
   MAX_USER_FURNITURE,
   parseUserFurnitureForm,
@@ -175,12 +177,50 @@ export default function FurnitureLayer({
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [layoutBusy, setLayoutBusy] = useState(false);
   const [confirmLayoutDelete, setConfirmLayoutDelete] = useState(false);
-  const itemsRef = useRef<Item[]>([]);
+  const itemsRef = useRef<Item[]>(restored.items);
   const groupRef = useRef<THREE.Group | null>(null);
+  // 되돌리기·다시하기 기록 (화면에는 단계 수만 쓴다)
+  const [history, setHistory] = useState<History<Item[]>>(emptyHistory);
+  const historyRef = useRef(history);
 
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
+
+  /** 배치를 바꾼다. 바뀌기 전 배치를 되돌리기 기록에 남긴다 (실제로 달라진 것이 없으면 남기지 않는다) */
+  const commit = useCallback((change: (prev: Item[]) => Item[]) => {
+    const prev = itemsRef.current;
+    const next = change(prev);
+    if (next === prev || (next.length === prev.length && sameSavedItems(toSavedItems(next), toSavedItems(prev)))) return;
+    itemsRef.current = next;
+    historyRef.current = record(historyRef.current, prev);
+    setHistory(historyRef.current);
+    setItems(next);
+  }, []);
+
+  /** 되돌리기·다시하기 */
+  const step = useCallback((kind: 'undo' | 'redo') => {
+    const out = (kind === 'undo' ? undo : redo)(historyRef.current, itemsRef.current);
+    if (!out) return;
+    itemsRef.current = out.value;
+    historyRef.current = out.history;
+    setHistory(out.history);
+    setItems(out.value);
+  }, []);
+
+  // 단축키: 가구 도구를 쓰는 중이고 입력 칸에 글을 쓰고 있지 않을 때
+  const furnitureActive = slots.active === 'furniture';
+  useEffect(() => {
+    if (!furnitureActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      const kind = historyShortcut(e);
+      if (!kind || isTypingTarget(e.target as HTMLElement | null)) return;
+      e.preventDefault();
+      step(kind);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [furnitureActive, step]);
 
   const obstacles = useMemo(() => fixtureObstacles(fixtures), [fixtures]);
   const violations = useMemo(() => checkLayout(items, floorPolygon, openings, obstacles), [items, floorPolygon, openings, obstacles]);
@@ -359,7 +399,7 @@ export default function FurnitureLayer({
       const { id, current } = drag;
       drag = null;
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z } : i)));
+      commit((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z } : i)));
     };
 
     // capture 단계에 걸어 OrbitControls의 리스너보다 먼저 실행되게 한다
@@ -373,7 +413,7 @@ export default function FurnitureLayer({
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('pointercancel', onUp);
     };
-  }, [engineRef, floorPolygon]);
+  }, [engineRef, floorPolygon, commit]);
 
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
@@ -397,12 +437,12 @@ export default function FurnitureLayer({
       const start = floorPolygon ? lastInsideAlong(eye, ahead, floorPolygon) : ahead;
       if (start) placed = findFreeSpot(entry, avoid, floorPolygon, prefer, start);
     }
-    setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
+    commit((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
     setSelectedId(id);
   };
 
   const rotate = () => {
-    setItems((prev) =>
+    commit((prev) =>
       prev.map((i) =>
         i.id === selectedId
           ? { ...i, ...placeOnFloor({ ...i, rotationDeg: (i.rotationDeg + 90) % 360 }, floorPolygon) }
@@ -412,7 +452,7 @@ export default function FurnitureLayer({
   };
 
   const remove = () => {
-    setItems((prev) => prev.filter((i) => i.id !== selectedId));
+    commit((prev) => prev.filter((i) => i.id !== selectedId));
     setSelectedId(null);
   };
 
@@ -492,7 +532,7 @@ export default function FurnitureLayer({
     }
     setMine((prev) => prev.filter((f) => f.id !== id));
     // 방에 놓여 있던 그 가구도 함께 치운다
-    setItems((prev) => prev.filter((i) => !(i.kind === 'user' && i.furnitureRef === id)));
+    commit((prev) => prev.filter((i) => !(i.kind === 'user' && i.furnitureRef === id)));
     setMineMessage(null);
   };
 
@@ -526,25 +566,56 @@ export default function FurnitureLayer({
                 warnIds={warnIds}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                onMove={(id, x, z) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+                onMove={(id, x, z) => commit((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
               />
             </div>
           </div>
         )}
 
-        {/* 3D ↔ 평면도 */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={showPlan}
-          aria-label="평면도로 보기"
-          className="absolute top-3 left-3 flex rounded-xl bg-surface p-1 text-[13px] shadow-float"
-          onClick={() => onShowPlan(!showPlan)}
-          data-testid="plan-toggle"
-        >
-          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'font-medium text-sub' : 'bg-ink font-semibold text-white'}`}>3D</span>
-          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'bg-ink font-semibold text-white' : 'font-medium text-sub'}`}>평면도</span>
-        </button>
+        <div className="absolute top-3 left-3 flex items-start gap-2">
+          {/* 3D ↔ 평면도 */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showPlan}
+            aria-label="평면도로 보기"
+            className="flex rounded-xl bg-surface p-1 text-[13px] shadow-float"
+            onClick={() => onShowPlan(!showPlan)}
+            data-testid="plan-toggle"
+          >
+            <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'font-medium text-sub' : 'bg-ink font-semibold text-white'}`}>3D</span>
+            <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'bg-ink font-semibold text-white' : 'font-medium text-sub'}`}>평면도</span>
+          </button>
+          {/* 되돌리기·다시하기 (가구 도구에서만) */}
+          {furnitureActive && (
+            <div className="flex rounded-xl bg-surface p-1 shadow-float" data-testid="layout-history">
+              <button
+                type="button"
+                className="flex h-9 w-10 items-center justify-center rounded-[9px] text-ink hover:bg-soft disabled:text-mute disabled:hover:bg-transparent"
+                disabled={history.past.length === 0}
+                onClick={() => step('undo')}
+                aria-label="되돌리기"
+                title="되돌리기 (Ctrl+Z)"
+                data-testid="layout-undo"
+                data-steps={history.past.length}
+              >
+                <Icon name="undo" />
+              </button>
+              <button
+                type="button"
+                className="flex h-9 w-10 items-center justify-center rounded-[9px] text-ink hover:bg-soft disabled:text-mute disabled:hover:bg-transparent"
+                disabled={history.future.length === 0}
+                onClick={() => step('redo')}
+                aria-label="다시하기"
+                title="다시하기 (Ctrl+Shift+Z)"
+                data-testid="layout-redo"
+                data-steps={history.future.length}
+              >
+                <Icon name="redo" />
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* 고른 가구: 이름·치수, 회전, 삭제 */}
         {selected && (
