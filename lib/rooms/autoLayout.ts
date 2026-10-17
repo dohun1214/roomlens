@@ -441,6 +441,48 @@ export function simplifyOrthogonal(poly: Point2[], minEdge = MIN_WALL): Point2[]
   return pts;
 }
 
+/** 이보다 얕은 벽의 단차는 없앤다 (m). 열린 문짝이나 벽에 붙은 가구가 벽을 몇십 cm 안으로 밀어 생긴 단차 */
+export const MAX_STEP = 0.3;
+
+/**
+ * 같은 방향으로 이어지는 두 벽 사이의 얕은 단차(짧은 벽 하나)를 없앤다. 짧은 쪽 벽을 긴 쪽 벽의 줄에 맞춘다.
+ * (벽을 따로 맞추다 생긴 몇십 cm의 계단. 진짜 기둥·벽감처럼 양옆 벽이 반대로 꺾이는 것은 그대로 둔다)
+ */
+export function removeSmallSteps(poly: Point2[], maxStep = MAX_STEP): Point2[] {
+  let pts = dedupe(poly);
+  for (let guard = 0; guard < 200 && pts.length > 4; guard += 1) {
+    const n = pts.length;
+    let done = true;
+    for (let k = 0; k < n; k += 1) {
+      const p0 = pts[(k + n - 1) % n];
+      const p1 = pts[k];
+      const p2 = pts[(k + 1) % n];
+      const p3 = pts[(k + 2) % n];
+      const step = Math.abs(p2[0] - p1[0]) + Math.abs(p2[1] - p1[1]);
+      if (step >= maxStep) continue;
+      const before: Point2 = [p1[0] - p0[0], p1[1] - p0[1]];
+      const after: Point2 = [p3[0] - p2[0], p3[1] - p2[1]];
+      if (before[0] * after[0] + before[1] * after[1] <= 0) continue; // 양옆이 반대 방향: 기둥·벽감
+      const l0 = Math.abs(before[0]) + Math.abs(before[1]);
+      const l2 = Math.abs(after[0]) + Math.abs(after[1]);
+      const vertical = Math.abs(before[0]) < 1e-9; // 양옆 벽이 z 방향 (x가 일정)
+      const axis = vertical ? 0 : 1;
+      if (l0 < l2) {
+        p0[axis] = p2[axis];
+        p1[axis] = p2[axis];
+      } else {
+        p2[axis] = p1[axis];
+        p3[axis] = p1[axis];
+      }
+      pts = dedupe(pts);
+      done = false;
+      break;
+    }
+    if (done) break;
+  }
+  return pts;
+}
+
 /** 거의 같은 점과 한 직선 위의 점을 뺀다 */
 function dedupe(poly: Point2[]): Point2[] {
   let pts = poly.map((p) => [p[0], p[1]] as Point2);
@@ -695,7 +737,7 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
   for (let c = 0; c < nx * nz; c += 1) if (filled[c]) region[c] = 1;
   debug?.({ nx, nz, x0, z0, cell, wall: wallMask, floor, region });
   const raw = traceOutline(region, g);
-  const outline = refineWalls(simplifyOrthogonal(raw), input);
+  const outline = removeSmallSteps(refineWalls(simplifyOrthogonal(raw), input));
   // 영역의 가운데 (다음 계산에서 같은 방을 고를 때)
   let sx = 0;
   let sz = 0;
