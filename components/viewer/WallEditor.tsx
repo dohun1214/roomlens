@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { moveWall } from '@/lib/rooms/wallEdit';
+import { pointInPolygon } from '@/lib/three/floorDrag';
 
 /**
  * 작은 평면도에서 벽을 끌어 옮긴다. 벽은 자기 방향과 직각으로만 움직여서, 직각으로 맞춘 방은 계속 직각이다.
@@ -51,7 +52,7 @@ export default function WallEditor({ polygon, onChange, highlight }: { polygon: 
     <svg
       ref={svgRef}
       viewBox={`${view.x0} ${view.z0} ${view.w} ${view.h}`}
-      className="aspect-square w-full touch-none rounded-xl bg-ground"
+      className="mx-auto aspect-square w-full touch-none rounded-xl bg-ground max-lg:w-[min(100%,220px)]"
       onPointerMove={onMove}
       onPointerUp={() => setDrag(null)}
       onPointerCancel={() => setDrag(null)}
@@ -61,7 +62,16 @@ export default function WallEditor({ polygon, onChange, highlight }: { polygon: 
       {polygon.map((p, i) => {
         const q = polygon[(i + 1) % polygon.length];
         const active = drag?.wall === i || highlight === i;
-        const mid: Point2 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+        // 글자는 벽 선에 겹치지 않게 방 안쪽으로 조금 띄운다
+        const len = lengths[i] || 1;
+        const normal: Point2 = [-(q[1] - p[1]) / len, (q[0] - p[0]) / len];
+        const center: Point2 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+        const inward = pointInPolygon([center[0] + normal[0] * 0.05, center[1] + normal[1] * 0.05], polygon) ? 1 : -1;
+        // 세로 벽은 글자를 벽 옆에 붙이고(왼쪽·오른쪽 정렬), 가로 벽은 위·아래로 띄운다
+        const vertical = Math.abs(normal[0]) > Math.abs(normal[1]);
+        const anchor = vertical ? (normal[0] * inward > 0 ? 'start' : 'end') : 'middle';
+        const gap = stroke * (vertical ? 3 : 6);
+        const mid: Point2 = [center[0] + normal[0] * gap * inward, center[1] + normal[1] * gap * inward];
         return (
           <g key={i}>
             <line x1={p[0]} y1={p[1]} x2={q[0]} y2={q[1]} stroke={active ? '#3350e8' : '#141a2a'} strokeWidth={stroke * (active ? 2.2 : 1.4)} strokeLinecap="round" />
@@ -77,7 +87,7 @@ export default function WallEditor({ polygon, onChange, highlight }: { polygon: 
               onPointerDown={onDown(i)}
               data-testid={`calibration-wall-${i}`}
             />
-            <text x={mid[0]} y={mid[1]} fontSize={stroke * 6} textAnchor="middle" dominantBaseline="middle" fill="#3b4256" stroke="#f3f5f8" strokeWidth={stroke * 1.2} paintOrder="stroke" pointerEvents="none">
+            <text x={mid[0]} y={mid[1]} fontSize={stroke * 6} textAnchor={anchor} dominantBaseline="middle" fill="#3b4256" stroke="#f3f5f8" strokeWidth={stroke * 1.2} paintOrder="stroke" pointerEvents="none">
               {i + 1} · {lengths[i].toFixed(2)}
             </text>
           </g>
