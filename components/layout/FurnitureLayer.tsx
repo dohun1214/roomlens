@@ -36,6 +36,7 @@ import {
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { disposeModelTemplate, instantiateModel, makeModelTemplate, type ModelTemplate } from '@/lib/three/furnitureModel';
 import { pointerToNdc } from '@/lib/three/pickPoint';
+import { flyTo, furnitureViewpoint } from '@/lib/three/focusView';
 import { makeShadowTexture, shadowSize } from '@/lib/three/softShadow';
 import type { Engine } from '@/components/viewer/engine';
 import FurnitureGlyph from '@/components/ui/FurnitureGlyph';
@@ -312,6 +313,7 @@ export default function FurnitureLayer({
         color: bad ? VIOLATION_EDGE_COLOR : warn ? WARNING_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
       });
       const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      edges.userData.edges = true;
       // 모델이 있으면 외곽선은 고른 가구와 문제 있는 가구에만
       edges.visible = !template || bad || warn || item.id === selectedId;
       mesh.add(edges);
@@ -415,6 +417,28 @@ export default function FurnitureLayer({
     };
   }, [engineRef, floorPolygon, commit]);
 
+  /** 가구 테두리를 잠깐 깜빡여 어디 있는지 알린다 (메시를 다시 만들지 않고 테두리만 켜고 끈다) */
+  const blink = (id: string) => {
+    let count = 0;
+    const timer = window.setInterval(() => {
+      const mesh = groupRef.current?.children.find((m) => m.userData.id === id);
+      const edges = mesh?.children.find((c) => c.userData.edges) as THREE.LineSegments | undefined;
+      count += 1;
+      if (edges) edges.visible = count % 2 === 1 || count >= 6;
+      if (count >= 6) window.clearInterval(timer);
+    }, 160);
+  };
+
+  /** 가구로 시점 옮기기: 고르고, 평면도를 보고 있었으면 3D로 돌아가 그 가구를 내려다보는 자리로 날아간다 */
+  const focusOn = (item: Pick<Item, 'id' | 'x' | 'z' | 'w' | 'd' | 'h'>) => {
+    const engine = engineRef.current;
+    setSelectedId(item.id);
+    if (!engine) return;
+    if (showPlan) onShowPlan(false);
+    const view = furnitureViewpoint(item, floorPolygon, [engine.camera.position.x, engine.camera.position.z]);
+    void flyTo(engine, view).then(() => blink(item.id));
+  };
+
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
     const id = `f${nextItemNumber(itemsRef.current)}`;
@@ -437,8 +461,11 @@ export default function FurnitureLayer({
       const start = floorPolygon ? lastInsideAlong(eye, ahead, floorPolygon) : ahead;
       if (start) placed = findFreeSpot(entry, avoid, floorPolygon, prefer, start);
     }
-    commit((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
+    const item = placeCatalogItem(entry, id, placed);
+    commit((prev) => [...prev, item]);
     setSelectedId(id);
+    // 그래도 화면 밖이면(방 밖을 보고 있었거나 빈자리가 멀 때) 그 가구로 시점을 옮긴다
+    if (engine && !showPlan && !inView(engine, item.x, item.h / 2, item.z)) focusOn(item);
   };
 
   const rotate = () => {
@@ -632,6 +659,10 @@ export default function FurnitureLayer({
               </span>
             </span>
             <span className="h-7 w-px bg-line" aria-hidden="true" />
+            <button className="btn btn-soft h-11 px-3 text-[13px]" onClick={() => focusOn(selected)} title="이 가구가 잘 보이는 자리로 시점 옮기기" aria-label="가구로 이동" data-testid="selection-focus">
+              <Icon name="focus" />
+              <span className="max-sm:hidden">가구로 이동</span>
+            </button>
             <button className="btn btn-soft h-11 px-3.5 text-[13px]" onClick={rotate}>
               <Icon name="rotate" />
               90° 회전
@@ -762,7 +793,11 @@ export default function FurnitureLayer({
                           src={item ? catalogThumbnail({ id: item.furnitureRef, kind: item.kind }) : null}
                         />
                         <span className="flex min-w-0 flex-col gap-px">
-                          <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => setSelectedId(r.itemId)}>
+                          <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => {
+                              if (item) focusOn(item);
+                              else setSelectedId(r.itemId);
+                            }}
+                          >
                             {r.name}
                           </button>
                           <span className="text-[13px] text-body">{r.reason}</span>
@@ -948,9 +983,9 @@ export default function FurnitureLayer({
                   const state = stateOf(item.id);
                   const on = item.id === selectedId;
                   return (
-                    <li key={item.id}>
+                    <li key={item.id} className={`flex items-center rounded-[10px] ${on ? 'bg-accent-soft' : 'hover:bg-soft'}`}>
                       <button
-                        className={`flex min-h-10 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left ${on ? 'bg-accent-soft' : 'hover:bg-soft'}`}
+                        className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] px-2.5 text-left"
                         onClick={() => setSelectedId(on ? null : item.id)}
                         aria-pressed={on}
                         data-id={item.id}
@@ -961,6 +996,17 @@ export default function FurnitureLayer({
                         {state === 'error' && <span className="text-xs font-medium text-danger">문제</span>}
                         {state === 'warning' && <span className="text-xs font-medium text-warn">경고</span>}
                         {state === 'ok' && on && <span className="text-xs font-medium text-accent-strong">선택됨</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sub hover:bg-surface hover:text-accent-strong"
+                        onClick={() => focusOn(item)}
+                        aria-label={`${item.name}로 시점 옮기기`}
+                        title="3D에서 이 가구 보기"
+                        data-testid="placed-focus"
+                        data-id={item.id}
+                      >
+                        <Icon name="focus" />
                       </button>
                     </li>
                   );
