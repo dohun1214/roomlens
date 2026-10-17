@@ -14,6 +14,7 @@ export default function RoomPrepBanner({
   saved,
   hidden = false,
   onSelect,
+  onFinish,
   onClose,
 }: {
   prep: RoomPrep;
@@ -23,6 +24,8 @@ export default function RoomPrepBanner({
   /** 폰에서 패널을 접었을 때 */
   hidden?: boolean;
   onSelect: (tool: ToolId) => void;
+  /** 다 저장한 뒤 "가구 놓으러 가기": 안내를 닫고 가구 도구로 */
+  onFinish?: () => void;
   onClose: () => void;
 }) {
   const busy = prep.step !== 'review';
@@ -88,6 +91,11 @@ export default function RoomPrepBanner({
           );
         })}
       </div>
+      {!busy && allSaved && onFinish && (
+        <button type="button" className="btn btn-primary h-10 text-[13px]" onClick={onFinish} data-testid="prep-finish">
+          가구 놓으러 가기
+        </button>
+      )}
       {!busy && steps.some((s) => s.result && !s.result.ok && s.result.message) && (
         <span className="text-warn" data-testid="prep-error">
           {steps

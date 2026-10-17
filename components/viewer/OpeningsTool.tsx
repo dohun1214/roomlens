@@ -351,6 +351,8 @@ export default function OpeningsTool({
       setSavedOpenings(snapshot);
       setAiKeys([]);
       onChange?.(snapshot, []);
+      // "AI가 … 찾아 넣었습니다. 확인하고 저장하세요" 안내는 저장했으면 다 한 일이다
+      setMessage(null);
     }
     setSavePhase(ok ? 'idle' : 'error');
   };

@@ -141,6 +141,9 @@ export default function SplatViewer({
   const [showPlan, setShowPlan] = useState(false);
   // "AI로 방 준비하기" 진행 (보정 저장 → 문·창문 찾기 → 원래 가구 찾기 → 확인)
   const [prep, setPrep] = useState<RoomPrep | null>(null);
+  // 방 준비의 확인 단계에서 아직 저장하지 않은 단계가 있는지 (저장 콜백에서 최신 값을 읽으려고)
+  const prepOpeningsPendingRef = useRef(false);
+  const prepFixturesPendingRef = useRef(false);
   const [hasReport, setHasReport] = useState(initialReport !== null);
   const [debug] = useState(() => new URLSearchParams(window.location.search).has('debug'));
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
@@ -161,6 +164,23 @@ export default function SplatViewer({
   // 3D에 문·창문 판과 원래 가구 상자를 보일지 (브라우저에 기억한다)
   const [markers, setMarkers] = useState<Markers>(readMarkers);
   const [markersOpen, setMarkersOpen] = useState(false);
+  const markersRef = useRef<HTMLDivElement>(null);
+  // 메뉴 밖을 누르거나 Esc를 누르면 닫는다
+  useEffect(() => {
+    if (!markersOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!markersRef.current?.contains(e.target as Node)) setMarkersOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMarkersOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [markersOpen]);
   const changeMarkers = (next: Markers) => {
     setMarkers(next);
     writeMarkers(next);
@@ -627,6 +647,25 @@ export default function SplatViewer({
     [prep, fixturesDone],
   );
 
+  // 방 준비의 확인 단계: 한 단계를 저장하면 아직 저장하지 않은 다음 단계로 넘어간다
+  const prepReview = prep?.step === 'review';
+  const saveOpeningsThenNext = useCallback(
+    async (items: Opening[]) => {
+      const ok = await saveOpenings(items);
+      if (ok && prepReview && prepFixturesPendingRef.current) setTool('fixtures');
+      return ok;
+    },
+    [saveOpenings, prepReview],
+  );
+  const saveFixturesThenNext = useCallback(
+    async (items: Fixture[]) => {
+      const ok = await saveFixtures(items);
+      if (ok && prepReview && prepOpeningsPendingRef.current) setTool('openings');
+      return ok;
+    },
+    [saveFixtures, prepReview],
+  );
+
   // 원래 가구 도구가 평면도 그리기를 켜면 평면도를 연다
   const changePlanDraw = useCallback((handler: ((a: Point2, b: Point2) => void) | null) => {
     setPlanDraw(handler ? { onDraw: handler } : null);
@@ -725,6 +764,10 @@ export default function SplatViewer({
   const calibrationUnsaved = Boolean(roomId) && calibrated && roomPolygonKey !== savedPolygonKey;
   const openingsUnsaved = Boolean(roomId) && canEdit && liveOpenings !== null && liveOpenings.key === roomPolygonKey && !sameOpenings(liveOpenings.items, savedOpenings);
   const fixturesUnsaved = Boolean(roomId) && canEdit && liveFixtures !== null && liveFixtures.key === roomPolygonKey && !sameFixtures(liveFixtures.items, savedFixtures);
+  useEffect(() => {
+    prepOpeningsPendingRef.current = openingsUnsaved;
+    prepFixturesPendingRef.current = fixturesUnsaved;
+  });
 
   const selectTool = (next: ToolId) => {
     // 폰에서 고른 탭을 다시 누르면 패널을 접었다 편다
@@ -774,6 +817,11 @@ export default function SplatViewer({
               setSheetClosed(false);
               setTool(next);
             }}
+            onFinish={() => {
+              setPrep(null);
+              setSheetClosed(false);
+              setTool('furniture');
+            }}
             onClose={() => setPrep(null)}
           />
         )}
@@ -789,8 +837,8 @@ export default function SplatViewer({
         <div ref={setStageEl} className="pointer-events-none absolute inset-0 *:pointer-events-auto" />
 
         {/* 3D에 보이는 표시(문·창문 판, 원래 가구 상자) 켜고 끄기 */}
-        {ready && calibrated && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
-          <div className="absolute top-3 right-3 flex flex-col items-end gap-2" data-testid="markers">
+        {ready && calibrated && !showPlan && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
+          <div ref={markersRef} className="absolute top-3 right-3 flex flex-col items-end gap-2" data-testid="markers">
             <button
               type="button"
               className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft"
@@ -1012,7 +1060,7 @@ export default function SplatViewer({
           onLook={() => setShowPlan(false)}
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
-          onSave={roomId && canEdit ? saveOpenings : undefined}
+          onSave={roomId && canEdit ? saveOpeningsThenNext : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
           auto={openingsAuto}
           shown={markers.openings}
@@ -1030,7 +1078,7 @@ export default function SplatViewer({
           onPlanDraw={changePlanDraw}
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
-          onSave={roomId && canEdit ? saveFixtures : undefined}
+          onSave={roomId && canEdit ? saveFixturesThenNext : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
           auto={fixturesAuto}
           shown={markers.fixtures}
