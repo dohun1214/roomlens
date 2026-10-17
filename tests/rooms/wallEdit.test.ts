@@ -26,6 +26,29 @@ describe('moveWall', () => {
     expect(moveWall(ROOM, 0, [0, 2.9])).toBeNull();
     expect(moveWall(ROOM, 0, [0, 3.5])).toBeNull();
   });
+
+  it('얕은 단차: 짧은 벽을 끝까지 끌면 단차 벽이 없어지고 벽이 합쳐진다', () => {
+    // 오른쪽 벽 위쪽 0.7 m가 0.2 m 안으로 들어와 있다 (벽 1 = (3.8,0)→(3.8,0.7), 벽 2 = 0.2 m 단차)
+    const notched: Point2[] = [
+      [0, 0],
+      [3.8, 0],
+      [3.8, 0.7],
+      [4, 0.7],
+      [4, 3],
+      [0, 3],
+    ];
+    // 벽 1을 +x로 조금만 끌어도(남는 단차가 20cm 안) 단차가 없어지게 붙는다
+    const out = moveWall(notched, 1, [0.15, 0])!;
+    expect(out).toEqual([
+      [0, 0],
+      [4, 0],
+      [4, 3],
+      [0, 3],
+    ]);
+    expect(moveWall(notched, 1, [0.05, 0])).toHaveLength(4);
+    // 반대로(단차가 깊어지게) 끌면 보통처럼 옮긴다
+    expect(moveWall(notched, 1, [-0.1, 0])).toHaveLength(6);
+  });
 });
 
 describe('scaleCalibration', () => {

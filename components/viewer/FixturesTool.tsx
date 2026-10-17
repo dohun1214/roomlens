@@ -314,6 +314,7 @@ export default function FixturesTool({
     if (ok) {
       setSaved(snapshot);
       setAiIds([]);
+      setMessage(null);
     }
     setSavePhase(ok ? 'idle' : 'error');
   };

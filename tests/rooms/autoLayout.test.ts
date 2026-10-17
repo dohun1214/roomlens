@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeDoorways, estimateRoomLayout, simplifyOrthogonal, traceOutline } from '@/lib/rooms/autoLayout';
+import { closeDoorways, estimateRoomLayout, removeSmallSteps, simplifyOrthogonal, traceOutline } from '@/lib/rooms/autoLayout';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { polygonIoU } from '@/lib/eval/roomPrepScore';
 import { FURNITURE, L_ROOM, fakeRoom, iouBack, rotation, type Vec3 } from './fakeRoom';
@@ -66,5 +66,46 @@ describe('closeDoorways', () => {
     closeDoorways(mask, nx, nz, 20, 6);
     expect(Array.from({ length: 16 }, (_, k) => mask[2 * nx + 15 + k]).every((v) => v === 1)).toBe(true);
     expect(mask[6 * nx + 8]).toBe(0);
+  });
+});
+
+describe('removeSmallSteps', () => {
+  it('같은 방향으로 이어지는 벽 사이의 얕은 단차를 없앤다 (짧은 벽을 긴 벽 줄로)', () => {
+    // 오른쪽 벽 위쪽 0.68 m가 0.2 m 안으로 들어와 있다 (열린 문짝)
+    const notched: [number, number][] = [
+      [-2.8, -1.6],
+      [1.3, -1.6],
+      [1.3, -0.9],
+      [1.5, -0.9],
+      [1.5, 2.5],
+      [-2.8, 2.5],
+    ];
+    const out = removeSmallSteps(notched);
+    expect(out).toHaveLength(4);
+    expect(out.every(([x]) => x === -2.8 || x === 1.5)).toBe(true);
+  });
+
+  it('깊이 30cm 넘는 기둥·단차는 그대로 두고, 얕은 홈(20cm)은 메운다', () => {
+    const pillar = (depth: number): [number, number][] => [
+      [0, 0],
+      [4, 0],
+      [4, 1],
+      [4 - depth, 1],
+      [4 - depth, 1.5],
+      [4, 1.5],
+      [4, 3],
+      [0, 3],
+    ];
+    expect(removeSmallSteps(pillar(0.4))).toHaveLength(8);
+    expect(removeSmallSteps(pillar(0.2))).toHaveLength(4);
+    const deep: [number, number][] = [
+      [0, 0],
+      [4, 0],
+      [4, 1],
+      [4.5, 1],
+      [4.5, 3],
+      [0, 3],
+    ];
+    expect(removeSmallSteps(deep)).toHaveLength(6);
   });
 });

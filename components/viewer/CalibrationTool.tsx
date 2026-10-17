@@ -523,7 +523,7 @@ export default function CalibrationTool({
               </button>
             )}
           </div>
-          {onSave && onPrepare && <p className="text-xs text-sub">AI 찾기는 문·창문과 원래 가구를 합쳐 AI 1회로 셉니다.</p>}
+          {onSave && onPrepare && <p className="text-xs text-sub max-lg:hidden">AI 찾기는 문·창문과 원래 가구를 합쳐 AI 1회로 셉니다.</p>}
         </PanelFooter>
       </ToolPanel>
     );
