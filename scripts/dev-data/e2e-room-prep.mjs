@@ -108,15 +108,18 @@ try {
   check('열린 단계를 다시 눌러도 안내가 남는다', (await page.getByTestId('prep-banner').isVisible()) && (await page.getByTestId('openings-save').isVisible()));
   await page.getByTestId('openings-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=prep-openings]')?.getAttribute('data-state') === 'saved', null, { timeout: 15000 });
+  check('문·창문을 저장하면 다음 단계(원래 가구)로 넘어간다', (await page.getByTestId('workspace').getAttribute('data-tool')) === 'fixtures');
+  check('저장하면 "AI가 찾아 넣었습니다" 안내가 사라진다', (await page.getByTestId('openings-message').count()) === 0);
+  await page.getByTestId('prep-openings').click();
   await page.getByTestId('prep-fixtures').click();
   check('단계 버튼으로 원래 가구 도구로 간다', (await page.getByTestId('workspace').getAttribute('data-tool')) === 'fixtures');
   await page.getByTestId('fixtures-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=prep-fixtures]')?.getAttribute('data-state') === 'saved', null, { timeout: 15000 });
   const { data: done } = await admin.from('rooms').select('openings, fixtures').eq('id', room.id).single();
   check('저장: 문·창문과 원래 가구가 DB에 들어갔다', done.openings.length === o.found && done.fixtures.length === f.found, { openings: done.openings.length, fixtures: done.fixtures.length });
-  check('모두 저장하면 끝 안내', (await page.getByTestId('prep-banner').innerText()).includes('방 준비 끝'));
-  await page.getByTestId('prep-close').click();
-  check('닫으면 안내가 사라진다', (await page.getByTestId('prep-banner').count()) === 0);
+  check('모두 저장하면 끝 안내와 "가구 놓으러 가기"', (await page.getByTestId('prep-banner').innerText()).includes('방 준비 끝') && (await page.getByTestId('prep-finish').isVisible()));
+  await page.getByTestId('prep-finish').click();
+  check('"가구 놓으러 가기": 안내가 닫히고 가구 도구로', (await page.getByTestId('prep-banner').count()) === 0 && (await page.getByTestId('workspace').getAttribute('data-tool')) === 'furniture');
   check('화면 오류 없음', pageErrors.length === 0, pageErrors);
 } catch (err) {
   check('실행 중 오류', false, String(err).slice(0, 300));
