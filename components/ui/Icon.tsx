@@ -26,6 +26,10 @@ const PATHS = {
   drawer: { box: 18, width: 1.6, d: <><rect x="2.5" y="3.5" width="13" height="11" rx="1.6" /><path d="M2.5 9h13M8 6.3h2M8 11.8h2" /></> },
   alert: { box: 16, width: 1.6, d: <><circle cx="8" cy="8" r="6" /><path d="M8 4.8v3.8M8 11v.2" /></> },
   warn: { box: 16, width: 1.6, d: <><path d="M8 2 14.5 13.5h-13z" /><path d="M8 6.5v3.2M8 11.6v.2" /></> },
+  undo: { box: 16, width: 1.7, d: <><path d="M5.5 3 2.5 6l3 3" /><path d="M2.5 6h7a4 4 0 0 1 0 8H7" /></> },
+  redo: { box: 16, width: 1.7, d: <><path d="M10.5 3l3 3-3 3" /><path d="M13.5 6h-7a4 4 0 0 0 0 8H9" /></> },
+  focus: { box: 16, width: 1.6, d: <><path d="M2 5.5V3a1 1 0 0 1 1-1h2.5M10.5 2H13a1 1 0 0 1 1 1v2.5M14 10.5V13a1 1 0 0 1-1 1h-2.5M5.5 14H3a1 1 0 0 1-1-1v-2.5" /><circle cx="8" cy="8" r="2" /></> },
+  eye: { box: 16, width: 1.6, d: <><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" /></> },
   image: { box: 18, width: 1.6, d: <><rect x="2.5" y="3.5" width="13" height="11" rx="1.6" /><circle cx="6.5" cy="7.5" r="1.2" /><path d="M3 13l4-3.5 3 2.5 2.5-2 3 3" /></> },
 } satisfies Record<string, { box: number; width: number; d: ReactNode }>;
 
