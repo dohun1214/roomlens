@@ -17,6 +17,7 @@ import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
 import type { SavedItem } from '@/lib/layout/saved';
 import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/lib/layout/store';
+import { remapFurniture, setLayoutPublic, sharedCopyName, usedBorrowed, type SharedLayout } from '@/lib/layout/share';
 import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
@@ -87,8 +88,12 @@ type Props = {
   ownerId?: string | null;
   /** 로그인한 사람의 아이디와 닉네임 (코멘트 쓰기) */
   viewer?: { id: string; name: string } | null;
-  /** 방이 공개인지 (처음 연 때 기준) */
+  /** 방이 공개인지 (주인이 바꾸면 방 화면이 새로 읽어 넘긴다) */
   isPublic?: boolean;
+  /** 공유 링크로 연 남의 배치. 있으면 이 배치로 시작하고, 저장하면 내 배치가 된다 */
+  sharedLayout?: SharedLayout | null;
+  /** 공유 링크로 왔지만 그 배치를 볼 수 없을 때 */
+  sharedMissing?: boolean;
 };
 
 const NO_OPENINGS: Opening[] = [];
@@ -114,6 +119,8 @@ export default function SplatViewer({
   ownerId = null,
   viewer = null,
   isPublic = false,
+  sharedLayout = null,
+  sharedMissing = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -123,7 +130,11 @@ export default function SplatViewer({
   // 저장된 배치들. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
   const [layouts, setLayouts] = useState<MyLayout[]>(initialLayouts);
   // 지금 보고 있는 배치 (null이면 아직 저장하지 않은 새 배치)
-  const [layoutId, setLayoutId] = useState<string | null>(initialLayouts[0]?.id ?? null);
+  // 남이 공유한 배치를 보고 있는지 (다른 배치를 고르거나 내 배치로 저장하면 끝난다)
+  const [viewingShared, setViewingShared] = useState(Boolean(sharedLayout));
+  const [layoutId, setLayoutId] = useState<string | null>(sharedLayout ? null : (initialLayouts[0]?.id ?? null));
+  // 내 가구. 가구 층은 처음 한 번만 읽으므로, 배치를 바꿔 층을 새로 만들어도 잃지 않게 여기에 둔다
+  const [myFurniture, setMyFurniture] = useState<CatalogItem[] | undefined>(userFurniture);
   const layoutIdRef = useRef(layoutId);
   // 다른 배치로 바꿀 때마다 올려서 가구 층을 새로 만든다 (저장만 할 때는 그대로)
   const [layoutNonce, setLayoutNonce] = useState(0);
@@ -683,13 +694,52 @@ export default function SplatViewer({
   }, []);
 
   // 내 가구 만들기·지우기 (본인 권한으로 user_furniture에 직접)
-  const createFurniture = useCallback((value: UserFurnitureValue) => createUserFurniture(createClient(), value), []);
-  const deleteFurniture = useCallback((id: string) => deleteUserFurniture(createClient(), id), []);
+  const createFurniture = useCallback(async (value: UserFurnitureValue) => {
+    const created = await createUserFurniture(createClient(), value);
+    if (created) setMyFurniture((prev) => [...(prev ?? []), created]);
+    return created;
+  }, []);
+  const deleteFurniture = useCallback(async (id: string) => {
+    const ok = await deleteUserFurniture(createClient(), id);
+    if (ok) setMyFurniture((prev) => prev?.filter((f) => f.id !== id));
+    return ok;
+  }, []);
+
+  // 남이 공유한 배치를 내 배치로 저장한다. 그 사람의 가구는 내 가구로 사본을 만들어 바꿔 넣는다
+  const saveSharedCopy = useCallback(
+    async (items: SavedItem[]) => {
+      if (!roomId || !sharedLayout) return false;
+      const supabase = createClient();
+      const borrowed = usedBorrowed(items, sharedLayout.furniture);
+      const copies = new Map<string, string>();
+      const made: CatalogItem[] = [];
+      for (const f of borrowed) {
+        const copy = await createUserFurniture(supabase, { name: f.nameKo, w: f.w, d: f.d, h: f.h });
+        if (!copy) return false;
+        copies.set(f.id, copy.id);
+        made.push(copy);
+      }
+      const mapped = remapFurniture(items, new Set(borrowed.map((f) => f.id)), copies);
+      const name = sharedCopyName(sharedLayout.ownerName);
+      const id = await saveMyLayout(supabase, roomId, null, mapped, name);
+      if (!id) return false;
+      if (made.length) setMyFurniture((prev) => [...(prev ?? []), ...made]);
+      setLayouts((prev) => [{ id, name, createdBy: 'user', aiSummary: null, isPublic: false, items: mapped }, ...prev]);
+      setViewingShared(false);
+      // 가구 id가 바뀌었을 수 있으므로 저장한 배치로 가구 층을 새로 만든다
+      layoutIdRef.current = id;
+      setLayoutId(id);
+      setLayoutNonce((n) => n + 1);
+      return true;
+    },
+    [roomId, sharedLayout],
+  );
 
   // 지금 보고 있는 배치를 저장한다 (새 배치면 "내 배치"를 만들고, 그다음부터는 같은 배치를 고친다)
   const saveLayout = useCallback(
     async (items: SavedItem[]) => {
       if (!roomId) return false;
+      if (viewingShared) return saveSharedCopy(items);
       const id = await saveMyLayout(createClient(), roomId, layoutIdRef.current, items);
       if (!id) return false;
       layoutIdRef.current = id;
@@ -697,15 +747,23 @@ export default function SplatViewer({
       setLayouts((prev) =>
         prev.some((l) => l.id === id)
           ? prev.map((l) => (l.id === id ? { ...l, items } : l))
-          : [{ id, name: MY_LAYOUT_NAME, createdBy: 'user', aiSummary: null, items }, ...prev],
+          : [{ id, name: MY_LAYOUT_NAME, createdBy: 'user', aiSummary: null, isPublic: false, items }, ...prev],
       );
       return true;
     },
-    [roomId],
+    [roomId, viewingShared, saveSharedCopy],
   );
+
+  // 내 배치를 링크로 공개하거나 닫는다
+  const setLayoutShared = useCallback(async (id: string, next: boolean) => {
+    const ok = await setLayoutPublic(createClient(), id, next);
+    if (ok) setLayouts((prev) => prev.map((l) => (l.id === id ? { ...l, isPublic: next } : l)));
+    return ok;
+  }, []);
 
   // 다른 배치를 연다 (가구 층이 저장하지 않은 것을 먼저 저장한 뒤 부른다)
   const selectLayout = useCallback((id: string | null) => {
+    setViewingShared(false);
     layoutIdRef.current = id;
     setLayoutId(id);
     setLayoutNonce((n) => n + 1);
@@ -1042,10 +1100,14 @@ export default function SplatViewer({
           aiOpeningKeys={liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.aiKeys : NO_KEYS}
           fixtures={shownFixtures}
           onDrawFixture={planDraw?.onDraw}
-          userFurniture={userFurniture}
+          userFurniture={myFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
-          initialItems={currentLayout?.items}
+          initialItems={viewingShared && sharedLayout ? sharedLayout.items : currentLayout?.items}
+          borrowedFurniture={viewingShared && sharedLayout ? sharedLayout.furniture : undefined}
+          sharedFrom={viewingShared && sharedLayout ? { ownerName: sharedLayout.ownerName, layoutName: sharedLayout.name } : null}
+          sharedMissing={sharedMissing && layoutNonce === 0}
+          share={roomId && signedIn ? { roomId, roomPublic: isPublic, onSetPublic: setLayoutShared } : undefined}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
           layouts={layouts}

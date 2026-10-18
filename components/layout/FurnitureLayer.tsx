@@ -45,6 +45,7 @@ import Icon from '@/components/ui/Icon';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
 import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
 import FloorPlan from './FloorPlan';
+import LayoutShareBox from './LayoutShareBox';
 
 type Item = PlacedItem;
 
@@ -64,7 +65,7 @@ const NO_LAYOUTS: LayoutChoice[] = [];
 const NO_KEYS: string[] = [];
 
 /** 배치를 고르는 칸에 보여줄 것 */
-export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai' };
+export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai'; isPublic?: boolean };
 const EMPTY_MINE_FORM: UserFurnitureForm = { name: '', width: '', depth: '', height: '' };
 
 type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
@@ -108,6 +109,10 @@ export default function FurnitureLayer({
   aiBlocked = null,
   aiResult = null,
   aiSummary = null,
+  borrowedFurniture = NO_FURNITURE,
+  sharedFrom = null,
+  sharedMissing = false,
+  share,
 }: {
   /** 패널과 3D 화면 위에 그려 넣을 자리 */
   slots: Slots;
@@ -155,8 +160,16 @@ export default function FurnitureLayer({
   aiResult?: AiResultView | null;
   /** 저장된 AI 배치에 붙어 있는 글 (전체 의도와 가구별 이유) */
   aiSummary?: string | null;
+  /** 남이 공유한 배치에 쓰인 그 사람의 가구 (그리기만 하고 "내 가구"에는 넣지 않는다) */
+  borrowedFurniture?: CatalogItem[];
+  /** 남이 공유한 배치를 보고 있으면 그 사람과 배치 이름. 저장하면 내 배치가 된다 */
+  sharedFrom?: { ownerName: string; layoutName: string } | null;
+  /** 공유 링크로 왔지만 그 배치를 볼 수 없을 때 (비공개로 바뀌었거나 지워졌음) */
+  sharedMissing?: boolean;
+  /** 지금 배치를 링크로 공유하기 (주면 저장된 내 배치에 "공유" 버튼이 생긴다) */
+  share?: { roomId: string; roomPublic: boolean; onSetPublic: (layoutId: string, next: boolean) => Promise<boolean> };
 }) {
-  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, userFurniture));
+  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, [...userFurniture, ...borrowedFurniture]));
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
   const [mineFormOpen, setMineFormOpen] = useState(false);
   const [mineForm, setMineForm] = useState<UserFurnitureForm>(EMPTY_MINE_FORM);
@@ -165,7 +178,8 @@ export default function FurnitureLayer({
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>(restored.items);
   // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
-  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
+  // 남이 공유한 배치는 아직 내 것이 아니므로 "저장 안 됨"으로 시작한다
+  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => (sharedFrom ? [] : toSavedItems(restored.items)));
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
   // 불러온 3D 모델 틀 (주소 → 틀, 받는 중이거나 실패했으면 null). 다 받으면 modelVersion을 올려 다시 그린다
   const [modelCache] = useState(() => new Map<string, ModelTemplate | null>());
@@ -178,6 +192,7 @@ export default function FurnitureLayer({
   const [aiMessage, setAiMessage] = useState<string | null>(null);
   const [layoutBusy, setLayoutBusy] = useState(false);
   const [confirmLayoutDelete, setConfirmLayoutDelete] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const itemsRef = useRef<Item[]>(restored.items);
   const groupRef = useRef<THREE.Group | null>(null);
   // 되돌리기·다시하기 기록 (화면에는 단계 수만 쓴다)
@@ -494,7 +509,8 @@ export default function FurnitureLayer({
   };
 
   /** 다른 배치로 바꾸기 전에, 저장하지 않은 것이 있으면 먼저 저장한다 (잃지 않게) */
-  const saveIfDirty = async (): Promise<boolean> => !dirty || !onSave || (await save());
+  // 남이 공유한 배치는 둘러보기만 했을 수 있으므로 다른 배치로 갈 때 저절로 저장하지 않는다
+  const saveIfDirty = async (): Promise<boolean> => !dirty || !onSave || Boolean(sharedFrom) || (await save());
 
   const selectLayout = async (id: string | null) => {
     if (!onSelectLayout || layoutBusy || id === currentLayoutId) return;
@@ -712,6 +728,24 @@ export default function FurnitureLayer({
               가구 배치
             </PanelTitle>
 
+            {sharedFrom && (
+              <div className="flex flex-col gap-1 rounded-xl bg-accent-soft px-3.5 py-3 text-[13px]" data-testid="shared-layout-card">
+                <span className="flex items-center gap-1.5 font-semibold text-accent-strong">
+                  <Icon name="share" size={14} />
+                  {sharedFrom.ownerName}님이 공유한 배치
+                </span>
+                <span className="text-body">
+                  &ldquo;{sharedFrom.layoutName}&rdquo; ·{' '}
+                  {onSave ? '가구를 옮겨 보고 "내 배치로 저장"하면 내 배치로 남습니다.' : '로그인하면 내 배치로 저장할 수 있습니다.'}
+                </span>
+              </div>
+            )}
+            {sharedMissing && (
+              <p className="rounded-xl bg-warn-tint px-3.5 py-2.5 text-[13px] text-warn" role="alert" data-testid="shared-layout-missing">
+                공유받은 배치를 볼 수 없습니다. 비공개로 바뀌었거나 지워졌습니다.
+              </p>
+            )}
+
             {(hasChooser || (showSave && saveState !== 'saved')) && (
               <div className="flex flex-col gap-2" data-testid={hasChooser ? 'layout-chooser' : undefined} data-current={hasChooser ? (currentLayoutId ?? '') : undefined} data-count={hasChooser ? layouts.length : undefined}>
                 <div className="flex gap-2">
@@ -727,7 +761,7 @@ export default function FurnitureLayer({
                         onChange={(e) => selectLayout(e.target.value === '' ? null : e.target.value)}
                       >
                         {/* 직접 만든 배치가 아직 없으면 새로 시작할 수 있게 빈 배치를 둔다 */}
-                        {(!hasOwnLayout || currentLayoutId === null) && <option value="">내 배치 (새로 만들기)</option>}
+                        {(!hasOwnLayout || currentLayoutId === null) && <option value="">{sharedFrom ? `${sharedFrom.ownerName}님의 배치 (공유받음)` : '내 배치 (새로 만들기)'}</option>}
                         {layouts.map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.name}
@@ -739,7 +773,20 @@ export default function FurnitureLayer({
                   )}
                   {showSave && saveState !== 'saved' && (
                     <button className="btn btn-primary h-11 px-4 text-[13px]" data-testid="layout-save" disabled={saveState === 'saving'} onClick={() => void save()}>
-                      {saveState === 'error' ? '다시 저장' : '배치 저장'}
+                      {saveState === 'error' ? '다시 저장' : sharedFrom ? '내 배치로 저장' : '배치 저장'}
+                    </button>
+                  )}
+                  {share && currentLayout && (
+                    <button
+                      className={`btn h-11 px-3 text-[13px] ${shareOpen ? 'bg-accent-soft text-accent-strong' : 'btn-soft'}`}
+                      aria-expanded={shareOpen}
+                      aria-label="배치 공유"
+                      onClick={() => setShareOpen((open) => !open)}
+                      data-testid="layout-share"
+                      data-public={currentLayout.isPublic ?? false}
+                    >
+                      <Icon name="share" size={15} />
+                      <span className="max-sm:hidden">공유</span>
                     </button>
                   )}
                   {hasChooser && onDeleteLayout && currentLayout && !confirmLayoutDelete && (
@@ -748,6 +795,17 @@ export default function FurnitureLayer({
                     </button>
                   )}
                 </div>
+                {share && currentLayout && shareOpen && (
+                  <LayoutShareBox
+                    key={currentLayout.id}
+                    roomId={share.roomId}
+                    layoutId={currentLayout.id}
+                    isPublic={currentLayout.isPublic ?? false}
+                    roomPublic={share.roomPublic}
+                    dirty={dirty}
+                    onSetPublic={(next) => share.onSetPublic(currentLayout.id, next)}
+                  />
+                )}
                 {confirmLayoutDelete && currentLayout && (
                   <div className="flex flex-wrap items-center gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[13px] text-warn" data-testid="layout-delete-confirm">
                     <span className="mr-auto">&ldquo;{currentLayout.name}&rdquo;을(를) 지울까요?</span>
