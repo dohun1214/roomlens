@@ -65,7 +65,7 @@ export default function RoomOwnerControls({
 
   return (
     <div className="flex items-center gap-2 text-[13px]" data-testid="room-owner-controls">
-      <span className="pill bg-chip py-1 text-sub" data-testid="room-visibility">
+      <span className="pill bg-chip py-1 text-sub max-sm:hidden" data-testid="room-visibility">
         <Icon name={isPublic ? 'globe' : 'lock'} size={12} />
         {isPublic ? '공개' : '비공개'}
       </span>
