@@ -132,14 +132,14 @@ function fakeClient(results: { data: unknown; error: unknown }[]) {
 const callsOf = (calls: { method: string; args: unknown[] }[], method: string) => calls.filter((c) => c.method === method).map((c) => c.args);
 
 describe('loadMyLayouts', () => {
-  const aiRow = { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], created_by: 'ai', ai_summary: '창가에 책상을 둡니다.' };
-  const myRow = { id: 'L1', name: '내 배치', items: [saved(), { bad: true }], created_by: 'user', ai_summary: '쓰지 않는 글' };
+  const aiRow = { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], created_by: 'ai', ai_summary: '창가에 책상을 둡니다.', is_public: true };
+  const myRow = { id: 'L1', name: '내 배치', items: [saved(), { bad: true }], created_by: 'user', ai_summary: '쓰지 않는 글', is_public: false };
 
   it('내 배치들을 마지막으로 고친 것부터 읽고 items를 검증한다', async () => {
     const { client, calls } = fakeClient([{ data: [aiRow, myRow], error: null }]);
     expect(await loadMyLayouts(client, 'room-1', 'user-1')).toEqual([
-      { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], createdBy: 'ai', aiSummary: '창가에 책상을 둡니다.' },
-      { id: 'L1', name: '내 배치', items: [saved()], createdBy: 'user', aiSummary: null },
+      { id: 'L2', name: 'AI 배치 10/7 04:16', items: [saved()], createdBy: 'ai', aiSummary: '창가에 책상을 둡니다.', isPublic: true },
+      { id: 'L1', name: '내 배치', items: [saved()], createdBy: 'user', aiSummary: null, isPublic: false },
     ]);
     expect(callsOf(calls, 'eq')).toEqual([
       ['room_id', 'room-1'],
@@ -154,7 +154,7 @@ describe('loadMyLayouts', () => {
   });
 
   it('모르는 created_by 값은 직접 만든 배치로 본다', () => {
-    expect(fromLayoutRow({ id: 'L3', name: '이름', items: 'not-array', created_by: 'robot', ai_summary: null })).toEqual({ id: 'L3', name: '이름', items: [], createdBy: 'user', aiSummary: null });
+    expect(fromLayoutRow({ id: 'L3', name: '이름', items: 'not-array', created_by: 'robot', ai_summary: null })).toEqual({ id: 'L3', name: '이름', items: [], createdBy: 'user', aiSummary: null, isPublic: false });
   });
 });
 
@@ -174,6 +174,12 @@ describe('saveMyLayout', () => {
     expect(await saveMyLayout(client, 'room-1', null, [saved()])).toBe('L1');
     expect(callsOf(calls, 'insert')).toEqual([[{ room_id: 'room-1', items: [saved()] }]]);
     expect(callsOf(calls, 'update')).toEqual([]);
+  });
+
+  it('이름을 주면 그 이름으로 새로 만든다 (공유받은 배치 저장)', async () => {
+    const { client, calls } = fakeClient([{ data: { id: 'L1' }, error: null }]);
+    expect(await saveMyLayout(client, 'room-1', null, [saved()], '민지님의 배치')).toBe('L1');
+    expect(callsOf(calls, 'insert')).toEqual([[{ room_id: 'room-1', items: [saved()], name: '민지님의 배치' }]]);
   });
 
   it('이미 있으면 그 배치를 고친다', async () => {
