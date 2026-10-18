@@ -6,12 +6,14 @@ import Icon from '@/components/ui/Icon';
 import { LogoMark } from '@/components/ui/Logo';
 import { loginUrlFor } from '@/lib/auth/paths';
 import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
+import RoomShareButton from '@/components/rooms/RoomShareButton';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
 import { parseReport } from '@/lib/ai/analysis';
 import { remainingToday } from '@/lib/ai/usage';
 import { loadMyLayouts } from '@/lib/layout/store';
+import { LAYOUT_PARAM, loadSharedLayout, parseLayoutParam, sharedLayoutPath } from '@/lib/layout/share';
 import { loadUserFurniture } from '@/lib/layout/userFurniture';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { parseOpenings } from '@/lib/rooms/openings';
@@ -25,8 +27,10 @@ export const metadata: Metadata = { title: '방 | RoomLens' };
  * 방 3D 투어. 로그인한 사용자의 권한(RLS)으로 읽으므로 공개 방이거나 본인 방일 때만 보인다.
  * 파일은 비공개 버킷에 있어 1시간짜리 읽기 주소를 만들어 뷰어에 넘긴다.
  */
-export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
+export default async function RoomPage({ params, searchParams }: PageProps<'/rooms/[id]'>) {
   const { id } = await params;
+  // 공유 링크로 왔으면 그 배치 (?layout=)
+  const sharedId = parseLayoutParam((await searchParams)[LAYOUT_PARAM]);
   if (!RoomId.safeParse(id).success) notFound();
 
   const user = await getCurrentUser();
@@ -61,6 +65,10 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
     user && !isOwner ? supabase.from('profiles').select('nickname').eq('id', user.id).maybeSingle() : Promise.resolve({ data: null }),
   ]);
   const report = reportRow ? parseReport(reportRow.report) : null;
+  // 공유 링크: 내 배치면 그 배치로 시작하고, 남의 배치면 볼 수 있을 때(공개 방의 공개 배치) 그 배치를 보여 준다
+  const mineShared = sharedId ? myLayouts?.find((l) => l.id === sharedId) : undefined;
+  const sharedLayout = ready && sharedId && !mineShared ? await loadSharedLayout(supabase, room.id, sharedId) : null;
+  const startLayouts = mineShared && myLayouts ? [mineShared, ...myLayouts.filter((l) => l.id !== sharedId)] : myLayouts;
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   // 모델 파일도 비공개 버킷에 있어 가구마다 읽기 주소를 만든다 (서명은 서버 안에서 계산하므로 요청이 나가지 않는다)
   const catalog = catalogRows?.length
@@ -96,6 +104,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {room.is_public && ready && <RoomShareButton roomId={room.id} />}
           {isOwner && <RoomOwnerControls roomId={room.id} initialPublic={room.is_public} canPublish={ready} />}
           {user ? (
             <Link href="/account" className="hidden items-center gap-2 text-[13px] text-sub hover:text-ink sm:flex" title="내 정보">
@@ -105,7 +114,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
               </span>
             </Link>
           ) : (
-            <Link href={loginUrlFor(`/rooms/${room.id}`)} className="btn btn-outline h-[38px] px-4 text-[13px]">
+            <Link href={loginUrlFor(sharedId ? sharedLayoutPath(room.id, sharedId) : `/rooms/${room.id}`)} className="btn btn-outline h-[38px] px-4 text-[13px]">
               로그인
             </Link>
           )}
@@ -122,7 +131,7 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             canEdit={isOwner}
             catalog={catalog}
             signedIn={Boolean(user)}
-            initialLayouts={myLayouts}
+            initialLayouts={startLayouts}
             aiRemaining={aiRemaining}
             initialReport={report && reportRow ? { id: reportRow.id, model: reportRow.model, createdAt: reportRow.created_at, report } : null}
             userFurniture={myFurniture}
@@ -132,6 +141,8 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             ownerId={room.owner_id}
             viewer={user ? { id: user.id, name: myName } : null}
             isPublic={room.is_public}
+            sharedLayout={sharedLayout}
+            sharedMissing={Boolean(sharedId) && !mineShared && !sharedLayout}
           />
         ) : (
           <div className="flex h-full items-center justify-center p-6">
