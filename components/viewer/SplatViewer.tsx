@@ -20,6 +20,7 @@ import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/l
 import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
 import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
+import CommentsPanel from './CommentsPanel';
 import { ToolRail, type Slots, type ToolId } from './workspace';
 import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
@@ -82,6 +83,12 @@ type Props = {
   initialFixtures?: Fixture[];
   /** 방의 출처·라이선스 (데이터셋 방). 3D 화면 아래에 표시한다 */
   credit?: string | null;
+  /** 방 주인 (코멘트에 표시) */
+  ownerId?: string | null;
+  /** 로그인한 사람의 아이디와 닉네임 (코멘트 쓰기) */
+  viewer?: { id: string; name: string } | null;
+  /** 방이 공개인지 (처음 연 때 기준) */
+  isPublic?: boolean;
 };
 
 const NO_OPENINGS: Opening[] = [];
@@ -104,6 +111,9 @@ export default function SplatViewer({
   initialOpenings = NO_OPENINGS,
   initialFixtures = NO_FIXTURES,
   credit = null,
+  ownerId = null,
+  viewer = null,
+  isPublic = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -757,7 +767,7 @@ export default function SplatViewer({
   if (calibrated) tools.push('furniture', 'openings', 'fixtures');
   // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
   if (ready && (!url || canEdit)) tools.push('calibration');
-  if (ready && roomId) tools.push('analysis');
+  if (ready && roomId) tools.push('analysis', 'comments');
   const wanted = tool ?? (calibration ? 'furniture' : 'calibration');
   const active = tools.includes(wanted) ? wanted : (tools[0] ?? null);
   const slots: Slots = { panel: panelEl, stage: stageEl, active };
@@ -1098,6 +1108,8 @@ export default function SplatViewer({
           onReport={() => setHasReport(true)}
         />
       )}
+      {/* 코멘트: 방을 볼 수 있으면 읽고, 로그인하면 쓴다 */}
+      {ready && roomId && <CommentsPanel slots={slots} roomId={roomId} ownerId={ownerId} viewer={viewer} isPublic={isPublic} />}
       {ready && (!url || canEdit) && (
         <CalibrationTool
           key={sceneKey}

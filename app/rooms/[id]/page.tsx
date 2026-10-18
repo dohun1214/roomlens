@@ -129,6 +129,9 @@ export default async function RoomPage({ params }: PageProps<'/rooms/[id]'>) {
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
             initialFixtures={parseFixtures(room.fixtures, calibration?.floorPolygon ?? null)}
             credit={room.credit}
+            ownerId={room.owner_id}
+            viewer={user ? { id: user.id, name: myName } : null}
+            isPublic={room.is_public}
           />
         ) : (
           <div className="flex h-full items-center justify-center p-6">

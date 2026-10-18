@@ -30,6 +30,7 @@ const PATHS = {
   redo: { box: 16, width: 1.7, d: <><path d="M10.5 3l3 3-3 3" /><path d="M13.5 6h-7a4 4 0 0 0 0 8H9" /></> },
   focus: { box: 16, width: 1.6, d: <><path d="M2 5.5V3a1 1 0 0 1 1-1h2.5M10.5 2H13a1 1 0 0 1 1 1v2.5M14 10.5V13a1 1 0 0 1-1 1h-2.5M5.5 14H3a1 1 0 0 1-1-1v-2.5" /><circle cx="8" cy="8" r="2" /></> },
   eye: { box: 16, width: 1.6, d: <><path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z" /><circle cx="8" cy="8" r="2" /></> },
+  chat: { box: 22, width: 1.8, d: <><path d="M4 4.5h14a1.5 1.5 0 0 1 1.5 1.5v8.5a1.5 1.5 0 0 1-1.5 1.5H9l-4 3.5V16H4a1.5 1.5 0 0 1-1.5-1.5V6A1.5 1.5 0 0 1 4 4.5z" /><path d="M7 9h8M7 12h5" /></> },
   image: { box: 18, width: 1.6, d: <><rect x="2.5" y="3.5" width="13" height="11" rx="1.6" /><circle cx="6.5" cy="7.5" r="1.2" /><path d="M3 13l4-3.5 3 2.5 2.5-2 3 3" /></> },
 } satisfies Record<string, { box: number; width: number; d: ReactNode }>;
 
