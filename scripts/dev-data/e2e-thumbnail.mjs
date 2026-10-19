@@ -102,6 +102,7 @@ try {
     key = await thumbKey(roomId);
   }
   check('주인이 처음 열면 몇 초 안에 대표 사진이 저절로 생김', key && /^rooms\/.+\/thumbnail-\d+\.jpg$/.test(key) && (await listThumbs(roomId)).length === 1, key);
+  await owner.waitForFunction(() => document.querySelector('[data-testid=thumbnail-capture]')?.getAttribute('data-has') === 'true', null, { timeout: 10000 }).catch(() => undefined);
   check('"대표 사진" 버튼이 있고 사진이 있다고 표시', (await owner.getByTestId('thumbnail-capture').getAttribute('data-has')) === 'true', null);
 
   // 2) 홈의 내 방 카드에 사진, 크기 960×600
