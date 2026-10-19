@@ -82,6 +82,11 @@ export async function readObjectHead(key: string, bytes: number): Promise<Uint8A
   }
 }
 
+/** 서버에서 바로 올린다 (대표 사진처럼 작은 파일) */
+export async function putObject(key: string, body: Uint8Array, contentType: string): Promise<void> {
+  await r2().send(new PutObjectCommand({ Bucket: bucket(), Key: key, Body: body, ContentType: contentType }));
+}
+
 export async function deleteObject(key: string): Promise<void> {
   await r2().send(new DeleteObjectCommand({ Bucket: bucket(), Key: key }));
 }
