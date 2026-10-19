@@ -15,6 +15,12 @@ export const ROOM_CREDIT_MAX = 300;
 export const ROOM_SOURCES = ['scaniverse', 'dataset'] as const;
 export type RoomSource = (typeof ROOM_SOURCES)[number];
 
+/** 방 이름·설명 고치기 (방 주인이 방 화면에서) */
+export const RoomInfoInput = z.object({
+  title: z.string().trim().min(1, '방 이름을 입력해 주세요.').max(ROOM_TITLE_MAX, `방 이름은 ${ROOM_TITLE_MAX}자까지입니다.`),
+  description: z.string().trim().max(ROOM_DESCRIPTION_MAX, `설명은 ${ROOM_DESCRIPTION_MAX}자까지입니다.`),
+});
+
 export const CreateRoomInput = z
   .object({
   title: z.string().trim().min(1, '방 이름을 입력해 주세요.').max(ROOM_TITLE_MAX, `방 이름은 ${ROOM_TITLE_MAX}자까지입니다.`),

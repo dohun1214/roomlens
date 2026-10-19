@@ -19,7 +19,11 @@ const plexMono = IBM_Plex_Mono({
   display: "swap",
 });
 
+// 미리보기 그림 같은 상대 주소를 완전한 주소로 바꿀 기준 (Vercel은 운영 주소를 환경변수로 준다)
+const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}` : "http://localhost:3000";
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: "RoomLens",
   description: "자취방 3D 복원과 가구 배치 시뮬레이션",
 };
