@@ -342,6 +342,7 @@ export type Database = {
           splat_format: string | null;
           splat_key: string | null;
           status: string;
+          thumbnail_key: string | null;
           title: string;
           transform: Json | null;
           updated_at: string;
@@ -362,6 +363,7 @@ export type Database = {
           splat_format?: string | null;
           splat_key?: string | null;
           status?: string;
+          thumbnail_key?: string | null;
           title: string;
           transform?: Json | null;
           updated_at?: string;
@@ -382,6 +384,7 @@ export type Database = {
           splat_format?: string | null;
           splat_key?: string | null;
           status?: string;
+          thumbnail_key?: string | null;
           title?: string;
           transform?: Json | null;
           updated_at?: string;

@@ -113,6 +113,7 @@ export default function FurnitureLayer({
   sharedFrom = null,
   sharedMissing = false,
   share,
+  onUnsavedChange,
 }: {
   /** 패널과 3D 화면 위에 그려 넣을 자리 */
   slots: Slots;
@@ -168,6 +169,8 @@ export default function FurnitureLayer({
   sharedMissing?: boolean;
   /** 지금 배치를 링크로 공유하기 (주면 저장된 내 배치에 "공유" 버튼이 생긴다) */
   share?: { roomId: string; roomPublic: boolean; onSetPublic: (layoutId: string, next: boolean) => Promise<boolean> };
+  /** 저장할 수 있는데 저장하지 않은 배치가 있는지 알려 준다 (나갈 때 묻기). 공유받은 배치를 둘러보는 것은 빼고 */
+  onUnsavedChange?: (unsaved: boolean) => void;
 }) {
   const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, [...userFurniture, ...borrowedFurniture]));
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
@@ -246,6 +249,12 @@ export default function FurnitureLayer({
   const hasDoor = openings.some((o) => o.type === 'door');
   const currentSaved = useMemo(() => toSavedItems(items), [items]);
   const dirty = !sameSavedItems(currentSaved, savedItems);
+  const unsaved = dirty && Boolean(onSave) && !sharedFrom;
+  useEffect(() => {
+    onUnsavedChange?.(unsaved);
+  }, [unsaved, onUnsavedChange]);
+  // 가구 층이 바뀌거나 사라지면(다른 배치로 바꿈) 알림을 거둔다
+  useEffect(() => () => onUnsavedChange?.(false), [onUnsavedChange]);
   const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
   const full = items.length >= MAX_LAYOUT_ITEMS;
   const credits = useMemo(() => modelCredits(catalog), [catalog]);

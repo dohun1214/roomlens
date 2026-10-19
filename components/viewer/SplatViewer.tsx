@@ -27,6 +27,9 @@ import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
 import { LOOK_ROTATE_SPEED, lookTarget, panDelta, pinchDistance, wheelDistance } from '@/lib/three/viewMove';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { captureThumbnail } from '@/lib/three/capture';
+import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH } from '@/lib/rooms/thumbnail';
+import { uploadThumbnail } from '@/lib/rooms/thumbnailClient';
 import { sampleScenePoints } from '@/lib/three/scenePoints';
 import { autoCalibrate } from '@/lib/three/autoCalibrate';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
@@ -94,6 +97,8 @@ type Props = {
   sharedLayout?: SharedLayout | null;
   /** 공유 링크로 왔지만 그 배치를 볼 수 없을 때 */
   sharedMissing?: boolean;
+  /** 방 대표 사진 주소 (없으면 방 주인이 처음 열 때 지금 화면으로 만든다) */
+  thumbnail?: string | null;
 };
 
 const NO_OPENINGS: Opening[] = [];
@@ -121,6 +126,7 @@ export default function SplatViewer({
   isPublic = false,
   sharedLayout = null,
   sharedMissing = false,
+  thumbnail = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -162,6 +168,13 @@ export default function SplatViewer({
   const [showPlan, setShowPlan] = useState(false);
   // "AI로 방 준비하기" 진행 (보정 저장 → 문·창문 찾기 → 원래 가구 찾기 → 확인)
   const [prep, setPrep] = useState<RoomPrep | null>(null);
+  // 방 대표 사진: 지금 주소, 찍는 중인지, 알림
+  const [thumbSrc, setThumbSrc] = useState<string | null>(thumbnail);
+  const [thumbBusy, setThumbBusy] = useState(false);
+  const [thumbMessage, setThumbMessage] = useState<{ text: string; tone: 'ok' | 'warn' } | null>(null);
+  const thumbAutoRef = useRef(false);
+  // 가구 배치에 저장하지 않은 것이 있는지 (가구 층이 알려 준다)
+  const [furnitureUnsaved, setFurnitureUnsaved] = useState(false);
   // 방 준비의 확인 단계에서 아직 저장하지 않은 단계가 있는지 (저장 콜백에서 최신 값을 읽으려고)
   const prepOpeningsPendingRef = useRef(false);
   const prepFixturesPendingRef = useRef(false);
@@ -805,8 +818,48 @@ export default function SplatViewer({
   // 저장하지 않은 보정 위에서는 추천할 수 없다 (서버는 저장된 평면도로 계산한다)
   const aiBlocked = roomPolygonKey !== savedPolygonKey ? '보정을 저장한 뒤에 AI 추천을 쓸 수 있습니다.' : null;
 
+  // 지금 화면을 방 대표 사진으로 찍어 올린다 (방 주인). quiet면 실패해도 알리지 않는다 (처음 열 때 저절로 찍을 때)
+  const takeThumbnail = useCallback(
+    async (quiet: boolean) => {
+      const engine = engineRef.current;
+      if (!engine || !roomId) return;
+      setThumbBusy(true);
+      if (!quiet) setThumbMessage(null);
+      try {
+        const image = await captureThumbnail(engine, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT });
+        const result = image ? await uploadThumbnail(roomId, image) : { ok: false as const, message: '3D가 다 보인 뒤에 다시 해 주세요.' };
+        if (result.ok) {
+          setThumbSrc(result.src);
+          if (!quiet) setThumbMessage({ text: '지금 화면을 방 대표 사진으로 정했습니다.', tone: 'ok' });
+        } else if (!quiet) {
+          setThumbMessage({ text: result.message, tone: 'warn' });
+        }
+      } catch (err) {
+        console.error(err);
+        if (!quiet) setThumbMessage({ text: '대표 사진을 찍지 못했습니다.', tone: 'warn' });
+      } finally {
+        setThumbBusy(false);
+      }
+    },
+    [roomId],
+  );
+  useEffect(() => {
+    if (!thumbMessage) return;
+    const timer = window.setTimeout(() => setThumbMessage(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [thumbMessage]);
+
   // 지금 쓸 수 있는 도구와 고른 도구
   const ready = stats.status === 'ready';
+  // 대표 사진이 없는 방은 방 주인이 처음 열었을 때 첫 화면으로 만든다 (3D가 다 그려지기를 조금 기다린다)
+  useEffect(() => {
+    if (!ready || !url || !roomId || !canEdit || thumbSrc || thumbAutoRef.current || prep) return;
+    const timer = window.setTimeout(() => {
+      thumbAutoRef.current = true;
+      void takeThumbnail(true);
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [ready, url, roomId, canEdit, thumbSrc, prep, takeThumbnail]);
   const calibrated = ready && room?.key === sceneKey;
   useEffect(() => {
     // 보정된 방은 m 단위이므로 걷는 빠르기가 정해져 있다
@@ -832,6 +885,17 @@ export default function SplatViewer({
   const calibrationUnsaved = Boolean(roomId) && calibrated && roomPolygonKey !== savedPolygonKey;
   const openingsUnsaved = Boolean(roomId) && canEdit && liveOpenings !== null && liveOpenings.key === roomPolygonKey && !sameOpenings(liveOpenings.items, savedOpenings);
   const fixturesUnsaved = Boolean(roomId) && canEdit && liveFixtures !== null && liveFixtures.key === roomPolygonKey && !sameFixtures(liveFixtures.items, savedFixtures);
+  // 저장하지 않은 것이 있으면 창을 닫거나 다른 주소로 갈 때 브라우저가 한 번 묻는다
+  const anyUnsaved = Boolean(url) && (furnitureUnsaved || calibrationUnsaved || openingsUnsaved || fixturesUnsaved);
+  useEffect(() => {
+    if (!anyUnsaved) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyUnsaved]);
   useEffect(() => {
     prepOpeningsPendingRef.current = openingsUnsaved;
     prepFixturesPendingRef.current = fixturesUnsaved;
@@ -904,48 +968,75 @@ export default function SplatViewer({
         {/* 도구들이 3D 위에 띄우는 것 (평면도, 보기 전환, 고른 가구의 띠) */}
         <div ref={setStageEl} className="pointer-events-none absolute inset-0 *:pointer-events-auto" />
 
-        {/* 3D에 보이는 표시(문·창문 판, 원래 가구 상자) 켜고 끄기 */}
-        {ready && calibrated && !showPlan && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
-          <div ref={markersRef} className="absolute top-3 right-3 flex flex-col items-end gap-2" data-testid="markers">
+        {/* 3D 오른쪽 위: 대표 사진 찍기(방 주인), 표시(문·창문 판, 원래 가구 상자) 켜고 끄기 */}
+        <div className="absolute top-3 right-3 flex items-start gap-2">
+          {ready && url && roomId && canEdit && !showPlan && (
             <button
               type="button"
-              className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft"
-              aria-expanded={markersOpen}
-              onClick={() => setMarkersOpen((v) => !v)}
-              data-testid="markers-toggle"
+              className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft disabled:opacity-60"
+              disabled={thumbBusy}
+              onClick={() => void takeThumbnail(false)}
+              title="지금 보이는 화면을 홈의 방 카드와 공유 미리보기에 씁니다"
+              aria-label="지금 화면을 대표 사진으로"
+              data-testid="thumbnail-capture"
+              data-has={Boolean(thumbSrc)}
             >
-              <Icon name="eye" />
-              표시
+              <Icon name="image" />
+              <span className="max-sm:hidden">{thumbBusy ? '찍는 중…' : '대표 사진'}</span>
             </button>
-            {markersOpen && (
-              <div className="flex w-56 flex-col gap-1 rounded-xl bg-surface p-2 text-[13px] shadow-float" data-testid="markers-menu">
-                {(
-                  [
-                    ['openings', '문·창문', shownOpenings.length],
-                    ['fixtures', '원래 가구 상자', shownFixtures.length],
-                  ] as const
-                ).map(([key, label, count]) =>
-                  count > 0 ? (
-                    <button
-                      key={key}
-                      type="button"
-                      role="switch"
-                      aria-checked={markers[key]}
-                      className="flex h-10 items-center justify-between gap-2 rounded-[10px] px-2.5 hover:bg-soft"
-                      onClick={() => changeMarkers({ ...markers, [key]: !markers[key] })}
-                      data-testid={`show-${key}`}
-                    >
-                      <span>
-                        {label} <span className="font-mono text-mute">{count}</span>
-                      </span>
-                      <span className={`rounded-full px-2 py-px text-[11px] font-semibold ${markers[key] ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{markers[key] ? '보임' : '숨김'}</span>
-                    </button>
-                  ) : null,
-                )}
-                <p className="px-2.5 pt-1 pb-1.5 text-xs text-sub">숨겨도 그 도구를 쓰는 동안에는 보이고, 평면도와 배치 검사에는 그대로 쓰입니다.</p>
-              </div>
-            )}
-          </div>
+          )}
+          {ready && calibrated && !showPlan && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
+            <div ref={markersRef} className="flex flex-col items-end gap-2" data-testid="markers">
+              <button
+                type="button"
+                className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft"
+                aria-expanded={markersOpen}
+                aria-label="표시"
+                onClick={() => setMarkersOpen((v) => !v)}
+                data-testid="markers-toggle"
+              >
+                <Icon name="eye" />
+                <span className="max-sm:hidden">표시</span>
+              </button>
+              {markersOpen && (
+                <div className="flex w-56 flex-col gap-1 rounded-xl bg-surface p-2 text-[13px] shadow-float" data-testid="markers-menu">
+                  {(
+                    [
+                      ['openings', '문·창문', shownOpenings.length],
+                      ['fixtures', '원래 가구 상자', shownFixtures.length],
+                    ] as const
+                  ).map(([key, label, count]) =>
+                    count > 0 ? (
+                      <button
+                        key={key}
+                        type="button"
+                        role="switch"
+                        aria-checked={markers[key]}
+                        className="flex h-10 items-center justify-between gap-2 rounded-[10px] px-2.5 hover:bg-soft"
+                        onClick={() => changeMarkers({ ...markers, [key]: !markers[key] })}
+                        data-testid={`show-${key}`}
+                      >
+                        <span>
+                          {label} <span className="font-mono text-mute">{count}</span>
+                        </span>
+                        <span className={`rounded-full px-2 py-px text-[11px] font-semibold ${markers[key] ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{markers[key] ? '보임' : '숨김'}</span>
+                      </button>
+                    ) : null,
+                  )}
+                  <p className="px-2.5 pt-1 pb-1.5 text-xs text-sub">숨겨도 그 도구를 쓰는 동안에는 보이고, 평면도와 배치 검사에는 그대로 쓰입니다.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {thumbMessage && (
+          <p
+            className={`absolute top-16 right-3 max-w-[min(20rem,calc(100%-1.5rem))] rounded-xl px-3.5 py-2.5 text-[13px] shadow-float ${thumbMessage.tone === 'ok' ? 'bg-surface text-ok' : 'bg-warn-tint text-warn'}`}
+            role="status"
+            data-testid="thumbnail-message"
+          >
+            {thumbMessage.text}
+          </p>
         )}
 
         {/* 개발용 뷰어(/viewer): 파일 열기. 방 화면에서는 주소에 ?debug 를 붙였을 때만 수치를 보여준다 */}
@@ -1107,6 +1198,7 @@ export default function SplatViewer({
           borrowedFurniture={viewingShared && sharedLayout ? sharedLayout.furniture : undefined}
           sharedFrom={viewingShared && sharedLayout ? { ownerName: sharedLayout.ownerName, layoutName: sharedLayout.name } : null}
           sharedMissing={sharedMissing && layoutNonce === 0}
+          onUnsavedChange={setFurnitureUnsaved}
           share={roomId && signedIn ? { roomId, roomPublic: isPublic, onSetPublic: setLayoutShared } : undefined}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}

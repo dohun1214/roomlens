@@ -7,7 +7,7 @@ import { countByRoom, PUBLIC_ROOMS_LIMIT, toRoomCards, type RoomListRow } from '
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 import heroImage from '@/public/samples/studio11-living.jpg';
 
-const COLUMNS = 'id, owner_id, title, description, is_public, status, source, created_at, transform, floor_polygon, openings';
+const COLUMNS = 'id, owner_id, title, description, is_public, status, source, created_at, transform, floor_polygon, openings, thumbnail_key';
 
 const STEPS: { icon: IconName; tile: string; title: string; text: string }[] = [
   { icon: 'upload', tile: 'bg-[#e3ecfc] text-[#3d63bf]', title: '방 올리기', text: 'Scaniverse 같은 앱으로 찍은 3D 파일(.spz, .ply)을 올립니다.' },

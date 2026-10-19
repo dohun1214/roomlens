@@ -16,8 +16,19 @@ export default function RoomList({ rooms, testId }: { rooms: RoomCardData[]; tes
             data-testid="room-card"
             data-room-id={room.id}
           >
-            <div className="relative flex aspect-[16/10] items-center justify-center bg-soft">
-              {room.outline ? (
+            <div className="relative flex aspect-[16/10] items-center justify-center overflow-hidden bg-soft">
+              {room.thumbnail ? (
+                <>
+                  {/* 대표 사진은 서명한 R2 주소로 넘겨주는 경로라 next/image의 최적화를 쓰지 않는다 */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={room.thumbnail} alt="" loading="lazy" decoding="async" className="absolute inset-0 h-full w-full object-cover" data-testid="room-thumbnail" />
+                  {room.outline && (
+                    <span className="absolute right-3 bottom-3 flex h-[30%] w-[24%] items-center justify-center rounded-xl bg-surface/95 p-1.5 shadow-float">
+                      <MiniPlan outline={room.outline} className="h-full w-full" />
+                    </span>
+                  )}
+                </>
+              ) : room.outline ? (
                 <MiniPlan outline={room.outline} className="absolute inset-5 h-[calc(100%-2.5rem)] w-[calc(100%-2.5rem)]" />
               ) : (
                 <span className="opacity-30">

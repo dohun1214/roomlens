@@ -7,6 +7,7 @@ import { LogoMark } from '@/components/ui/Logo';
 import { loginUrlFor } from '@/lib/auth/paths';
 import RoomOwnerControls from '@/components/rooms/RoomOwnerControls';
 import RoomShareButton from '@/components/rooms/RoomShareButton';
+import RoomInfoEditor from '@/components/rooms/RoomInfoEditor';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
 import { fromCatalogRow } from '@/lib/layout/catalog';
@@ -19,9 +20,31 @@ import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { parseOpenings } from '@/lib/rooms/openings';
 import { parseFixtures } from '@/lib/rooms/fixtures';
 import { RoomId } from '@/lib/rooms/schemas';
+import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, thumbnailSrc } from '@/lib/rooms/thumbnail';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
-export const metadata: Metadata = { title: '방 | RoomLens' };
+/** 공유 링크 미리보기: 방 이름·설명과 대표 사진. 볼 수 없는 방은 이름을 드러내지 않는다 */
+export async function generateMetadata({ params }: PageProps<'/rooms/[id]'>): Promise<Metadata> {
+  const { id } = await params;
+  if (!RoomId.safeParse(id).success) return { title: '방 | RoomLens' };
+  const supabase = await createClient();
+  const { data: room } = await supabase.from('rooms').select('id, title, description, thumbnail_key').eq('id', id).maybeSingle();
+  if (!room) return { title: '방 | RoomLens' };
+  const description = room.description || '3D로 둘러보고 실제 치수의 가구를 놓아 보는 방';
+  const image = thumbnailSrc(room.id, room.thumbnail_key);
+  return {
+    title: `${room.title} | RoomLens`,
+    description,
+    openGraph: {
+      title: room.title,
+      description,
+      siteName: 'RoomLens',
+      type: 'website',
+      ...(image ? { images: [{ url: image, width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT, alt: room.title }] } : {}),
+    },
+    twitter: { card: image ? 'summary_large_image' : 'summary', title: room.title, description },
+  };
+}
 
 /**
  * 방 3D 투어. 로그인한 사용자의 권한(RLS)으로 읽으므로 공개 방이거나 본인 방일 때만 보인다.
@@ -37,7 +60,7 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
   const supabase = await createClient();
   const { data: room } = await supabase
     .from('rooms')
-    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon, openings, fixtures')
+    .select('id, owner_id, title, description, is_public, status, splat_key, source, credit, transform, floor_polygon, openings, fixtures, thumbnail_key')
     .eq('id', id)
     .maybeSingle();
   if (!room) notFound();
@@ -101,6 +124,7 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
                 {room.description ? ` · ${room.description}` : ''}
               </p>
             </div>
+            {isOwner && <RoomInfoEditor roomId={room.id} title={room.title} description={room.description} />}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -143,6 +167,7 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
             isPublic={room.is_public}
             sharedLayout={sharedLayout}
             sharedMissing={Boolean(sharedId) && !mineShared && !sharedLayout}
+            thumbnail={thumbnailSrc(room.id, room.thumbnail_key)}
           />
         ) : (
           <div className="flex h-full items-center justify-center p-6">

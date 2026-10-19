@@ -1,6 +1,7 @@
 // 방 목록(홈)에서 쓰는 표시용 함수. DB 행을 화면에 보여줄 모양으로 바꾼다.
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
 import { openingSegment, parseOpenings, type OpeningType } from '@/lib/rooms/openings';
+import { thumbnailSrc } from '@/lib/rooms/thumbnail';
 
 type Point2 = [number, number];
 
@@ -17,6 +18,8 @@ export type RoomListRow = {
   transform?: unknown;
   floor_polygon?: unknown;
   openings?: unknown;
+  /** 대표 사진의 R2 키 (없으면 평면도를 그린다) */
+  thumbnail_key?: string | null;
 };
 
 /** 카드에 그리는 작은 평면도: 방의 바닥 모양과 문·창문 자리 (방 좌표, m) */
@@ -51,6 +54,8 @@ export type RoomCardData = {
   badges: string[];
   /** 보정한 방이면 바닥 모양. 아니면 null */
   outline: RoomOutline | null;
+  /** 대표 사진 주소 (/rooms/{id}/thumbnail?v=…). 없으면 null */
+  thumbnail: string | null;
   /** 내 방 목록에서만 채운다 */
   stats: RoomStats | null;
 };
@@ -100,6 +105,7 @@ export function toRoomCards(rows: RoomListRow[], nicknames: Map<string, string>,
       createdLabel: formatRoomDate(room.created_at),
       badges: roomBadges(room, mine),
       outline,
+      thumbnail: thumbnailSrc(room.id, room.thumbnail_key),
       stats:
         mine && room.status === 'ready'
           ? {
