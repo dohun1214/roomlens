@@ -119,3 +119,15 @@ describe('countByRoom', () => {
   });
 });
 
+
+describe('toRoomCards: 대표 사진', () => {
+  it('키가 있으면 사진 주소, 없으면 null', () => {
+    const [withThumb, without] = toRoomCards(
+      [row({ id: 'a', thumbnail_key: 'rooms/a/thumbnail-1760000000000.jpg' }), row({ id: 'b' })],
+      new Map(),
+      false,
+    );
+    expect(withThumb.thumbnail).toBe('/rooms/a/thumbnail?v=1760000000000');
+    expect(without.thumbnail).toBeNull();
+  });
+});
