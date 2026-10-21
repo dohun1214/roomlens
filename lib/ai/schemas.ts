@@ -71,5 +71,7 @@ export const RoomReport = z.object({
     }),
   ),
   summary: z.string().describe('한국어 3문장 이내'),
+  // 10/21 추가: 예전 리포트에는 없으므로 읽을 때는 빈 목록으로 채운다
+  layoutTips: z.array(z.string()).default([]).describe('가구 배치 조언 2~4개, 각 40자 이내. "무엇을 어디에" 형태'),
 });
 export type RoomReport = z.infer<typeof RoomReport>;

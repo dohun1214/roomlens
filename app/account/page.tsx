@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
+import DeleteAccount from '@/components/auth/DeleteAccount';
 import NicknameForm from '@/components/auth/NicknameForm';
 import { loginUrlFor } from '@/lib/auth/paths';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
@@ -11,11 +12,10 @@ export default async function AccountPage() {
   if (!user) redirect(loginUrlFor('/account')); // proxy.ts 가 먼저 막지만 한 번 더 확인
 
   const supabase = await createClient();
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('nickname, is_adult_confirmed, created_at')
-    .eq('id', user.id)
-    .maybeSingle();
+  const [{ data: profile }, { count: roomCount }] = await Promise.all([
+    supabase.from('profiles').select('nickname, is_adult_confirmed, created_at').eq('id', user.id).maybeSingle(),
+    supabase.from('rooms').select('id', { count: 'exact', head: true }).eq('owner_id', user.id),
+  ]);
 
   return (
     <main className="mx-auto flex w-full max-w-[560px] flex-1 flex-col gap-6 px-4 pt-6 pb-16 sm:px-6">
@@ -37,6 +37,7 @@ export default async function AccountPage() {
           <NicknameForm userId={user.id} initial={profile?.nickname ?? ''} />
         </div>
       </section>
+      <DeleteAccount roomCount={roomCount ?? 0} />
     </main>
   );
 }

@@ -33,7 +33,8 @@ import { uploadThumbnail } from '@/lib/rooms/thumbnailClient';
 import { sampleScenePoints } from '@/lib/three/scenePoints';
 import { autoCalibrate } from '@/lib/three/autoCalibrate';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
-import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
+import { startPoseForRoom, type SavedCalibration } from '@/lib/rooms/calibration';
+import { saveRoomCalibration } from '@/lib/rooms/calibrationClient';
 import { sameOpenings, type Opening } from '@/lib/rooms/openings';
 import { sameFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { createClient } from '@/lib/supabase/client';
@@ -172,7 +173,10 @@ export default function SplatViewer({
   const [thumbSrc, setThumbSrc] = useState<string | null>(thumbnail);
   const [thumbBusy, setThumbBusy] = useState(false);
   const [thumbMessage, setThumbMessage] = useState<{ text: string; tone: 'ok' | 'warn' } | null>(null);
-  const thumbAutoRef = useRef(false);
+  // 처음 열 때 저절로 찍어 본 횟수 (아직 덜 그려져 빈 그림이면 조금 뒤에 다시)
+  const [thumbAutoTries, setThumbAutoTries] = useState(0);
+  // 방 분석 리포트의 조언으로 연 AI 배치 추천 (가구 층이 요청 칸에 넣는다)
+  const [aiPrefill, setAiPrefill] = useState<{ text: string; nonce: number } | null>(null);
   // 가구 배치에 저장하지 않은 것이 있는지 (가구 층이 알려 준다)
   const [furnitureUnsaved, setFurnitureUnsaved] = useState(false);
   // 방 준비의 확인 단계에서 아직 저장하지 않은 단계가 있는지 (저장 콜백에서 최신 값을 읽으려고)
@@ -615,23 +619,21 @@ export default function SplatViewer({
   const saveCalibration = useCallback(
     async (applied: AppliedCalibration) => {
       if (!roomId) return false;
-      // 평면도가 바뀌면 벽 번호와 방 좌표가 달라지므로 문·창문과 원래 가구도 함께 비운다
+      // 서버가 저장하면서 예전 방 좌표의 문·창문·원래 가구·배치를 새 방 좌표로 옮겨 준다
+      const result = await saveRoomCalibration(roomId, { ...applied, flipX: flippedRef.current });
+      if (!result) return false;
       const key = JSON.stringify(applied.floorPolygon);
-      const wallsChanged = key !== savedPolygonKeyRef.current;
-      const { data, error } = await createClient()
-        .from('rooms')
-        .update({ ...toCalibrationColumns({ ...applied, flipX: flippedRef.current }), ...(wallsChanged ? { openings: [], fixtures: [] } : {}) })
-        .eq('id', roomId)
-        .select('id')
-        .maybeSingle();
-      if (error || data === null) return false;
       savedPolygonKeyRef.current = key;
       setSavedPolygonKey(key);
-      if (wallsChanged) {
-        setOpenings({ key, items: [] });
-        setLiveOpenings(null);
-        setFixtures({ key, items: [] });
-        setLiveFixtures(null);
+      setOpenings({ key, items: result.openings });
+      setLiveOpenings(null);
+      setFixtures({ key, items: result.fixtures });
+      setLiveFixtures(null);
+      if (result.layouts.length) {
+        const moved = new Map(result.layouts.map((l) => [l.id, l.items]));
+        setLayouts((prev) => prev.map((l) => (moved.has(l.id) ? { ...l, items: moved.get(l.id)! } : l)));
+        // 옮긴 배치로 가구 층을 새로 만든다
+        setLayoutNonce((n) => n + 1);
       }
       return true;
     },
@@ -820,9 +822,9 @@ export default function SplatViewer({
 
   // 지금 화면을 방 대표 사진으로 찍어 올린다 (방 주인). quiet면 실패해도 알리지 않는다 (처음 열 때 저절로 찍을 때)
   const takeThumbnail = useCallback(
-    async (quiet: boolean) => {
+    async (quiet: boolean): Promise<boolean> => {
       const engine = engineRef.current;
-      if (!engine || !roomId) return;
+      if (!engine || !roomId) return false;
       setThumbBusy(true);
       if (!quiet) setThumbMessage(null);
       try {
@@ -831,12 +833,14 @@ export default function SplatViewer({
         if (result.ok) {
           setThumbSrc(result.src);
           if (!quiet) setThumbMessage({ text: '지금 화면을 방 대표 사진으로 정했습니다.', tone: 'ok' });
-        } else if (!quiet) {
-          setThumbMessage({ text: result.message, tone: 'warn' });
+          return true;
         }
+        if (!quiet) setThumbMessage({ text: result.message, tone: 'warn' });
+        return false;
       } catch (err) {
         console.error(err);
         if (!quiet) setThumbMessage({ text: '대표 사진을 찍지 못했습니다.', tone: 'warn' });
+        return false;
       } finally {
         setThumbBusy(false);
       }
@@ -853,13 +857,14 @@ export default function SplatViewer({
   const ready = stats.status === 'ready';
   // 대표 사진이 없는 방은 방 주인이 처음 열었을 때 첫 화면으로 만든다 (3D가 다 그려지기를 조금 기다린다)
   useEffect(() => {
-    if (!ready || !url || !roomId || !canEdit || thumbSrc || thumbAutoRef.current || prep) return;
+    if (!ready || !url || !roomId || !canEdit || thumbSrc || thumbAutoTries >= 3 || prep) return;
     const timer = window.setTimeout(() => {
-      thumbAutoRef.current = true;
-      void takeThumbnail(true);
+      void takeThumbnail(true).then((ok) => {
+        if (!ok) setThumbAutoTries((n) => n + 1);
+      });
     }, 3000);
     return () => window.clearTimeout(timer);
-  }, [ready, url, roomId, canEdit, thumbSrc, prep, takeThumbnail]);
+  }, [ready, url, roomId, canEdit, thumbSrc, thumbAutoTries, prep, takeThumbnail]);
   const calibrated = ready && room?.key === sceneKey;
   useEffect(() => {
     // 보정된 방은 m 단위이므로 걷는 빠르기가 정해져 있다
@@ -1199,6 +1204,7 @@ export default function SplatViewer({
           sharedFrom={viewingShared && sharedLayout ? { ownerName: sharedLayout.ownerName, layoutName: sharedLayout.name } : null}
           sharedMissing={sharedMissing && layoutNonce === 0}
           onUnsavedChange={setFurnitureUnsaved}
+          aiPrefill={aiPrefill}
           share={roomId && signedIn ? { roomId, roomPublic: isPublic, onSetPublic: setLayoutShared } : undefined}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
@@ -1260,6 +1266,15 @@ export default function SplatViewer({
           aiRemaining={aiRemaining}
           onRemaining={setAiRemaining}
           onReport={() => setHasReport(true)}
+          onSuggest={
+            calibrated && signedIn
+              ? (text) => {
+                  setShowPlan(false);
+                  setTool('furniture');
+                  setAiPrefill((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
+                }
+              : undefined
+          }
         />
       )}
       {/* 코멘트: 방을 볼 수 있으면 읽고, 로그인하면 쓴다 */}

@@ -25,6 +25,7 @@ export default function AnalysisPanel({
   aiRemaining,
   onRemaining,
   onReport,
+  onSuggest,
 }: {
   /** 패널을 그려 넣을 자리 */
   slots: Slots;
@@ -40,6 +41,8 @@ export default function AnalysisPanel({
   onRemaining: (remaining: number) => void;
   /** 새 리포트가 생겼음을 알린다 (도구 줄에 표시하려고) */
   onReport?: () => void;
+  /** 리포트의 배치 조언으로 AI 배치 추천을 연다 (가구 도구를 쓸 수 있을 때) */
+  onSuggest?: (request: string) => void;
 }) {
   const [report, setReport] = useState<SavedReport | null>(initialReport);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
@@ -128,7 +131,7 @@ export default function AnalysisPanel({
           <AiBadge />방 분석
         </PanelTitle>
         {report ? (
-          <RoomReportView saved={report} />
+          <RoomReportView saved={report} onSuggest={onSuggest} />
         ) : (
           <p className="rounded-xl bg-ground p-4 text-[13px] text-body" data-testid="analysis-empty">
             아직 분석한 적이 없습니다.{canAnalyze ? ' 아래 버튼을 누르면 AI가 방의 옵션·수납·채광·상태를 살펴봅니다.' : ' 방 주인이 분석하면 여기에 보입니다.'}

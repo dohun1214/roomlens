@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { distanceToPolygon, interiorPoint, pointInPolygon } from '@/lib/layout/geometry';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { RoomReport } from './schemas';
+import { MAX_REQUEST_LENGTH } from './roomSummary';
 
 /** 한 번에 보낼 수 있는 그림 수 (3D 화면 캡처 + 사진) */
 export const MAX_ANALYSIS_IMAGES = 10;
@@ -61,7 +62,31 @@ export function tidyReport(report: RoomReport, imageCount: number): RoomReport {
       description: clip(issue.description, 300),
     })),
     summary: clip(report.summary, 500),
+    layoutTips: [...new Set((report.layoutTips ?? []).map((tip) => clip(tip, 80)).filter(Boolean))].slice(0, 4),
   };
+}
+
+/**
+ * 리포트를 AI 배치 추천의 요청 글로 바꾼다 (배치 추천의 요청 글 한도 안으로).
+ * 배치 조언이 있으면 그것을, 없으면(예전 리포트) 채광·수납으로 만든다.
+ */
+export function requestFromReport(report: RoomReport, maxLength = MAX_REQUEST_LENGTH): string {
+  const tips = report.layoutTips ?? [];
+  const parts =
+    tips.length > 0
+      ? tips
+      : [
+          report.naturalLight.level === 'high' ? '책상은 밝은 창가 쪽에' : report.naturalLight.level === 'low' ? '창 앞은 비워 빛을 막지 않게' : null,
+          report.storage.level === 'low' ? '수납이 적으니 수납 가구를 벽에 붙여서' : null,
+          '문 앞과 통로는 넓게',
+        ].filter((v): v is string => v !== null);
+  let text = '';
+  for (const part of parts) {
+    const next = text ? `${text}, ${part}` : part;
+    if (next.length > maxLength) break;
+    text = next;
+  }
+  return text || parts[0]?.slice(0, maxLength) || '';
 }
 
 /** DB에서 읽은 리포트를 검증한다. 모양이 다르면 null */
