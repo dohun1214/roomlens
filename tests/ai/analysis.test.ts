@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AnalyzeInput, capturePlan, capturePlanAround, isJpegBase64, MAX_ANALYSIS_IMAGES, MAX_IMAGE_BASE64, parseReport, tidyReport, totalBase64 } from '@/lib/ai/analysis';
+import { AnalyzeInput, capturePlan, capturePlanAround, isJpegBase64, MAX_ANALYSIS_IMAGES, MAX_IMAGE_BASE64, parseReport, requestFromReport, tidyReport, totalBase64 } from '@/lib/ai/analysis';
 import { ANALYSIS_SYSTEM_PROMPT, analysisUserPrompt } from '@/lib/ai/prompts';
 import type { RoomReport } from '@/lib/ai/schemas';
 import { distanceToPolygon, pointInPolygon } from '@/lib/layout/geometry';
@@ -16,6 +16,7 @@ const REPORT: RoomReport = {
   naturalLight: { level: 'high', notes: '큰 창이 둘' },
   issues: [{ type: '얼룩', photoIndex: 3, description: '벽 아래쪽의 얼룩', confidence: 'low' }],
   summary: '밝은 방입니다.',
+  layoutTips: ['책상은 밝은 창가 벽에'],
 };
 
 describe('보낼 그림 확인', () => {
@@ -60,6 +61,18 @@ describe('리포트 다듬기', () => {
     expect(tidy.issues).toHaveLength(10);
     expect(tidy.summary.length).toBeLessThanOrEqual(500);
     expect(tidy.summary).not.toContain('\n');
+  });
+
+  it('배치 조언은 4개까지, 같은 말은 한 번, 긴 글은 자른다', () => {
+    const tidy = tidyReport({ ...REPORT, layoutTips: ['a', 'a', 'b', 'c', 'd', 'e', '가'.repeat(200)] }, 6);
+    expect(tidy.layoutTips).toEqual(['a', 'b', 'c', 'd']);
+    expect(tidyReport({ ...REPORT, layoutTips: ['가'.repeat(200)] }, 6).layoutTips[0].length).toBeLessThanOrEqual(80);
+  });
+
+  it('예전 리포트(배치 조언 없음)도 읽고, 조언은 빈 목록', () => {
+    const { layoutTips: _, ...old } = REPORT;
+    void _;
+    expect(parseReport(old)?.layoutTips).toEqual([]);
   });
 
   it('DB에서 읽은 값은 모양이 맞을 때만 쓴다', () => {
@@ -126,5 +139,21 @@ describe('캡처할 자리와 방향', () => {
     const views = capturePlanAround([1, 2, 3]);
     expect(views).toHaveLength(6);
     expect(views.every((v) => v.position.join() === '1,2,3' && v.target[1] === 2)).toBe(true);
+  });
+});
+
+describe('리포트 → 배치 추천 요청 글', () => {
+  it('배치 조언이 있으면 이어 붙인다', () => {
+    expect(requestFromReport({ ...REPORT, layoutTips: ['책상은 창가에', '옷장은 문 옆에'] })).toBe('책상은 창가에, 옷장은 문 옆에');
+  });
+  it('한도를 넘는 조언은 뺀다', () => {
+    const text = requestFromReport({ ...REPORT, layoutTips: ['가'.repeat(120), '나'.repeat(120)] });
+    expect(text).toBe('가'.repeat(120));
+  });
+  it('조언이 없으면(예전 리포트) 채광·수납으로 만든다', () => {
+    expect(requestFromReport({ ...REPORT, layoutTips: [], naturalLight: { level: 'high', notes: '' }, storage: { level: 'low', notes: '' } })).toBe(
+      '책상은 밝은 창가 쪽에, 수납이 적으니 수납 가구를 벽에 붙여서, 문 앞과 통로는 넓게',
+    );
+    expect(requestFromReport({ ...REPORT, layoutTips: [], naturalLight: { level: 'unknown', notes: '' }, storage: { level: 'medium', notes: '' } })).toBe('문 앞과 통로는 넓게');
   });
 });

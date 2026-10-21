@@ -1,5 +1,5 @@
 import Icon from '@/components/ui/Icon';
-import { CONFIDENCE_LABEL, LIGHT_LABEL, OPTION_STATUS_LABEL, STORAGE_LABEL } from '@/lib/ai/analysis';
+import { CONFIDENCE_LABEL, LIGHT_LABEL, OPTION_STATUS_LABEL, requestFromReport, STORAGE_LABEL } from '@/lib/ai/analysis';
 import type { RoomReport } from '@/lib/ai/schemas';
 
 /** 저장된 방 분석 리포트와 그것을 만든 때·모델 */
@@ -50,7 +50,7 @@ function LevelTile({
 }
 
 /** 방 분석 리포트를 보여준다: 요약, 채광·수납, 옵션(있음·없음·확인 안 됨), 눈에 띄는 문제 */
-export default function RoomReportView({ saved }: { saved: SavedReport }) {
+export default function RoomReportView({ saved, onSuggest }: { saved: SavedReport; onSuggest?: (request: string) => void }) {
   const { report } = saved;
   const when = new Date(saved.createdAt);
   const present = report.options.filter((o) => o.status === 'present');
@@ -62,6 +62,30 @@ export default function RoomReportView({ saved }: { saved: SavedReport }) {
       <p className="rounded-[14px] bg-accent-soft p-3.5 text-sm text-pretty text-[#1a2140]" data-testid="analysis-summary">
         {report.summary}
       </p>
+
+      {/* 배치 조언 → AI 배치 추천으로 */}
+      {(report.layoutTips.length > 0 || onSuggest) && (
+        <div className="flex flex-col gap-2.5 rounded-[14px] border border-accent-line p-3.5" data-testid="analysis-tips" data-count={report.layoutTips.length}>
+          <h3 className="text-[13px] font-bold">배치 조언</h3>
+          {report.layoutTips.length > 0 ? (
+            <ul className="flex flex-col gap-1.5 text-[13px] text-body">
+              {report.layoutTips.map((tip) => (
+                <li key={tip} className="flex gap-2">
+                  <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-accent" aria-hidden="true" />
+                  {tip}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-[13px] text-sub">이 리포트에는 배치 조언이 없어 채광·수납으로 요청을 만듭니다.</p>
+          )}
+          {onSuggest && (
+            <button type="button" className="btn btn-primary h-11 text-[13px]" onClick={() => onSuggest(requestFromReport(report))} data-testid="analysis-to-suggest">
+              이 조언으로 AI 배치 추천
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 gap-2.5">
         <LevelTile
