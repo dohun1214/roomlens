@@ -101,6 +101,13 @@ describe('통로 검사', () => {
     expect(checkLayout(items, ROOM, [DOOR])[0].message).toBe('behind: 문에서 갈 수 없습니다 (통로 60cm 부족)');
   });
 
+  it('의자는 길을 막지 않는다: 양옆이 막힌 책상 앞에 의자를 넣어 두어도 책상에 갈 수 있다', () => {
+    const sides = [item('l', -0.75, 1.0, 0.2, 1.0), item('r', 0.75, 1.0, 0.2, 1.0), item('desk', 0, 1.2, 1.2, 0.6)];
+    // 의자가 아닌 같은 크기의 상자는 막는다
+    expect(findUnreachable([...sides, item('box', 0, 0.65, 0.5, 0.5)], ROOM, [DOOR])).toEqual(['desk']);
+    expect(findUnreachable([...sides, item('chair', 0, 0.65, 0.5, 0.5, { category: 'chair' })], ROOM, [DOOR])).toEqual([]);
+  });
+
   it('틈이 60cm면 지나가고 40cm면 못 지나간다', () => {
     const behind = item('behind', 0, 1.1, 0.8, 0.6);
     // 왼쪽 벽(x=-2)에서 x=1.4까지 막음 → 오른쪽 벽과의 틈 0.6m
