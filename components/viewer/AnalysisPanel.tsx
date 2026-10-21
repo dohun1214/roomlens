@@ -2,9 +2,11 @@
 
 import { useState, type RefObject } from 'react';
 import RoomReportView, { type SavedReport } from '@/components/rooms/RoomReportView';
-import { CAPTURE_LONG_SIDE, capturePlan, capturePlanAround, MAX_ANALYSIS_IMAGES, MAX_IMAGE_BASE64, MAX_TOTAL_BASE64, parseReport, PHOTO_LONG_SIDE, totalBase64 } from '@/lib/ai/analysis';
+import { ANALYSIS_TOP_PX, CAPTURE_LONG_SIDE, capturePlan, capturePlanAround, MAX_ANALYSIS_IMAGES, MAX_IMAGE_BASE64, MAX_TOTAL_BASE64, parseReport, PHOTO_LONG_SIDE, totalBase64 } from '@/lib/ai/analysis';
 import type { Point2 } from '@/lib/three/floorDrag';
+import { TOP_VIEW_CUT, TOP_VIEW_HEIGHT, wholeRoomTile } from '@/lib/ai/fixturesDetect';
 import { captureViews, photoToJpegBase64 } from '@/lib/three/capture';
+import { captureTopViews } from '@/lib/three/topView';
 import type { Engine } from './engine';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SectionTitle, ToolPanel, type Slots } from './workspace';
 
@@ -74,16 +76,27 @@ export default function AnalysisPanel({
     setMessage(null);
     try {
       // 사진을 넣은 만큼 캡처 수를 줄여 합쳐서 10장을 넘지 않게 한다
+      // 보정한 방은 위에서 내려다본 그림 한 장을 맨 앞에 넣는다 (방 전체의 가구 배치가 보인다)
+      const tile = floorPolygon ? wholeRoomTile(floorPolygon) : null;
       const plan = floorPolygon ? capturePlan(floorPolygon) : capturePlanAround(engine.camera.position.toArray());
-      const views = plan.slice(0, Math.max(1, MAX_ANALYSIS_IMAGES - photos.length));
-      setPhase({ kind: 'capturing', done: 0, total: views.length });
+      const views = plan.slice(0, Math.max(1, MAX_ANALYSIS_IMAGES - photos.length - (tile ? 1 : 0)));
+      const total = views.length + (tile ? 1 : 0);
+      setPhase({ kind: 'capturing', done: 0, total });
+      const top = tile ? await captureTopViews(engine, [tile], { px: ANALYSIS_TOP_PX, height: TOP_VIEW_HEIGHT, cut: TOP_VIEW_CUT }).catch(() => []) : [];
       const captures = await captureViews(engine, views, {
         longSide: CAPTURE_LONG_SIDE,
-        onProgress: (done, total) => setPhase({ kind: 'capturing', done, total }),
+        onProgress: (done) => setPhase({ kind: 'capturing', done: done + (tile ? 1 : 0), total }),
       });
-      let images = [...captures.map((data) => ({ data, source: 'capture' as const })), ...photos.map((p) => ({ data: p.data, source: 'photo' as const }))];
+      let images = [
+        ...top.map((data) => ({ data, source: 'top' as const })),
+        ...captures.map((data) => ({ data, source: 'capture' as const })),
+        ...photos.map((p) => ({ data: p.data, source: 'photo' as const })),
+      ];
       // 요청 크기 한도를 넘으면 캡처부터 뺀다
-      while (images.length > 1 && totalBase64(images) > MAX_TOTAL_BASE64) images = images.slice(1);
+      while (images.length > 1 && totalBase64(images) > MAX_TOTAL_BASE64) {
+        const last = images.map((image) => image.source).lastIndexOf('capture');
+        images = images.filter((_, i) => i !== (last >= 0 ? last : 0));
+      }
       setSent(images.map((image) => image.data));
 
       setPhase({ kind: 'sending' });

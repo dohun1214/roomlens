@@ -596,7 +596,21 @@ export type OutlineInput = {
 };
 
 /** 벽 윤곽 (2D, m). 실패하면 빈 배열 */
-export type OutlineDebug = { nx: number; nz: number; x0: number; z0: number; cell: number; wall: Uint8Array; floor: Float32Array; region: Uint8Array };
+export type OutlineDebug = {
+  nx: number;
+  nz: number;
+  x0: number;
+  z0: number;
+  cell: number;
+  wall: Uint8Array;
+  floor: Float32Array;
+  region: Uint8Array;
+  /** 방 안 후보 덩어리 번호(-1 = 아님)와 순위 */
+  labels?: Int32Array;
+  ranked?: { k: number; size: number; score: number }[];
+  open?: Uint8Array;
+  surrounded?: Uint8Array;
+};
 
 export type OutlineOptions = {
   /** 바닥이 많이 보이는 순서로 몇 번째 방을 고를지 (0 = 가장 많이 보이는 방) */
@@ -703,8 +717,11 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
   const free = new Uint8Array(nx * nz);
   for (let c = 0; c < nx * nz; c += 1) free[c] = wallThick[c] ? 0 : 1;
   const enclosed = enclosedCells(free, nx, nz);
+  // 벽이 군데군데 비어 둘러싸이지 않았어도, 8방향 대부분에서 가까이 벽이 보이면 방 안이다
+  // (바닥이 조각조각만 스캔된 장면에서 조각들을 한 방으로 잇는다)
+  const surrounded = surroundedCells(wallThick, nx, nz, Math.round(RAY_REACH / cell), RAY_HITS);
   const open = new Uint8Array(nx * nz);
-  for (let c = 0; c < nx * nz; c += 1) if (free[c] && (seenNear[c] || enclosed[c])) open[c] = 1;
+  for (let c = 0; c < nx * nz; c += 1) if (free[c] && (seenNear[c] || enclosed[c] || surrounded[c])) open[c] = 1;
   const { labels, sizes } = components(open, nx, nz);
   if (sizes.length === 0) return { outline: [], wallCells, regionCells: 0, candidates: 0 };
   // 덩어리마다 바닥이 보이는 정도. 가장 많이 보이는 것부터 (작은 덩어리는 방이 아니다)
@@ -735,7 +752,7 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
   // 영역 안의 구멍(가구 밑 등)을 메운다: 바깥에서 닿지 않는 빈칸
   const filled = enclosedCells(Uint8Array.from(region, (v) => (v ? 0 : 1)), nx, nz);
   for (let c = 0; c < nx * nz; c += 1) if (filled[c]) region[c] = 1;
-  debug?.({ nx, nz, x0, z0, cell, wall: wallMask, floor, region });
+  debug?.({ nx, nz, x0, z0, cell, wall: wallMask, floor, region, labels, ranked, open, surrounded });
   const raw = traceOutline(region, g);
   const outline = removeSmallSteps(refineWalls(simplifyOrthogonal(raw), input));
   // 영역의 가운데 (다음 계산에서 같은 방을 고를 때)
@@ -748,6 +765,42 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
     sz += z0 + ((c - i) / nx + 0.5) * cell;
   }
   return { outline, wallCells, regionCells, candidates: ranked.length, center: [sx / Math.max(1, regionCells), sz / Math.max(1, regionCells)] };
+}
+
+/** 방 안으로 볼 때 벽을 찾는 거리 (m)와, 8방향 중 벽이 보여야 하는 방향 수 */
+export const RAY_REACH = 10;
+export const RAY_HITS = 7;
+
+/**
+ * 8방향(가로·세로·대각선)으로 maxSteps칸 안에 벽이 있는 방향이 minHits 이상인 칸.
+ * 방향마다 한 번씩 훑어 "그 방향으로 가장 가까운 벽까지의 칸 수"를 구한다 (칸 수에 비례하는 시간).
+ */
+export function surroundedCells(wall: Uint8Array, nx: number, nz: number, maxSteps: number, minHits: number): Uint8Array {
+  const hits = new Uint8Array(nx * nz);
+  const dist = new Int32Array(nx * nz);
+  const dirs: [number, number][] = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]];
+  const big = 1 << 29;
+  for (const [di, dj] of dirs) {
+    // (i, j)에서 (di, dj) 쪽 벽까지의 거리 = 다음 칸의 거리 + 1. 다음 칸을 먼저 계산하도록 거꾸로 훑는다
+    const jOrder = dj > 0 ? [nz - 1, -1, -1] : [0, nz, 1];
+    const iOrder = di > 0 ? [nx - 1, -1, -1] : [0, nx, 1];
+    for (let j = jOrder[0]; j !== jOrder[1]; j += jOrder[2]) {
+      for (let i = iOrder[0]; i !== iOrder[1]; i += iOrder[2]) {
+        const c = j * nx + i;
+        if (wall[c]) {
+          dist[c] = 0;
+          continue;
+        }
+        const ni = i + di;
+        const nj = j + dj;
+        dist[c] = ni < 0 || nj < 0 || ni >= nx || nj >= nz ? big : Math.min(big, dist[nj * nx + ni] + 1);
+        if (dist[c] <= maxSteps) hits[c] += 1;
+      }
+    }
+  }
+  const out = new Uint8Array(nx * nz);
+  for (let c = 0; c < nx * nz; c += 1) if (!wall[c] && hits[c] >= minHits) out[c] = 1;
+  return out;
 }
 
 /** mask(1 = 지나갈 수 있음)에서 격자 가장자리와 이어지지 않는 칸 (둘러싸인 칸) */

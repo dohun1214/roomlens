@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { addCandidates, locateFixtures, MAX_TILES, SINGLE_TILE_MAX, TILE_METERS, TILE_OVERLAP, tileAxes, topHeight, topViewPlan, type FixtureDetection } from '@/lib/ai/fixturesDetect';
+import { addCandidates, locateFixtures, MAX_TILES, SINGLE_TILE_MAX, TILE_METERS, TILE_OVERLAP, tileAxes, topHeight, topViewPlan, wholeRoomTile, type FixtureDetection } from '@/lib/ai/fixturesDetect';
 import { MAX_FIXTURES, type Fixture } from '@/lib/rooms/fixtures';
 import type { Point2 } from '@/lib/three/floorDrag';
 
@@ -211,5 +211,22 @@ describe('topHeight', () => {
     expect(topHeight(layer(0, 0.05, 500))).toBeNull();
     expect(topHeight(layer(0.3, 0.6, 10))).toBeNull();
     expect(topHeight([])).toBeNull();
+  });
+});
+
+describe('wholeRoomTile', () => {
+  it('큰 방도 한 칸으로 전체를 덮는다 (방 분석의 위에서 본 그림)', () => {
+    const big: Point2[] = [
+      [0, 0],
+      [16, 0],
+      [16, 6],
+      [0, 6],
+    ];
+    expect(topViewPlan(big).length).toBeGreaterThan(1);
+    const tile = wholeRoomTile(big)!;
+    expect(tile.center[0]).toBeCloseTo(8, 2);
+    expect(tile.center[1]).toBeCloseTo(3, 2);
+    expect(tile.size).toBeGreaterThanOrEqual(16);
+    expect(wholeRoomTile([])).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ export const LayoutIntent = z.object({
       itemId: z.string(),
       zone: z.enum(['against_wall', 'corner', 'under_window', 'beside_item', 'center']),
       wallId: z.string().describe('W1..Wn, 해당 없으면 빈 문자열'),
-      nearItemId: z.string().describe('beside_item일 때 기준 가구, 아니면 빈 문자열'),
+      nearItemId: z.string().describe('beside_item일 때 기준 가구, against_wall에서 마주 볼 가구, 아니면 빈 문자열'),
       facing: z.enum(['into_room', 'toward_window', 'toward_wall', 'any']),
       priority: z.number().int().min(1).max(10),
       reason: z.string(),

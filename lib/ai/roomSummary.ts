@@ -81,7 +81,8 @@ function isRectangle(polygon: Point2[]): boolean {
  * @param request 사용자가 적은 요청 (없으면 빈 문자열)
  */
 /** @param fixtures 방에 원래 있던 가구 (옮길 수 없음, "치울 가구"는 빼고 넘긴다) */
-export function summarizeRoom(polygon: Point2[], openings: Opening[], items: SummaryItem[], request = '', fixtures: FixtureObstacle[] = []): string {
+/** 방의 모양·벽·문·창문·원래 가구를 적은 줄들 (배치 추천과 방 분석이 함께 쓴다) */
+export function describeRoomShape(polygon: Point2[], openings: Opening[], fixtures: FixtureObstacle[] = []): string[] {
   const walls = wallsOf(polygon);
   const area = Math.abs(signedArea(polygon));
   const lines: string[] = [];
@@ -113,6 +114,11 @@ export function summarizeRoom(polygon: Point2[], openings: Opening[], items: Sum
       lines.push(`- ${f.name.replace(/^원래 있던 /, '')}: 가로 ${m(f.w)} x 깊이 ${m(f.d)} x 높이 ${m(f.h)}, ${where}`);
     }
   }
+  return lines;
+}
+
+export function summarizeRoom(polygon: Point2[], openings: Opening[], items: SummaryItem[], request = '', fixtures: FixtureObstacle[] = []): string {
+  const lines = describeRoomShape(polygon, openings, fixtures);
 
   lines.push('가구:');
   for (const item of items) {

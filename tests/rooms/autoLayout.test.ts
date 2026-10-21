@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeDoorways, estimateRoomLayout, removeSmallSteps, simplifyOrthogonal, traceOutline } from '@/lib/rooms/autoLayout';
+import { closeDoorways, estimateRoomLayout, removeSmallSteps, simplifyOrthogonal, surroundedCells, traceOutline } from '@/lib/rooms/autoLayout';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { polygonIoU } from '@/lib/eval/roomPrepScore';
 import { FURNITURE, L_ROOM, fakeRoom, iouBack, rotation, type Vec3 } from './fakeRoom';
@@ -107,5 +107,29 @@ describe('removeSmallSteps', () => {
       [0, 3],
     ];
     expect(removeSmallSteps(deep)).toHaveLength(6);
+  });
+});
+
+describe('surroundedCells', () => {
+  it('벽이 군데군데 빈 방의 안쪽은 둘러싸인 칸, 바깥은 아니다', () => {
+    const n = 40;
+    const wall = new Uint8Array(n * n);
+    // 10..30 칸의 네모 벽, 변마다 가운데 4칸이 비어 있다
+    for (let k = 10; k <= 30; k += 1) {
+      if (k >= 18 && k <= 21) continue;
+      wall[10 * n + k] = 1;
+      wall[30 * n + k] = 1;
+      wall[k * n + 10] = 1;
+      wall[k * n + 30] = 1;
+    }
+    const inside = surroundedCells(wall, n, n, 30, 7);
+    expect(inside[14 * n + 12]).toBe(1);
+    expect(inside[25 * n + 27]).toBe(1);
+    expect(inside[2 * n + 2]).toBe(0);
+    expect(inside[20 * n + 36]).toBe(0);
+    // 벽 칸은 아니다
+    expect(inside[10 * n + 12]).toBe(0);
+    // 멀리 있는 벽은 보지 않는다
+    expect(surroundedCells(wall, n, n, 1, 7)[14 * n + 12]).toBe(0);
   });
 });

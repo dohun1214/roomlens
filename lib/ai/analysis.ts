@@ -14,6 +14,8 @@ export const MAX_TOTAL_BASE64 = 3_800_000;
 /** 캡처·사진을 줄일 때 긴 변의 크기 (px) */
 export const CAPTURE_LONG_SIDE = 1024;
 export const PHOTO_LONG_SIDE = 1280;
+/** 방 분석에 넣는 위에서 본 그림의 한 변 (px) */
+export const ANALYSIS_TOP_PX = 1024;
 
 export const AnalyzeInput = z.object({
   images: z
@@ -21,8 +23,8 @@ export const AnalyzeInput = z.object({
       z.object({
         /** JPEG의 base64 (data: 머리말 없이) */
         data: z.string().min(100, '그림이 비어 있습니다.').max(MAX_IMAGE_BASE64, '그림이 너무 큽니다.'),
-        /** capture = 3D 화면을 캡처한 그림, photo = 사용자가 넣은 사진 */
-        source: z.enum(['capture', 'photo']),
+        /** capture = 3D 화면을 캡처한 그림, top = 3D 화면을 바로 위에서 내려다본 그림, photo = 사용자가 넣은 사진 */
+        source: z.enum(['capture', 'top', 'photo']),
       }),
     )
     .min(1, '분석할 그림이 없습니다.')

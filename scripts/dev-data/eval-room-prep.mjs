@@ -3,6 +3,8 @@
 //   --mode layout : 보정 전 파일을 열어 자동 보정만 잰다 (Gemini 없음, 로그인 없음)
 //   --mode full   : 자동 보정 → 문·창문 → 원래 가구를 이어서 하고 정답 좌표로 옮겨 잰다
 //   --mode points : 장면의 표면 점을 eval/points/<이름>.bin 으로 저장한다 (eval-layout-offline.mjs로 빠르게 고쳐 보기용)
+//   --mode analysis : 정답 보정·문창문을 넣은 방에서 "방 분석"을 돌려, 정답 원래 가구로 옵션(침대·책상·옷장·냉장고·세탁기)을 채점한다
+//                     (원래 가구는 넣지 않는다: 그림만 보고 맞히는지 본다)
 // 준비: 개발 서버(APP_URL, 기본 http://localhost:3100), 데이터 폴더를 내주는 파일 서버(DATA_URL, 기본 http://localhost:8094, --cors),
 //       ../roomlens-data/_e2e 에 playwright-core
 // 실행: npx tsx --env-file=.env.local scripts/dev-data/eval-room-prep.mjs --mode detect [--only 이름,이름] [--tag 이름]
@@ -199,6 +201,79 @@ async function runFull(owner, truth) {
   return { pred, runs };
 }
 
+/** 정답 문·창문(양 끝 좌표)을 벽 번호 형식으로 */
+function truthOpenings(truth) {
+  const out = [];
+  for (const o of truth.openings) {
+    for (let i = 0; i < truth.polygon.length; i += 1) {
+      const a = truth.polygon[i];
+      const b = truth.polygon[(i + 1) % truth.polygon.length];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (len < 1e-6) continue;
+      const u = [(b[0] - a[0]) / len, (b[1] - a[1]) / len];
+      const off = (p) => Math.abs((p[0] - a[0]) * u[1] - (p[1] - a[1]) * u[0]);
+      if (off(o.a) > 0.05 || off(o.b) > 0.05) continue;
+      const along = (p) => (p[0] - a[0]) * u[0] + (p[1] - a[1]) * u[1];
+      const [from, to] = [along(o.a), along(o.b)].sort((m, n) => m - n).map((v) => Math.min(len, Math.max(0, Math.round(v * 100) / 100)));
+      if (to - from >= 0.3) out.push({ type: o.type, wallIndex: i, from, to, widthM: Math.round((to - from) * 100) / 100 });
+      break;
+    }
+  }
+  return out;
+}
+
+/** 리포트의 옵션 가운데 정답 원래 가구로 채점할 수 있는 것: 옵션 이름 → 정답 가구 이름 */
+const OPTION_TRUTH = { 침대: ['침대'], 책상: ['책상'], 옷장: ['옷장'], 냉장고: ['냉장고'], 세탁기: ['세탁기'] };
+
+async function runAnalysis(owner, truth) {
+  const roomId = await ensureRoom(owner, truth);
+  await admin
+    .from('rooms')
+    .update({ transform: { ...truth.frame.transform, flipX: truth.frame.flipX }, floor_polygon: truth.polygon, openings: truthOpenings(truth), fixtures: [] })
+    .eq('id', roomId);
+  await admin.from('ai_calls').delete().eq('owner_id', owner.id);
+  await admin.from('room_reports').delete().eq('room_id', roomId);
+  await page.goto(`${appUrl}/rooms/${roomId}`);
+  await waitReady();
+  await page.waitForTimeout(3000);
+  await page.getByTestId('analysis-toggle').click();
+  const t0 = Date.now();
+  await page.getByTestId('analysis-run').click();
+  await page.getByTestId('analysis-report').waitFor({ timeout: 240000 });
+  const ms = Date.now() - t0;
+  const { data } = await admin.from('room_reports').select('report').eq('room_id', roomId).maybeSingle();
+  const report = data.report;
+  const labels = new Set((truth.fixtures ?? []).map((f) => f.label));
+  const options = Object.entries(OPTION_TRUTH).map(([name, names]) => {
+    const present = names.some((n) => labels.has(n));
+    const status = report.options.find((o) => o.name === name)?.status ?? 'missing';
+    return { name, truth: present, status };
+  });
+  const windows = truth.openings.filter((o) => o.type === 'window').length;
+  const tips = report.layoutTips ?? [];
+  return {
+    pred: null,
+    analysis: {
+      ms,
+      options,
+      tp: options.filter((o) => o.truth && o.status === 'present').length,
+      truthPresent: options.filter((o) => o.truth).length,
+      fp: options.filter((o) => !o.truth && o.status === 'present').length,
+      truthAbsent: options.filter((o) => !o.truth).length,
+      wrongAbsent: options.filter((o) => o.truth && o.status === 'absent').length,
+      unknown: report.options.filter((o) => o.status === 'unknown').length,
+      tips: tips.length,
+      // 창문이 없는 방인데 창을 말하는 조언
+      windowTipWithoutWindow: windows === 0 && tips.some((t) => t.includes('창')),
+      // 벽 이름(W1..)을 써서 자리를 짚은 조언
+      tipsWithWall: tips.filter((t) => /W\d/.test(t)).length,
+      light: report.naturalLight.level,
+      windows,
+      report,
+    },
+  };
+}
+
 async function runPoints(truth) {
   await page.goto(`${appUrl}/viewer?url=${encodeURIComponent(`${dataUrl}/${truth.file}`)}`);
   await waitReady();
@@ -227,13 +302,15 @@ async function runLayout(truth) {
 }
 
 const owner = values.mode === 'layout' || values.mode === 'points' ? null : await signIn();
-if (!['detect', 'full', 'layout', 'points'].includes(values.mode)) throw new Error(`모르는 --mode: ${values.mode}`);
+if (!['detect', 'full', 'layout', 'points', 'analysis'].includes(values.mode)) throw new Error(`모르는 --mode: ${values.mode}`);
 const rows = [];
 for (const truth of truths) {
   log(truth.name, values.mode);
   try {
     const out =
-      values.mode === 'detect'
+      values.mode === 'analysis'
+        ? await runAnalysis(owner, truth)
+        : values.mode === 'detect'
         ? await runDetect(owner, truth)
         : values.mode === 'full'
           ? await runFull(owner, truth)
@@ -241,7 +318,11 @@ for (const truth of truths) {
             ? await runPoints(truth)
             : await runLayout(truth);
     const score = out.pred ? scoreAll(truth, out.pred) : null;
-    rows.push({ name: truth.name, kind: truth.kind, score, runs: out.runs, pred: out.pred });
+    rows.push({ name: truth.name, kind: truth.kind, score, runs: out.runs, pred: out.pred, analysis: out.analysis });
+    if (out.analysis) {
+      const a = out.analysis;
+      log('  ', `옵션 맞음 ${a.tp}/${a.truthPresent} 없는데 있다 ${a.fp}/${a.truthAbsent} 있는데 없다 ${a.wrongAbsent} 모름 ${a.unknown} 조언 ${a.tips}${a.windowTipWithoutWindow ? ' (창 없는데 창 조언)' : ''} 채광 ${a.light}(창 ${a.windows}) ${Math.round(a.ms / 1000)}초`);
+    }
     if (score) log('  ', JSON.stringify({ layout: round(score.layout), openings: round(score.openings), fixtures: round(score.fixtures) }));
   } catch (err) {
     log('  실패', String(err).slice(0, 300));
@@ -294,5 +375,12 @@ const avg = (k) => (sum[`${k}#`] ? sum[k] / sum[`${k}#`] : null);
 console.log(
   `${'평균'.padEnd(18)} ${pct(avg('iou'))}  ${m(avg('corner'))} |       ${pct(avg('oRecall'))} ${pct(avg('oPrecision'))} ${pct(avg('oType'))} ${m(avg('oEnd'))} |       ${pct(avg('fRecall'))} ${pct(avg('fPrecision'))} ${pct(avg('fType'))} ${m(avg('fCenter'))} ${m(avg('fHeight'))}`,
 );
+if (values.mode === 'analysis') {
+  const list = rows.filter((r) => r.analysis).map((r) => r.analysis);
+  const total = (k) => list.reduce((a, b) => a + (typeof b[k] === 'number' ? b[k] : b[k] ? 1 : 0), 0);
+  console.log(
+    `분석 ${list.length}장면: 있는 옵션 맞힘 ${total('tp')}/${total('truthPresent')} (${pct(total('tp') / Math.max(1, total('truthPresent')))}), 없는데 있다 ${total('fp')}/${total('truthAbsent')}, 있는데 없다 ${total('wrongAbsent')}, 모름 평균 ${(total('unknown') / Math.max(1, list.length)).toFixed(1)}, 조언 평균 ${(total('tips') / Math.max(1, list.length)).toFixed(1)}, 창 없는데 창 조언 ${total('windowTipWithoutWindow')}, 벽을 짚은 조언 ${total('tipsWithWall')}/${total('tips')}, 평균 ${Math.round(total('ms') / Math.max(1, list.length) / 1000)}초`,
+  );
+}
 console.log(`결과: ${outPath}`);
 if (pageErrors.length) console.log('화면 오류', pageErrors.slice(0, 5));

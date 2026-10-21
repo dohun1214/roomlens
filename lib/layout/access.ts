@@ -69,9 +69,10 @@ export function distanceToFootprint(p: Point2, f: Footprint): number {
  * 문에서 걸어서 옆까지 갈 수 없는 가구의 id.
  * 5cm 격자에서 벽과 가구를 사람 몸 반지름만큼 부풀려 막힌 칸을 정하고, 문 바로 안쪽에서 시작해 갈 수 있는 칸을 넓혀 간다(BFS).
  * 가구의 어느 쪽이든 옆에 설 수 있으면 갈 수 있는 것으로 본다.
+ * 의자(category 'chair')는 손으로 빼낼 수 있으므로 길을 막지 않는다 (책상 앞에 넣어 둔 의자 때문에 책상이 막힌 것으로 보지 않는다). 의자 자체로 가는 길은 검사한다.
  * 문이 없거나 모든 문 앞이 막혀 출발할 수 없으면 null (문 앞 검사가 따로 알려준다).
  */
-export function findUnreachable(items: (Footprint & { id: string })[], polygon: Point2[], doors: Opening[]): string[] | null {
+export function findUnreachable(items: (Footprint & { id: string; category?: string })[], polygon: Point2[], doors: Opening[]): string[] | null {
   if (polygon.length < 3 || doors.length === 0) return null;
   const xs = polygon.map((p) => p[0]);
   const zs = polygon.map((p) => p[1]);
@@ -106,7 +107,7 @@ export function findUnreachable(items: (Footprint & { id: string })[], polygon: 
       const touching: number[] = [];
       for (let k = 0; k < items.length; k += 1) {
         const distance = distanceToFootprint(point, items[k]);
-        if (distance < BODY_RADIUS) {
+        if (distance < BODY_RADIUS && items[k].category !== 'chair') {
           blocked = true;
           break;
         }

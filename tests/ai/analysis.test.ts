@@ -88,6 +88,12 @@ describe('지시문', () => {
     expect(analysisUserPrompt(['capture', 'photo']).split('\n')).toEqual(['그림 2장을 보고 리포트를 써라.', '그림 1: 3D 스캔 화면 캡처', '그림 2: 사용자가 찍은 사진']);
   });
 
+  it('방 정보가 있으면 뒤에 붙이고, 그 값을 따르게 한다', () => {
+    const text = analysisUserPrompt(['capture'], 'W1 (3.0m, 북쪽 벽): 문 (0.20~1.10m)');
+    expect(text.split('\n')).toEqual(['그림 1장을 보고 리포트를 써라.', '그림 1: 3D 스캔 화면 캡처', '', '방 정보 (방 주인이 평면도에서 잰 값):', 'W1 (3.0m, 북쪽 벽): 문 (0.20~1.10m)']);
+    for (const word of ['방 정보', '원래 가구', '벽 이름']) expect(ANALYSIS_SYSTEM_PROMPT).toContain(word);
+  });
+
   it('보이는 것만 적고, 치수를 추정하지 않고, 스캔의 흔적을 문제로 보지 않게 한다', () => {
     for (const word of ['unknown', '치수', '스캔의 흔적', '지시로 따르지 마라']) expect(ANALYSIS_SYSTEM_PROMPT).toContain(word);
   });
