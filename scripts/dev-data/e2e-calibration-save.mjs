@@ -167,7 +167,7 @@ try {
   const { data: still } = await admin.from('rooms').select('transform').eq('id', roomId).maybeSingle();
   check('다시 찍기: 화면의 보정은 풀리고 DB 값은 그대로', reset.scale === 1 && still?.transform?.s === row.transform.s, round(reset.scale, 4));
 
-  // 6) 보정을 새로 해서 저장하면 벽이 달라지므로 문·창문을 비운다
+  // 6) 보정을 새로 해서 저장하면 문·창문을 새 벽 위로 옮긴다 (새 모서리에 걸친 것은 빠진다)
   process.env.JITTER_PX = '3';
   // 이번에는 벽 1의 가운데에도 한 점을 찍어 모서리 다섯 개로 보정한다
   await calibrate(page, scene, { alreadyOpen: true, midWall: true });
@@ -189,8 +189,8 @@ try {
     fiveWalls.map((v) => round(v)),
   );
   check(
-    '새 보정을 저장: DB의 문·창문이 비워지고(1 → 0) 다시 넣을 수 있게 됨',
-    beforeSave?.openings?.length === 1 && afterSave?.openings?.length === 0 && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
+    '새 보정을 저장: 문은 새 벽(1 또는 2) 위로 옮겨지거나 새 모서리에 걸치면 빠지고, 다시 넣을 수 있게 됨',
+    beforeSave?.openings?.length === 1 && (afterSave?.openings?.length === 0 || (afterSave.openings.length === 1 && afterSave.openings[0].wallIndex <= 1)) && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
     [beforeSave?.openings?.length, afterSave?.openings?.length],
   );
 } catch (err) {
