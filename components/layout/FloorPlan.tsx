@@ -81,8 +81,20 @@ export default function FloorPlan({
   onPreview?: (id: string | null, pose: Footprint | null) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const [drag, setDrag] = useState<Drag | null>(null);
-  const [sketch, setSketch] = useState<Sketch | null>(null);
+  // 끌기 상태는 ref에도 둔다: 누르고 바로 움직이면(빠른 손놀림, 자동 입력) 다시 그려지기 전에 다음 이벤트가 와서
+  // state만 보면 이전 값(null)을 읽고 놓친다. 그리기는 state로
+  const [drag, setDragState] = useState<Drag | null>(null);
+  const [sketch, setSketchState] = useState<Sketch | null>(null);
+  const dragRef = useRef<Drag | null>(null);
+  const sketchRef = useRef<Sketch | null>(null);
+  const setDrag = (next: Drag | null) => {
+    dragRef.current = next;
+    setDragState(next);
+  };
+  const setSketch = (next: Sketch | null) => {
+    sketchRef.current = next;
+    setSketchState(next);
+  };
   const drawing = Boolean(onDrawFixture);
   const snap = (p: Point2): Point2 => [snapToGrid(p[0]), snapToGrid(p[1])];
 
@@ -141,6 +153,8 @@ export default function FloorPlan({
   };
 
   const onMovePointer = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const sketch = sketchRef.current;
+    const drag = dragRef.current;
     if (sketch && e.pointerId === sketch.pointerId) {
       const point = toPlan(e);
       if (point) setSketch({ ...sketch, b: snap(point) });
@@ -165,6 +179,8 @@ export default function FloorPlan({
   };
 
   const onUp = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const sketch = sketchRef.current;
+    const drag = dragRef.current;
     if (sketch && e.pointerId === sketch.pointerId) {
       if (svgRef.current?.hasPointerCapture(e.pointerId)) svgRef.current.releasePointerCapture(e.pointerId);
       const { a, b } = sketch;
