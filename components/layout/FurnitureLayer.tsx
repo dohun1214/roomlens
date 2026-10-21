@@ -13,6 +13,7 @@ import { MAX_REQUEST_LENGTH } from '@/lib/ai/roomSummary';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
 import { lastInsideAlong } from '@/lib/layout/geometry';
 import { emptyHistory, historyShortcut, record, redo, undo, type History } from '@/lib/layout/history';
+import { angleDelta, normalizeRotation, parseRotationInput, ROTATE_STEP, rotationTowards, snapRotation } from '@/lib/layout/rotation';
 import { isTypingTarget } from '@/lib/three/keyboardMove';
 import {
   MAX_USER_FURNITURE,
@@ -68,7 +69,14 @@ const NO_KEYS: string[] = [];
 export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai'; isPublic?: boolean };
 const EMPTY_MINE_FORM: UserFurnitureForm = { name: '', width: '', depth: '', height: '' };
 
-type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
+type Drag = {
+  id: string;
+  pointerId: number;
+  offset: Point2;
+  current: Footprint;
+  /** Shift+끌기로 돌리는 중이면: 잡을 때 포인터 방향과 가구 각도 */
+  rotate: { startPointer: number; startDeg: number } | null;
+};
 
 /**
  * 보정된 방(바닥 y=0, 단위 m) 위에 박스 가구를 놓고 바닥 평면에서 끈다.
@@ -114,6 +122,7 @@ export default function FurnitureLayer({
   sharedMissing = false,
   share,
   onUnsavedChange,
+  aiPrefill = null,
 }: {
   /** 패널과 3D 화면 위에 그려 넣을 자리 */
   slots: Slots;
@@ -171,6 +180,8 @@ export default function FurnitureLayer({
   share?: { roomId: string; roomPublic: boolean; onSetPublic: (layoutId: string, next: boolean) => Promise<boolean> };
   /** 저장할 수 있는데 저장하지 않은 배치가 있는지 알려 준다 (나갈 때 묻기). 공유받은 배치를 둘러보는 것은 빼고 */
   onUnsavedChange?: (unsaved: boolean) => void;
+  /** 방 분석에서 넘어온 AI 추천 요청 글. nonce가 바뀔 때마다 요청 칸을 열고 글을 넣는다 */
+  aiPrefill?: { text: string; nonce: number } | null;
 }) {
   const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, [...userFurniture, ...borrowedFurniture]));
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
@@ -193,10 +204,32 @@ export default function FurnitureLayer({
   const [aiRequest, setAiRequest] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const aiFormRef = useRef<HTMLDivElement>(null);
+  const [prefillNonce, setPrefillNonce] = useState(0);
+  if (aiPrefill && aiPrefill.nonce !== prefillNonce) {
+    // 넘어온 요청 글을 칸에 넣는다 (그리는 중에 상태를 맞추는 React 방식)
+    setPrefillNonce(aiPrefill.nonce);
+    setAiRequest(aiPrefill.text.slice(0, MAX_REQUEST_LENGTH));
+    setAiOpen(true);
+    setAiMessage(null);
+  }
+  // 넘어온 요청 칸이 보이게 하고 글을 고칠 수 있게 초점을 준다
+  useEffect(() => {
+    if (prefillNonce === 0) return;
+    const form = aiFormRef.current;
+    form?.scrollIntoView({ block: 'nearest' });
+    form?.querySelector('textarea')?.focus();
+  }, [prefillNonce]);
   const [layoutBusy, setLayoutBusy] = useState(false);
   const [confirmLayoutDelete, setConfirmLayoutDelete] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  // 끌거나 돌리는 중인 가구의 지금 자리 (손을 떼기 전). 이것으로 바로 검사해 보여 준다
+  const [live, setLive] = useState<{ id: string; pose: Footprint } | null>(null);
+  const [angleText, setAngleText] = useState<string | null>(null);
   const itemsRef = useRef<Item[]>(restored.items);
+  // 단축키(R)가 쓰는 지금 고른 가구와 돌리기 함수
+  const selectedRef = useRef<string | null>(null);
+  const rotateToRef = useRef<(id: string, deg: number) => void>(() => {});
   const groupRef = useRef<THREE.Group | null>(null);
   // 되돌리기·다시하기 기록 (화면에는 단계 수만 쓴다)
   const [history, setHistory] = useState<History<Item[]>>(emptyHistory);
@@ -232,8 +265,16 @@ export default function FurnitureLayer({
   useEffect(() => {
     if (!furnitureActive) return;
     const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target as HTMLElement | null)) return;
+      // R: 고른 가구를 오른쪽으로 15°, Shift+R: 왼쪽으로 (한글 입력 상태에서도 되게 code로 본다)
+      if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey && !e.altKey && selectedRef.current) {
+        e.preventDefault();
+        const item = itemsRef.current.find((i) => i.id === selectedRef.current);
+        if (item) rotateToRef.current(item.id, item.rotationDeg + (e.shiftKey ? -ROTATE_STEP : ROTATE_STEP));
+        return;
+      }
       const kind = historyShortcut(e);
-      if (!kind || isTypingTarget(e.target as HTMLElement | null)) return;
+      if (!kind) return;
       e.preventDefault();
       step(kind);
     };
@@ -245,6 +286,15 @@ export default function FurnitureLayer({
   const violations = useMemo(() => checkLayout(items, floorPolygon, openings, obstacles), [items, floorPolygon, openings, obstacles]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
   const warnIds = useMemo(() => warningIds(violations), [violations]);
+  // 끄는 동안의 검사: 끄는 가구만 지금 자리로 바꿔 다시 검사한다
+  const liveViolations = useMemo(() => {
+    if (!live) return null;
+    const moved = items.map((i) => (i.id === live.id ? { ...i, ...live.pose } : i));
+    return checkLayout(moved, floorPolygon, openings, obstacles);
+  }, [live, items, floorPolygon, openings, obstacles]);
+  const shownBadIds = useMemo(() => (liveViolations ? violatingIds(liveViolations) : badIds), [liveViolations, badIds]);
+  const shownWarnIds = useMemo(() => (liveViolations ? warningIds(liveViolations) : warnIds), [liveViolations, warnIds]);
+  const liveMessages = live && liveViolations ? liveViolations.filter((v) => v.itemId === live.id || v.otherId === live.id) : null;
   const errorCount = violations.filter((v) => v.severity === 'error').length;
   const hasDoor = openings.some((o) => o.type === 'door');
   const currentSaved = useMemo(() => toSavedItems(items), [items]);
@@ -368,6 +418,18 @@ export default function FurnitureLayer({
     };
   }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion, shadowTexture]);
 
+  // 끄는 동안: 메시를 다시 만들지 않고 끄는 가구의 테두리 색만 바꾼다 (문제 빨강, 경고 노랑, 괜찮으면 고른 색)
+  useEffect(() => {
+    if (!live) return;
+    const mesh = groupRef.current?.children.find((m) => m.userData.id === live.id);
+    const edges = mesh?.children.find((c) => c.userData.edges) as THREE.LineSegments | undefined;
+    if (!edges) return;
+    const material = edges.material as THREE.LineBasicMaterial;
+    const color = shownBadIds.has(live.id) ? VIOLATION_EDGE_COLOR : shownWarnIds.has(live.id) ? WARNING_EDGE_COLOR : SELECTED_EDGE_COLOR;
+    material.color.setHex(color);
+    edges.visible = true;
+  }, [live, shownBadIds, shownWarnIds]);
+
   // 바닥 평면 드래그
   useEffect(() => {
     const engine = engineRef.current;
@@ -400,32 +462,55 @@ export default function FurnitureLayer({
         pointerId: e.pointerId,
         offset: [item.x - floor[0], item.z - floor[1]], // 잡은 위치를 유지
         current: item,
+        // Shift를 누르고 끌면 그 자리에서 돌린다 (처음 각도에서 끈 만큼)
+        rotate: e.shiftKey ? { startPointer: rotationTowards(floor[0] - item.x, floor[1] - item.z), startDeg: item.rotationDeg } : null,
       };
       setSelectedId(item.id);
+    };
+
+    // 화면 갱신마다 한 번만 검사 상태를 바꾼다
+    let frame = 0;
+    const showLive = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (drag) setLive({ id: drag.id, pose: { x: drag.current.x, z: drag.current.z, w: drag.current.w, d: drag.current.d, rotationDeg: drag.current.rotationDeg } });
+      });
     };
 
     const onMove = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.pointerId) return;
       const floor = floorPointAt(e);
       if (!floor) return;
-      drag.current = placeOnFloor(
-        { ...drag.current, x: floor[0] + drag.offset[0], z: floor[1] + drag.offset[1] },
-        floorPolygon,
-      );
+      if (drag.rotate) {
+        const pointer = rotationTowards(floor[0] - drag.current.x, floor[1] - drag.current.z);
+        const deg = snapRotation(drag.rotate.startDeg + angleDelta(pointer, drag.rotate.startPointer));
+        drag.current = placeOnFloor({ ...drag.current, rotationDeg: deg }, floorPolygon);
+      } else {
+        drag.current = placeOnFloor(
+          { ...drag.current, x: floor[0] + drag.offset[0], z: floor[1] + drag.offset[1] },
+          floorPolygon,
+        );
+      }
       // 끄는 동안에는 메시만 옮기고, 손을 뗄 때 상태에 반영한다
       const mesh = groupRef.current?.children.find((m) => m.userData.id === drag?.id);
       if (mesh) {
         mesh.position.x = drag.current.x;
         mesh.position.z = drag.current.z;
+        mesh.rotation.y = THREE.MathUtils.degToRad(drag.current.rotationDeg);
       }
+      showLive();
     };
 
     const onUp = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.pointerId) return;
       const { id, current } = drag;
       drag = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      setLive(null);
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-      commit((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z } : i)));
+      commit((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z, rotationDeg: current.rotationDeg } : i)));
     };
 
     // capture 단계에 걸어 OrbitControls의 리스너보다 먼저 실행되게 한다
@@ -438,6 +523,7 @@ export default function FurnitureLayer({
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('pointercancel', onUp);
+      if (frame) cancelAnimationFrame(frame);
     };
   }, [engineRef, floorPolygon, commit]);
 
@@ -492,15 +578,22 @@ export default function FurnitureLayer({
     if (engine && !showPlan && !inView(engine, item.x, item.h / 2, item.z)) focusOn(item);
   };
 
-  const rotate = () => {
-    commit((prev) =>
-      prev.map((i) =>
-        i.id === selectedId
-          ? { ...i, ...placeOnFloor({ ...i, rotationDeg: (i.rotationDeg + 90) % 360 }, floorPolygon) }
-          : i,
-      ),
-    );
+  /** 고른 가구를 deg로 돌린다 (벽에 붙어 있었으면 다시 붙인다) */
+  const rotateTo = useCallback(
+    (id: string, deg: number) => {
+      commit((prev) => prev.map((i) => (i.id === id ? { ...i, ...placeOnFloor({ ...i, rotationDeg: normalizeRotation(deg) }, floorPolygon) } : i)));
+    },
+    [commit, floorPolygon],
+  );
+  useEffect(() => {
+    rotateToRef.current = rotateTo;
+    selectedRef.current = selectedId;
+  }, [rotateTo, selectedId]);
+  const rotateBy = (delta: number) => {
+    const item = itemsRef.current.find((i) => i.id === selectedId);
+    if (item) rotateTo(item.id, item.rotationDeg + delta);
   };
+  const rotate = () => rotateBy(90);
 
   const remove = () => {
     commit((prev) => prev.filter((i) => i.id !== selectedId));
@@ -614,11 +707,13 @@ export default function FurnitureLayer({
                 aiOpeningKeys={aiOpeningKeys}
                 fixtures={fixtures}
                 onDrawFixture={onDrawFixture}
-                badIds={badIds}
-                warnIds={warnIds}
+                badIds={shownBadIds}
+                warnIds={shownWarnIds}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
                 onMove={(id, x, z) => commit((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+                onRotate={rotateTo}
+                onPreview={(id, pose) => setLive(id && pose ? { id, pose } : null)}
               />
             </div>
           </div>
@@ -669,6 +764,24 @@ export default function FurnitureLayer({
           )}
         </div>
 
+        {/* 끄거나 돌리는 동안: 그 자리에서의 검사 결과를 바로 */}
+        {liveMessages && (
+          <div
+            className={`pointer-events-none absolute top-16 left-1/2 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-col items-center gap-1 rounded-xl px-3.5 py-2 text-[13px] font-medium shadow-float ${
+              liveMessages.some((v) => v.severity === 'error') ? 'bg-danger-soft text-danger' : liveMessages.length ? 'bg-warn-soft text-warn' : 'bg-ok-soft text-ok'
+            }`}
+            role="status"
+            data-testid="live-check"
+            data-state={liveMessages.some((v) => v.severity === 'error') ? 'error' : liveMessages.length ? 'warning' : 'ok'}
+          >
+            {liveMessages.length === 0 ? (
+              <span>여기는 괜찮습니다{live ? ` · ${Math.round(live.pose.rotationDeg)}°` : ''}</span>
+            ) : (
+              [...new Set(liveMessages.map((v) => v.message))].slice(0, 3).map((message) => <span key={message}>{message}</span>)
+            )}
+          </div>
+        )}
+
         {/* 고른 가구: 이름·치수, 회전, 삭제 */}
         {selected && (
           <div
@@ -688,9 +801,45 @@ export default function FurnitureLayer({
               <Icon name="focus" />
               <span className="max-sm:hidden">가구로 이동</span>
             </button>
-            <button className="btn btn-soft h-11 px-3.5 text-[13px]" onClick={rotate}>
+            {/* 회전: 15°씩, 각도 입력, 90° (평면도의 손잡이나 3D에서 Shift+끌기로는 자유롭게) */}
+            <div className="flex items-center rounded-xl bg-soft" data-testid="selection-rotation" data-deg={selected.rotationDeg}>
+              <button className="flex h-11 w-9 items-center justify-center rounded-l-xl text-ink-2 hover:bg-chip" onClick={() => rotateBy(-ROTATE_STEP)} aria-label={`왼쪽으로 ${ROTATE_STEP}° 돌리기`} title={`왼쪽으로 ${ROTATE_STEP}° (Shift+R)`} data-testid="rotate-left">
+                <Icon name="undo" />
+              </button>
+              <label className="flex items-center font-mono text-[13px]">
+                <span className="sr-only">회전 각도</span>
+                <input
+                  className="h-9 w-11 rounded-md bg-surface text-center tabular-nums outline-none focus:ring-2 focus:ring-accent"
+                  inputMode="numeric"
+                  value={angleText ?? String(selected.rotationDeg)}
+                  onFocus={(e) => {
+                    setAngleText(String(selected.rotationDeg));
+                    e.currentTarget.select();
+                  }}
+                  onChange={(e) => setAngleText(e.target.value)}
+                  onBlur={() => {
+                    const deg = angleText === null ? null : parseRotationInput(angleText);
+                    if (deg !== null && deg !== selected.rotationDeg) rotateTo(selected.id, deg);
+                    setAngleText(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') {
+                      setAngleText(null);
+                      requestAnimationFrame(() => (e.target as HTMLInputElement).blur());
+                    }
+                  }}
+                  data-testid="rotate-input"
+                />
+                <span className="pr-0.5 pl-0.5 text-mute">°</span>
+              </label>
+              <button className="flex h-11 w-9 items-center justify-center rounded-r-xl text-ink-2 hover:bg-chip" onClick={() => rotateBy(ROTATE_STEP)} aria-label={`오른쪽으로 ${ROTATE_STEP}° 돌리기`} title={`오른쪽으로 ${ROTATE_STEP}° (R)`} data-testid="rotate-right">
+                <Icon name="redo" />
+              </button>
+            </div>
+            <button className="btn btn-soft h-11 px-3 text-[13px]" onClick={rotate} aria-label="90° 회전" title="90° 회전">
               <Icon name="rotate" />
-              90° 회전
+              <span className="max-sm:hidden">90°</span>
             </button>
             <button className="btn btn-danger h-11 px-3.5 text-[13px]" onClick={remove}>
               삭제
@@ -1147,7 +1296,7 @@ export default function FurnitureLayer({
               </p>
             )}
             {aiOpen && !aiHint ? (
-              <div className="flex flex-col gap-2" data-testid="ai-form">
+              <div ref={aiFormRef} className="flex flex-col gap-2" data-testid="ai-form" data-prefilled={prefillNonce > 0}>
                 <textarea
                   className="field h-[68px] resize-none rounded-[10px] border-accent-line px-3 py-2 text-sm"
                   placeholder="바라는 점이 있으면 적어 주세요 (예: 책상은 창가에). 비워 두어도 됩니다"
