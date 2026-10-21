@@ -160,6 +160,29 @@ try {
   const freeDeg = await deg('f1');
   check('비스듬히 끌면 1° 단위 자유 각도 (90°의 배수가 아님)', freeDeg % 90 !== 0 && freeDeg > 100 && freeDeg < 130, freeDeg);
 
+  // 아주 빠르게 끌어도(누르고·움직이고·떼기가 화면을 다시 그리기 전에 한꺼번에) 돌아가고, 뗀 뒤에 손잡이가 마우스를 따라오지 않는다
+  const toward = await toScreen(desk.x, desk.z - 1); // 위쪽(-z) = 0°
+  const fromFast = await toScreen(Number(await handle.getAttribute('data-x')), Number(await handle.getAttribute('data-z')));
+  await owner.evaluate(
+    ({ a, b }) => {
+      const knob = document.querySelector('[data-testid=plan-rotate-handle] circle');
+      const svg = document.querySelector('[data-testid=floor-plan]');
+      const fire = (el, type, p, buttons) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: 1, pointerType: 'mouse', isPrimary: true, button: 0, buttons, clientX: p.x, clientY: p.y }));
+      fire(knob, 'pointerdown', a, 1);
+      fire(svg, 'pointermove', { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 1);
+      fire(svg, 'pointermove', b, 1);
+      fire(svg, 'pointerup', b, 0);
+    },
+    { a: fromFast, b: toward },
+  );
+  await owner.waitForTimeout(300);
+  const fastDeg = await deg('f1');
+  await owner.mouse.move(toward.x + 80, toward.y + 120, { steps: 5 });
+  await owner.waitForTimeout(200);
+  check('빠르게 한 번에 끌어도 돌아가고(0°), 뗀 뒤 마우스를 움직여도 그대로', fastDeg === 0 && (await deg('f1')) === 0, [fastDeg, await deg('f1')]);
+  await owner.getByTestId('rotate-input').fill(String(freeDeg));
+  await owner.getByTestId('rotate-input').press('Enter');
+
   // 3) 끄는 동안 검사: 책상을 침대 위로 끄는 동안 빨간 띠, 놓으면 그대로 문제로 남음
   const target = await toScreen(BED.x, BED.z);
   const box = await planItem('f1').boundingBox();
