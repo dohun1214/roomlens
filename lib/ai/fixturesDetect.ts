@@ -115,6 +115,19 @@ export function topViewPlan(polygon: Point2[]): TopTile[] {
   return tiles;
 }
 
+/** 방 전체를 한 장에 담는 칸 (방 분석에서 가구 배치를 한눈에 보여 줄 때). 방이 크면 가구가 작게 보인다 */
+export function wholeRoomTile(polygon: Point2[]): TopTile | null {
+  if (polygon.length < 3) return null;
+  const rotationDeg = fixtureRotation(polygon);
+  const { right, down } = tileAxes(rotationDeg);
+  const as = polygon.map((p) => dot(p, right));
+  const bs = polygon.map((p) => dot(p, down));
+  const [a0, a1] = [Math.min(...as) - MARGIN, Math.max(...as) + MARGIN];
+  const [b0, b1] = [Math.min(...bs) - MARGIN, Math.max(...bs) + MARGIN];
+  const [ca, cb] = [(a0 + a1) / 2, (b0 + b1) / 2];
+  return { center: [round3(right[0] * ca + down[0] * cb), round3(right[1] * ca + down[1] * cb)], size: round3(Math.max(a1 - a0, b1 - b0)), rotationDeg };
+}
+
 /** 그림 축(가로 a, 세로 b) 위의 사각형 */
 type Rect = { a0: number; a1: number; b0: number; b1: number };
 type Found = Rect & {

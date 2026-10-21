@@ -7,6 +7,10 @@ import { RoomReport } from '@/lib/ai/schemas';
 import { finishAiCall, startAiCall } from '@/lib/ai/usage';
 import { apiError, badRequest, notFound, readJson, unauthenticated } from '@/lib/api/http';
 import { firstIssueMessage, RoomId } from '@/lib/rooms/schemas';
+import { describeRoomShape } from '@/lib/ai/roomSummary';
+import { parseSavedCalibration } from '@/lib/rooms/calibration';
+import { fixtureObstacles, parseFixtures } from '@/lib/rooms/fixtures';
+import { parseOpenings } from '@/lib/rooms/openings';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
@@ -16,7 +20,7 @@ export const maxDuration = 120;
 
 /**
  * 방 분석. 방 주인이 보낸 그림(3D 화면 캡처, 사진)을 Gemini에 보내 옵션·수납·채광·상태 리포트를 받는다.
- * 그림은 저장하지 않고 분석에만 쓴다. 리포트는 방마다 가장 최근 것 하나만 남긴다.
+ * 보정한 방이면 평면도로 만든 방 정보도 함께 보낸다. 그림은 저장하지 않고 분석에만 쓴다. 리포트는 방마다 가장 최근 것 하나만 남긴다.
  * 방 주인만, 한 사람당 하루 10회(배치 추천과 합쳐서).
  */
 export async function POST(request: Request, { params }: Context) {
@@ -32,10 +36,20 @@ export async function POST(request: Request, { params }: Context) {
   if (totalBase64(images) > MAX_TOTAL_BASE64) return apiError(413, 'TOO_LARGE', '그림이 너무 큽니다. 장수를 줄여 주세요.');
 
   const supabase = await createClient();
-  const { data: room, error } = await supabase.from('rooms').select('id, owner_id, status').eq('id', id.data).maybeSingle();
+  const { data: room, error } = await supabase.from('rooms').select('id, owner_id, status, transform, floor_polygon, openings, fixtures').eq('id', id.data).maybeSingle();
   if (error) return apiError(500, 'DB_ERROR', '방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
   // 리포트는 방에 붙는 것이라 방 주인만 만들 수 있다
   if (!room || room.owner_id !== user.id || room.status !== 'ready') return notFound();
+
+  // 보정한 방이면 평면도(벽 길이·문·창문·원래 가구)를 함께 보낸다: 그림만으로는 알 수 없는 크기와 창문 자리
+  const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
+  const roomInfo = calibration
+    ? describeRoomShape(
+        calibration.floorPolygon,
+        parseOpenings(room.openings, calibration.floorPolygon),
+        fixtureObstacles(parseFixtures(room.fixtures, calibration.floorPolygon)),
+      ).join('\n')
+    : '';
 
   const call = await startAiCall(user.id, room.id, 'analysis', GEMINI_MODEL);
   if (!call.ok) {
@@ -48,7 +62,7 @@ export async function POST(request: Request, { params }: Context) {
   try {
     generated = await generateJson(RoomReport, {
       system: ANALYSIS_SYSTEM_PROMPT,
-      parts: [...images.map((image) => ({ inlineData: { mimeType: 'image/jpeg', data: image.data } })), { text: analysisUserPrompt(images.map((image) => image.source)) }],
+      parts: [...images.map((image) => ({ inlineData: { mimeType: 'image/jpeg', data: image.data } })), { text: analysisUserPrompt(images.map((image) => image.source), roomInfo) }],
       timeoutMs: 90_000,
     });
   } catch (err) {
