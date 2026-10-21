@@ -6,7 +6,8 @@ import { dragPlacement, gridLines, planViewBox, pointsAttr, wallLabels } from '@
 import type { PlacedItem } from '@/lib/layout/saved';
 import { openingSegment, type Opening } from '@/lib/rooms/openings';
 import { MIN_FIXTURE_SIZE, type Fixture } from '@/lib/rooms/fixtures';
-import { footprintCorners, snapToGrid, type Point2 } from '@/lib/three/floorDrag';
+import { footprintCorners, snapToGrid, type Footprint, type Point2 } from '@/lib/three/floorDrag';
+import { ROTATE_STEP, rotationTowards, snapRotation } from '@/lib/layout/rotation';
 import { furnitureTone } from '@/lib/layout/furnitureLook';
 
 /** 이 거리(px)보다 적게 움직이면 끌기가 아니라 선택으로 본다 */
@@ -19,13 +20,20 @@ const MIN_LABELED_WALL = 0.45;
 type Drag = {
   id: string;
   pointerId: number;
+  /** move: 끌어 옮기기, rotate: 회전 손잡이를 끌어 돌리기 */
+  mode: 'move' | 'rotate';
   grab: Point2;
   startX: number;
   startY: number;
   moved: boolean;
   x: number;
   z: number;
+  rotationDeg: number;
 };
+
+/** 회전 손잡이: 가구 뒤쪽 가장자리에서 이만큼 떨어진 곳 (m)과 크기 */
+const HANDLE_GAP = 0.32;
+const HANDLE_RADIUS = 0.11;
 
 /** 원래 가구 사각형을 그리는 중: 누른 점과 지금 점 (5cm 격자) */
 type Sketch = { pointerId: number; a: Point2; b: Point2 };
@@ -47,6 +55,8 @@ export default function FloorPlan({
   selectedId,
   onSelect,
   onMove,
+  onRotate,
+  onPreview,
 }: {
   floorPolygon: Point2[];
   items: PlacedItem[];
@@ -65,6 +75,10 @@ export default function FloorPlan({
   onSelect: (id: string | null) => void;
   /** 끌기를 마쳤을 때의 새 위치 */
   onMove: (id: string, x: number, z: number) => void;
+  /** 회전 손잡이를 놓았을 때의 새 각도 */
+  onRotate?: (id: string, rotationDeg: number) => void;
+  /** 끄는 동안의 자리 (바로 검사해 보여 주려고). 끝나면 null */
+  onPreview?: (id: string | null, pose: Footprint | null) => void;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<Drag | null>(null);
@@ -95,13 +109,22 @@ export default function FloorPlan({
     setDrag({
       id: item.id,
       pointerId: e.pointerId,
+      mode: 'move',
       grab: [item.x - point[0], item.z - point[1]],
       startX: e.clientX,
       startY: e.clientY,
       moved: false,
       x: item.x,
       z: item.z,
+      rotationDeg: item.rotationDeg,
     });
+  };
+
+  const onHandleDown = (e: ReactPointerEvent<SVGElement>, item: PlacedItem) => {
+    if (e.button !== 0 || !onRotate) return;
+    e.stopPropagation();
+    svgRef.current?.setPointerCapture(e.pointerId);
+    setDrag({ id: item.id, pointerId: e.pointerId, mode: 'rotate', grab: [0, 0], startX: e.clientX, startY: e.clientY, moved: false, x: item.x, z: item.z, rotationDeg: item.rotationDeg });
   };
 
   const onBackgroundDown = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -129,8 +152,16 @@ export default function FloorPlan({
     if (!item || !point) return;
     const moved = drag.moved || Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > TAP_MOVE_PX;
     if (!moved) return;
+    if (drag.mode === 'rotate') {
+      // Shift를 누르면 15°씩
+      const rotationDeg = snapRotation(rotationTowards(point[0] - item.x, point[1] - item.z), e.shiftKey ? ROTATE_STEP : undefined);
+      setDrag({ ...drag, moved, rotationDeg });
+      onPreview?.(item.id, { x: item.x, z: item.z, w: item.w, d: item.d, rotationDeg });
+      return;
+    }
     const placed = dragPlacement(item, drag.grab, point, floorPolygon);
     setDrag({ ...drag, moved, x: placed.x, z: placed.z });
+    onPreview?.(item.id, { x: placed.x, z: placed.z, w: item.w, d: item.d, rotationDeg: item.rotationDeg });
   };
 
   const onUp = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -144,7 +175,9 @@ export default function FloorPlan({
     }
     if (!drag || e.pointerId !== drag.pointerId) return;
     if (svgRef.current?.hasPointerCapture(e.pointerId)) svgRef.current.releasePointerCapture(e.pointerId);
-    if (drag.moved) onMove(drag.id, drag.x, drag.z);
+    if (drag.moved && drag.mode === 'move') onMove(drag.id, drag.x, drag.z);
+    if (drag.moved && drag.mode === 'rotate') onRotate?.(drag.id, drag.rotationDeg);
+    if (drag.moved) onPreview?.(null, null);
     setDrag(null);
   };
 
@@ -288,7 +321,7 @@ export default function FloorPlan({
 
       {/* 가구 */}
       {items.map((item) => {
-        const shown = drag && drag.id === item.id ? { ...item, x: drag.x, z: drag.z } : item;
+        const shown = drag && drag.id === item.id ? { ...item, x: drag.x, z: drag.z, rotationDeg: drag.rotationDeg } : item;
         const state = badIds.has(item.id) ? 'error' : warnIds.has(item.id) ? 'warning' : 'ok';
         const selected = item.id === selectedId;
         const corners = footprintCorners(shown);
@@ -326,6 +359,36 @@ export default function FloorPlan({
             <text x={shown.x} y={shown.z} fontSize={0.15} fontWeight={600} fill="#141a2a" textAnchor="middle" dominantBaseline="central" pointerEvents="none">
               {item.name}
             </text>
+            {/* 고른 가구의 회전 손잡이 (뒤쪽): 끌면 그 방향으로 돌아간다 */}
+            {selected && onRotate && !drawing && (() => {
+              const r = (shown.rotationDeg * Math.PI) / 180;
+              const back: Point2 = [-Math.sin(r), -Math.cos(r)];
+              const edge: Point2 = [shown.x + (back[0] * shown.d) / 2, shown.z + (back[1] * shown.d) / 2];
+              const knob: Point2 = [edge[0] + back[0] * HANDLE_GAP, edge[1] + back[1] * HANDLE_GAP];
+              return (
+                <g data-testid="plan-rotate-handle" data-deg={shown.rotationDeg} data-x={knob[0]} data-z={knob[1]}>
+                  <line x1={edge[0]} y1={edge[1]} x2={knob[0]} y2={knob[1]} stroke="#3350e8" strokeWidth={2} pointerEvents="none" {...stroke} />
+                  <circle
+                    cx={knob[0]}
+                    cy={knob[1]}
+                    r={HANDLE_RADIUS}
+                    fill="#ffffff"
+                    stroke="#3350e8"
+                    strokeWidth={2.5}
+                    className="cursor-grab"
+                    {...stroke}
+                    onPointerDown={(e) => onHandleDown(e, item)}
+                  >
+                    <title>끌어서 돌리기 (Shift: 15°씩)</title>
+                  </circle>
+                  {drag?.mode === 'rotate' && drag.id === item.id && (
+                    <text x={knob[0]} y={knob[1] - HANDLE_RADIUS * 2.2} fontSize={0.16} fontWeight={700} fill="#3350e8" textAnchor="middle" pointerEvents="none">
+                      {shown.rotationDeg}°
+                    </text>
+                  )}
+                </g>
+              );
+            })()}
           </g>
         );
       })}
