@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CompleteUploadInput, CreateRoomInput, firstIssueMessage, RoomId, RoomInfoInput, UploadUrlInput } from '@/lib/rooms/schemas';
+import { CompleteUploadInput, CreateRoomInput, firstIssueMessage, isRoomLimitExempt, RoomId, RoomInfoInput, UploadUrlInput } from '@/lib/rooms/schemas';
 import { MAX_SPLAT_BYTES } from '@/lib/upload/splatFile';
 
 const roomId = '3f0c1a52-1b2c-4d3e-8f90-123456789abc';
@@ -93,5 +93,16 @@ describe('RoomInfoInput', () => {
     expect(RoomInfoInput.safeParse({ title: '   ', description: '' }).success).toBe(false);
     expect(RoomInfoInput.safeParse({ title: '가'.repeat(61), description: '' }).success).toBe(false);
     expect(RoomInfoInput.safeParse({ title: '방', description: '가'.repeat(501) }).success).toBe(false);
+  });
+});
+
+describe('isRoomLimitExempt', () => {
+  it('환경변수에 적힌 계정만 방 개수 제한이 없다 (쉼표·공백·대소문자 무시)', () => {
+    const ids = ' 11111111-aaaa-4bbb-8ccc-000000000001 ,22222222-AAAA-4bbb-8ccc-000000000002,';
+    expect(isRoomLimitExempt('11111111-aaaa-4bbb-8ccc-000000000001', ids)).toBe(true);
+    expect(isRoomLimitExempt('22222222-aaaa-4bbb-8ccc-000000000002', ids)).toBe(true);
+    expect(isRoomLimitExempt('33333333-aaaa-4bbb-8ccc-000000000003', ids)).toBe(false);
+    expect(isRoomLimitExempt('11111111-aaaa-4bbb-8ccc-000000000001', undefined)).toBe(false);
+    expect(isRoomLimitExempt('11111111-aaaa-4bbb-8ccc-000000000001', '')).toBe(false);
   });
 });
