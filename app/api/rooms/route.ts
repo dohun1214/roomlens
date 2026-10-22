@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { apiError, badRequest, readJson, unauthenticated } from '@/lib/api/http';
-import { CreateRoomInput, firstIssueMessage, MAX_ROOMS_PER_USER } from '@/lib/rooms/schemas';
+import { CreateRoomInput, firstIssueMessage, isRoomLimitExempt, MAX_ROOMS_PER_USER } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
 /**
@@ -16,13 +16,16 @@ export async function POST(request: Request) {
   const { title, description, source, credit } = parsed.data;
 
   const supabase = await createClient();
-  const { count, error: countError } = await supabase
-    .from('rooms')
-    .select('id', { count: 'exact', head: true })
-    .eq('owner_id', user.id);
-  if (countError) return apiError(500, 'DB_ERROR', '방 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.');
-  if ((count ?? 0) >= MAX_ROOMS_PER_USER) {
-    return apiError(409, 'ROOM_LIMIT', `방은 ${MAX_ROOMS_PER_USER}개까지 만들 수 있습니다. 쓰지 않는 방을 지운 뒤 다시 시도해 주세요.`);
+  // 방 개수 제한 (환경변수로 정한 계정은 제한 없음)
+  if (!isRoomLimitExempt(user.id, process.env.UNLIMITED_ROOM_USER_IDS)) {
+    const { count, error: countError } = await supabase
+      .from('rooms')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_id', user.id);
+    if (countError) return apiError(500, 'DB_ERROR', '방 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.');
+    if ((count ?? 0) >= MAX_ROOMS_PER_USER) {
+      return apiError(409, 'ROOM_LIMIT', `방은 ${MAX_ROOMS_PER_USER}개까지 만들 수 있습니다. 쓰지 않는 방을 지운 뒤 다시 시도해 주세요.`);
+    }
   }
 
   const { data: room, error } = await supabase
