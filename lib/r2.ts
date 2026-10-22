@@ -1,5 +1,6 @@
 import 'server-only';
 import {
+  CopyObjectCommand,
   DeleteObjectCommand,
   DeleteObjectsCommand,
   GetObjectCommand,
@@ -85,6 +86,11 @@ export async function readObjectHead(key: string, bytes: number): Promise<Uint8A
 /** 서버에서 바로 올린다 (대표 사진처럼 작은 파일) */
 export async function putObject(key: string, body: Uint8Array, contentType: string): Promise<void> {
   await r2().send(new PutObjectCommand({ Bucket: bucket(), Key: key, Body: body, ContentType: contentType }));
+}
+
+/** 같은 버킷 안에서 복사한다 (공유받은 배치의 3D 스캔 가구를 내 것으로 저장할 때) */
+export async function copyObject(from: string, to: string): Promise<void> {
+  await r2().send(new CopyObjectCommand({ Bucket: bucket(), CopySource: `${bucket()}/${from.split('/').map(encodeURIComponent).join('/')}`, Key: to }));
 }
 
 export async function deleteObject(key: string): Promise<void> {
