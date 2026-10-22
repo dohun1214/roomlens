@@ -45,6 +45,7 @@ import FurnitureThumb from '@/components/ui/FurnitureThumb';
 import Icon from '@/components/ui/Icon';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
 import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
+import ScanFurnitureForm from './ScanFurnitureForm';
 import FloorPlan from './FloorPlan';
 import LayoutShareBox from './LayoutShareBox';
 
@@ -105,6 +106,7 @@ export default function FurnitureLayer({
   userFurniture = NO_FURNITURE,
   onCreateFurniture,
   onDeleteFurniture,
+  onCreateScanFurniture,
   initialItems,
   onSave,
   loginHint = false,
@@ -147,6 +149,8 @@ export default function FurnitureLayer({
   onCreateFurniture?: (value: UserFurnitureValue) => Promise<CatalogItem | null>;
   /** 내 가구를 지운다. 지웠으면 true */
   onDeleteFurniture?: (id: string) => Promise<boolean>;
+  /** 3D 스캔(다듬은 GLB)으로 내 가구를 만든다 */
+  onCreateScanFurniture?: (glb: Blob, value: UserFurnitureValue) => Promise<{ ok: true; item: CatalogItem } | { ok: false; message: string }>;
   /** 저장된 배치. 처음 한 번만 읽는다 */
   initialItems?: SavedItem[];
   /** 배치를 저장한다. 성공하면 true */
@@ -187,6 +191,7 @@ export default function FurnitureLayer({
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
   const [mineFormOpen, setMineFormOpen] = useState(false);
   const [mineForm, setMineForm] = useState<UserFurnitureForm>(EMPTY_MINE_FORM);
+  const [scanOpen, setScanOpen] = useState(false);
   const [mineMessage, setMineMessage] = useState<string | null>(null);
   const [mineBusy, setMineBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -1098,7 +1103,14 @@ export default function FurnitureLayer({
                       >
                         <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
                         <span className="flex min-w-0 flex-col">
-                          <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                          <span className="flex min-w-0 items-center gap-1">
+                            <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                            {entry.modelUrl && (
+                              <span className="shrink-0 rounded bg-accent-soft px-1 font-mono text-[10px] font-semibold text-accent-strong" data-testid="user-furniture-3d">
+                                3D
+                              </span>
+                            )}
+                          </span>
                           <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
                         </span>
                       </button>
@@ -1161,12 +1173,31 @@ export default function FurnitureLayer({
                     </button>
                   </div>
                 </div>
+              ) : scanOpen && onCreateScanFurniture ? (
+                <ScanFurnitureForm
+                  onCreate={async (glb, value) => {
+                    const result = await onCreateScanFurniture(glb, value);
+                    if (!result.ok) return result;
+                    setMine((prev) => [...prev, result.item]);
+                    setMineMessage(null);
+                    return { ok: true };
+                  }}
+                  onClose={() => setScanOpen(false)}
+                />
               ) : (
                 mine.length < MAX_USER_FURNITURE && (
-                  <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
-                    <Icon name="plus" />
-                    직접 만들기 (이름·치수)
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
+                      <Icon name="plus" />
+                      직접 만들기 (이름·치수)
+                    </button>
+                    {onCreateScanFurniture && (
+                      <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setScanOpen(true)} data-testid="scan-open">
+                        <Icon name="plus" />
+                        3D 스캔 올리기 (GLB)
+                      </button>
+                    )}
+                  </div>
                 )
               )}
               {mineMessage && (

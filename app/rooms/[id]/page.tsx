@@ -21,6 +21,7 @@ import { parseOpenings } from '@/lib/rooms/openings';
 import { parseFixtures } from '@/lib/rooms/fixtures';
 import { RoomId } from '@/lib/rooms/schemas';
 import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, thumbnailSrc } from '@/lib/rooms/thumbnail';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 
 /** 공유 링크 미리보기: 방 이름·설명과 대표 사진. 볼 수 없는 방은 이름을 드러내지 않는다 */
@@ -79,7 +80,8 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
       .order('sort_order'),
     // 이 방에 내가 저장해 둔 가구 배치들 (방 주인이 아니어도 공개 방이면 자기 배치를 가진다)
     ready && user ? loadMyLayouts(supabase, room.id, user.id) : undefined,
-    ready && user ? loadUserFurniture(supabase, user.id) : undefined,
+    // 3D 스캔으로 만든 내 가구는 모델 읽기 주소도 만든다
+    ready && user ? loadUserFurniture(supabase, user.id, presignGet) : undefined,
     // 오늘 남은 AI 호출 횟수
     ready && user ? remainingToday(user.id) : null,
     // 가장 최근의 방 분석 리포트 (방을 볼 수 있으면 누구나 읽을 수 있다)
@@ -90,7 +92,22 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
   const report = reportRow ? parseReport(reportRow.report) : null;
   // 공유 링크: 내 배치면 그 배치로 시작하고, 남의 배치면 볼 수 있을 때(공개 방의 공개 배치) 그 배치를 보여 준다
   const mineShared = sharedId ? myLayouts?.find((l) => l.id === sharedId) : undefined;
-  const sharedLayout = ready && sharedId && !mineShared ? await loadSharedLayout(supabase, room.id, sharedId) : null;
+  const sharedBase = ready && sharedId && !mineShared ? await loadSharedLayout(supabase, room.id, sharedId) : null;
+  // 공유 배치에 쓰인 남의 3D 스캔 가구: 위에서 볼 수 있다고 확인된 가구만 서버 권한으로 모델 열쇠를 읽어 주소를 만든다
+  // (비로그인은 model_key 열을 읽을 수 없으므로)
+  const sharedLayout = sharedBase?.furniture.length
+    ? await (async () => {
+        const { data: keys } = await createAdminClient()
+          .from('user_furniture')
+          .select('id, model_key')
+          .in(
+            'id',
+            sharedBase.furniture.map((f) => f.id),
+          );
+        const urls = new Map(await Promise.all((keys ?? []).filter((k) => k.model_key).map(async (k) => [k.id, await presignGet(k.model_key as string)] as const)));
+        return { ...sharedBase, furniture: sharedBase.furniture.map((f) => (urls.has(f.id) ? { ...f, modelUrl: urls.get(f.id) } : f)) };
+      })()
+    : sharedBase;
   const startLayouts = mineShared && myLayouts ? [mineShared, ...myLayouts.filter((l) => l.id !== sharedId)] : myLayouts;
   // 카탈로그를 못 읽으면 뷰어가 기본 카탈로그를 쓴다
   // 모델 파일도 비공개 버킷에 있어 가구마다 읽기 주소를 만든다 (서명은 서버 안에서 계산하므로 요청이 나가지 않는다)

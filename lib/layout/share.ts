@@ -89,6 +89,6 @@ export async function loadSharedLayout(supabase: Client, roomId: string, layoutI
     items,
     ownerId: row.owner_id,
     ownerName: profile?.nickname ?? '알 수 없음',
-    furniture: (furnitureRows ?? []).map(fromUserFurnitureRow),
+    furniture: (furnitureRows ?? []).map((r) => fromUserFurnitureRow(r)),
   };
 }

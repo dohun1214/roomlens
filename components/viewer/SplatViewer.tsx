@@ -19,7 +19,7 @@ import type { SavedItem } from '@/lib/layout/saved';
 import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/lib/layout/store';
 import { remapFurniture, setLayoutPublic, sharedCopyName, usedBorrowed, type SharedLayout } from '@/lib/layout/share';
 import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
-import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
+import { copyScanFurniture, createScanFurniture, createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
 import CommentsPanel from './CommentsPanel';
 import { ToolRail, type Slots, type ToolId } from './workspace';
@@ -715,9 +715,15 @@ export default function SplatViewer({
     return created;
   }, []);
   const deleteFurniture = useCallback(async (id: string) => {
-    const ok = await deleteUserFurniture(createClient(), id);
+    const ok = await deleteUserFurniture(id);
     if (ok) setMyFurniture((prev) => prev?.filter((f) => f.id !== id));
     return ok;
+  }, []);
+  // 3D 스캔(GLB)으로 내 가구 만들기 (모델은 서버가 R2에 올린다)
+  const createScan = useCallback(async (glb: Blob, value: UserFurnitureValue) => {
+    const result = await createScanFurniture(glb, value);
+    if (result.ok) setMyFurniture((prev) => [...(prev ?? []), result.item]);
+    return result;
   }, []);
 
   // 남이 공유한 배치를 내 배치로 저장한다. 그 사람의 가구는 내 가구로 사본을 만들어 바꿔 넣는다
@@ -729,7 +735,8 @@ export default function SplatViewer({
       const copies = new Map<string, string>();
       const made: CatalogItem[] = [];
       for (const f of borrowed) {
-        const copy = await createUserFurniture(supabase, { name: f.nameKo, w: f.w, d: f.d, h: f.h });
+        // 3D 스캔 가구는 모델 파일까지 서버가 복사한다
+        const copy = f.modelUrl ? await copyScanFurniture(f.id) : await createUserFurniture(supabase, { name: f.nameKo, w: f.w, d: f.d, h: f.h });
         if (!copy) return false;
         copies.set(f.id, copy.id);
         made.push(copy);
@@ -1199,6 +1206,7 @@ export default function SplatViewer({
           userFurniture={myFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
+          onCreateScanFurniture={roomId && signedIn ? createScan : undefined}
           initialItems={viewingShared && sharedLayout ? sharedLayout.items : currentLayout?.items}
           borrowedFurniture={viewingShared && sharedLayout ? sharedLayout.furniture : undefined}
           sharedFrom={viewingShared && sharedLayout ? { ownerName: sharedLayout.ownerName, layoutName: sharedLayout.name } : null}
