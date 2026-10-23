@@ -2,6 +2,7 @@
 // 브라우저 전용 (canvas).
 import type * as THREE from 'three';
 import type { CaptureView } from '@/lib/ai/analysis';
+import { centerCrop } from '@/lib/rooms/thumbnail';
 
 /** 뷰어의 three.js 객체 가운데 캡처에 필요한 것 */
 export type CaptureEngine = {
@@ -18,7 +19,7 @@ export type CaptureEngine = {
  * ms만큼 기다린다. 탭이 뒤에 있으면 브라우저가 setTimeout을 1초~1분에 한 번으로 늦추므로
  * (그대로 두면 캡처 한 장에 몇 분이 걸린다), 그때는 늦춰지지 않는 MessageChannel로 시간을 잰다.
  */
-function wait(ms: number): Promise<void> {
+export function wait(ms: number): Promise<void> {
   if (typeof document === 'undefined' || !document.hidden) return new Promise((resolve) => setTimeout(resolve, ms));
   return new Promise((resolve) => {
     const until = performance.now() + ms;
@@ -36,7 +37,7 @@ function wait(ms: number): Promise<void> {
 }
 
 /** 캡처한 JPEG의 base64가 이보다 짧으면 "거의 빈 그림"으로 본다 (한 가지 색뿐인 1024px 그림이 약 4~8KB) */
-const BLANK_BASE64 = 12_000;
+export const BLANK_BASE64 = 12_000;
 
 /** canvas를 긴 변 longSide 이하의 JPEG로 줄여 base64(머리말 없이)로 돌려준다 */
 export function canvasToJpegBase64(source: HTMLCanvasElement | ImageBitmap, longSide: number, quality: number): string {
@@ -122,4 +123,52 @@ export async function photoToJpegBase64(file: File, longSide: number, maxLength:
   } finally {
     bitmap.close();
   }
+}
+
+/**
+ * 지금 보고 있는 화면을 방 대표 사진(16:10 JPEG)으로 찍는다. 가상 가구·표시는 한 번 그리는 동안만 숨기고 방만 남긴다.
+ * 카메라·조작은 건드리지 않고 그 자리에서 바로 찍으므로, 쓰는 사람이 화면을 움직이는 중이어도 방해하지 않는다.
+ * 그림 가운데를 16:10으로 잘라 width×height로 줄인다. 거의 빈 그림(아직 3D가 안 그려짐)이면 null
+ */
+export async function captureThumbnail(
+  engine: CaptureEngine,
+  size: { width: number; height: number; quality?: number },
+): Promise<Blob | null> {
+  const { renderer, scene, camera } = engine;
+  const hidden = scene.children.filter((child) => child !== engine.roomGroup && child !== engine.spark && child.visible && !(child as THREE.Light).isLight);
+  const source = renderer.domElement;
+  const crop = centerCrop(source.width, source.height, size.width / size.height);
+  if (crop.w === 0) return null;
+  const canvas = document.createElement('canvas');
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const context = canvas.getContext('2d');
+  if (!context) return null;
+  for (const child of hidden) child.visible = false;
+  try {
+    // 그린 직후 같은 흐름에서 읽어야 내용이 남아 있다
+    renderer.render(scene, camera);
+    context.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, 0, size.width, size.height);
+  } finally {
+    for (const child of hidden) child.visible = true;
+    renderer.render(scene, camera);
+  }
+  // 한 가지 색에 가까우면(아직 그려지지 않음) 쓰지 않는다: 작은 그림으로 줄여 밝기가 고른지 본다
+  const probe = document.createElement('canvas');
+  probe.width = 16;
+  probe.height = 10;
+  const probeContext = probe.getContext('2d');
+  if (probeContext) {
+    probeContext.drawImage(canvas, 0, 0, 16, 10);
+    const pixels = probeContext.getImageData(0, 0, 16, 10).data;
+    let min = 255;
+    let max = 0;
+    for (let i = 0; i < pixels.length; i += 4) {
+      const v = (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+      min = Math.min(min, v);
+      max = Math.max(max, v);
+    }
+    if (max - min < 12) return null;
+  }
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', size.quality ?? 0.85));
 }

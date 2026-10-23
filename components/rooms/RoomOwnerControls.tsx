@@ -65,7 +65,7 @@ export default function RoomOwnerControls({
 
   return (
     <div className="flex items-center gap-2 text-[13px]" data-testid="room-owner-controls">
-      <span className="pill bg-chip py-1 text-sub" data-testid="room-visibility">
+      <span className="pill bg-chip py-1 text-sub max-sm:hidden" data-testid="room-visibility">
         <Icon name={isPublic ? 'globe' : 'lock'} size={12} />
         {isPublic ? '공개' : '비공개'}
       </span>
@@ -77,7 +77,9 @@ export default function RoomOwnerControls({
           onClick={() => (isPublic ? setVisibility(false) : setPending('publish'))}
           data-testid="room-visibility-toggle"
         >
-          {isPublic ? '비공개로 바꾸기' : '공개하기'}
+          {/* 폰에서는 방 이름 자리를 남기려고 짧게 */}
+          <span className="sm:hidden">{isPublic ? '비공개로' : '공개'}</span>
+          <span className="max-sm:hidden">{isPublic ? '비공개로 바꾸기' : '공개하기'}</span>
         </button>
       )}
       <button type="button" className="btn btn-soft h-[38px] px-3 text-sub hover:text-danger" disabled={busy || pending !== null} onClick={() => setPending('delete')} data-testid="room-delete">

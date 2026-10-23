@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { categoryColor, DEFAULT_CATALOG } from '@/lib/layout/catalog';
 import { parseSavedItems, placeCatalogItem, restoreItems, toSavedItems } from '@/lib/layout/saved';
 import {
+  checkUserFurnitureValue,
   createUserFurniture,
   deleteUserFurniture,
   fromUserFurnitureRow,
@@ -132,11 +133,28 @@ describe('읽기 · 만들기 · 지우기', () => {
     expect(await createUserFurniture(client, { name: '수납장', w: 0.8, d: 0.4, h: 1.2 })).toBeNull();
   });
 
-  it('지우기: 지워진 행이 있어야 true', async () => {
-    const ok = fakeClient({ data: { id: 'u-1' }, error: null });
-    expect(await deleteUserFurniture(ok.client, 'u-1')).toBe(true);
-    expect(argsOf(ok.calls, 'eq')).toEqual([['id', 'u-1']]);
-    const none = fakeClient({ data: null, error: null });
-    expect(await deleteUserFurniture(none.client, 'u-1')).toBe(false);
+  it('3D 스캔 가구는 모델 열쇠로 읽기 주소를 만든다 (서버에서 presign을 넘길 때만)', async () => {
+    const { client } = fakeClient({ data: [ROW, { ...ROW, id: 'u-2', model_key: 'furniture/user/user-1/u-2.glb' }], error: null });
+    const list = await loadUserFurniture(client, 'user-1', async (key) => `https://signed/${key}`);
+    expect(list.map((f) => f.modelUrl ?? null)).toEqual([null, 'https://signed/furniture/user/user-1/u-2.glb']);
+  });
+
+  it('지우기: 서버(/api/furniture/[id])를 거쳐 모델 파일도 지운다', async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true }) as Response);
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await deleteUserFurniture('u-1')).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/furniture/u-1', { method: 'DELETE' });
+    fetchMock.mockImplementationOnce(async () => ({ ok: false }) as Response);
+    expect(await deleteUserFurniture('u-1')).toBe(false);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('checkUserFurnitureValue', () => {
+  it('m로 받은 값을 폼과 같은 규칙으로 검사하고 1cm 단위로 맞춘다', () => {
+    expect(checkUserFurnitureValue({ name: ' 선풍기 ', w: 0.3084, d: '0.286', h: 0.66 })).toEqual({ ok: true, value: { name: '선풍기', w: 0.31, d: 0.29, h: 0.66 } });
+    expect(checkUserFurnitureValue({ name: '선풍기', w: 0.05, d: 0.3, h: 0.6 })).toMatchObject({ ok: false });
+    expect(checkUserFurnitureValue({ name: '', w: 0.3, d: 0.3, h: 0.6 })).toMatchObject({ ok: false });
+    expect(checkUserFurnitureValue({ name: '선풍기', w: 'abc', d: 0.3, h: 0.6 })).toMatchObject({ ok: false });
   });
 });

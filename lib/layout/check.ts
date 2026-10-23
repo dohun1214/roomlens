@@ -1,9 +1,10 @@
-// 배치 검사: 가구끼리 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
+// 배치 검사: 가구끼리 겹침, 원래 있던 가구와 겹침, 방 밖으로 나감, 문 앞을 막음, 문에서 갈 수 없음, 창문을 가림(경고), 쓰는 쪽이 막힘(경고).
 import { placeOnFloor, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import type { Opening } from '@/lib/rooms/openings';
+import type { FixtureObstacle } from '@/lib/rooms/fixtures';
 import { findBlockedAccess } from './accessSide';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, WALKWAY_WIDTH, windowZone } from './access';
-import { footprintInsideRoom, footprintsOverlap, interiorPoint } from './geometry';
+import { footprintInsideRoom, footprintsOverlap, interiorPoint, pointInPolygon } from './geometry';
 
 /**
  * h(높이, m)는 창문 가림 검사에만 쓴다. 없으면 낮은 가구로 본다.
@@ -24,8 +25,13 @@ export type Violation = {
   message: string;
 };
 
-export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, openings: Opening[] = []): Violation[] {
+/**
+ * @param fixtures 방에 원래 있던 가구 (lib/rooms/fixtures의 fixtureObstacles). 옮길 수 없는 장애물로 본다:
+ *   가구와 겹치면 문제, 통로와 쓰는 쪽을 막는다. 원래 가구 자체의 문제는 알리지 않는다
+ */
+export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, openings: Opening[] = [], fixtures: FixtureObstacle[] = []): Violation[] {
   const violations: Violation[] = [];
+  const ids = new Set(items.map((item) => item.id));
   const polygon = floorPolygon !== null && floorPolygon.length >= 3 ? floorPolygon : null;
 
   for (const item of items) {
@@ -42,9 +48,17 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
       );
     }
   }
+  for (const item of items) {
+    for (const fixture of fixtures) {
+      if (!footprintsOverlap(item, fixture)) continue;
+      violations.push({ itemId: item.id, type: 'overlap', severity: 'error', otherId: fixture.id, message: `${item.name}: ${fixture.name}와(과) 겹칩니다` });
+    }
+  }
   // 쓰는 쪽(책상·수납의 앞, 침대의 긴 변 한쪽, 식탁의 긴 변 양쪽)이 벽이나 다른 가구에 막혀 있으면 경고. 다른 문제 뒤에 붙인다
   const names = new Map(items.map((item) => [item.id, item.name]));
-  const access: Violation[] = findBlockedAccess(items, polygon).map(({ id, message }) => ({
+  const access: Violation[] = findBlockedAccess([...items, ...fixtures], polygon)
+    .filter(({ id }) => ids.has(id))
+    .map(({ id, message }) => ({
     itemId: id,
     type: 'access',
     severity: 'warning',
@@ -61,8 +75,8 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
     }
   }
 
-  // 통로: 문에서 각 가구 옆까지 60cm 폭으로 갈 수 있어야 한다
-  const unreachable = new Set(findUnreachable(items, polygon, doors) ?? []);
+  // 통로: 문에서 각 가구 옆까지 60cm 폭으로 갈 수 있어야 한다 (원래 가구도 길을 막는다)
+  const unreachable = new Set(findUnreachable([...items, ...fixtures], polygon, doors) ?? []);
   for (const item of items) {
     if (unreachable.has(item.id)) {
       violations.push({
@@ -74,9 +88,10 @@ export function checkLayout(items: LayoutItem[], floorPolygon: Point2[] | null, 
     }
   }
 
-  // 창문 가림: 키 큰 가구가 창문 바로 앞에 있으면 경고
+  // 창문 가림: 키 큰 가구가 창문 바로 앞에 있으면 경고. 스탠드 조명은 가늘어서 창문을 가리지 않는다
   const windowZones = openings.filter((o) => o.type === 'window').map((w) => windowZone(w, polygon)).filter((zone) => zone !== null);
   for (const item of items) {
+    if (item.category === 'lamp') continue;
     if ((item.h ?? 0) > TALL_FURNITURE_HEIGHT && windowZones.some((zone) => footprintsOverlap(item, zone))) {
       violations.push({ itemId: item.id, type: 'window', severity: 'warning', message: `${item.name}: 창문을 가립니다` });
     }
@@ -101,16 +116,19 @@ const SEARCH_RADIUS = 6;
  * 새 가구를 놓을 빈자리를 찾는다: 방 가운데에서 시작해 바깥으로 넓혀 가며
  * 방 안이고 다른 가구와 겹치지 않는 첫 위치. 못 찾으면 가운데(겹친 채로 두고 검사에서 알린다).
  * @param prefer 되도록 지키고 싶은 조건(예: 쓰는 쪽을 막지 않기). 이를 지키는 자리가 없으면 조건 없이 다시 찾는다
+ * @param start 방 가운데 대신 여기서부터 찾는다 (방 안일 때만)
  */
 export function findFreeSpot(
   size: Pick<Footprint, 'w' | 'd'>,
   others: Footprint[],
   floorPolygon: Point2[] | null,
   prefer?: (spot: Footprint) => boolean,
+  start?: Point2 | null,
 ): Footprint {
   const polygon = floorPolygon && floorPolygon.length >= 3 ? floorPolygon : null;
   // 사각형 방에서는 방 가운데(보정된 방은 정확히 원점), 오목한 방에서는 벽에서 가장 먼 곳
-  const center: Point2 = polygon ? interiorPoint(polygon) : [0, 0];
+  const usableStart = start && Number.isFinite(start[0]) && Number.isFinite(start[1]) && (!polygon || pointInPolygon(start, polygon)) ? start : null;
+  const center: Point2 = usableStart ?? (polygon ? interiorPoint(polygon) : [0, 0]);
   const at = (dx: number, dz: number) => placeOnFloor({ x: center[0] + dx, z: center[1] + dz, w: size.w, d: size.d, rotationDeg: 0 }, polygon);
   const fits = (f: Footprint) => (!polygon || footprintInsideRoom(f, polygon)) && others.every((o) => !footprintsOverlap(f, o));
 

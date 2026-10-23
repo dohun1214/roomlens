@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { distanceToPolygon, interiorPoint, pointInPolygon } from '@/lib/layout/geometry';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { RoomReport } from './schemas';
+import { MAX_REQUEST_LENGTH } from './roomSummary';
 
 /** 한 번에 보낼 수 있는 그림 수 (3D 화면 캡처 + 사진) */
 export const MAX_ANALYSIS_IMAGES = 10;
@@ -13,6 +14,8 @@ export const MAX_TOTAL_BASE64 = 3_800_000;
 /** 캡처·사진을 줄일 때 긴 변의 크기 (px) */
 export const CAPTURE_LONG_SIDE = 1024;
 export const PHOTO_LONG_SIDE = 1280;
+/** 방 분석에 넣는 위에서 본 그림의 한 변 (px) */
+export const ANALYSIS_TOP_PX = 1024;
 
 export const AnalyzeInput = z.object({
   images: z
@@ -20,8 +23,8 @@ export const AnalyzeInput = z.object({
       z.object({
         /** JPEG의 base64 (data: 머리말 없이) */
         data: z.string().min(100, '그림이 비어 있습니다.').max(MAX_IMAGE_BASE64, '그림이 너무 큽니다.'),
-        /** capture = 3D 화면을 캡처한 그림, photo = 사용자가 넣은 사진 */
-        source: z.enum(['capture', 'photo']),
+        /** capture = 3D 화면을 캡처한 그림, top = 3D 화면을 바로 위에서 내려다본 그림, photo = 사용자가 넣은 사진 */
+        source: z.enum(['capture', 'top', 'photo']),
       }),
     )
     .min(1, '분석할 그림이 없습니다.')
@@ -61,7 +64,31 @@ export function tidyReport(report: RoomReport, imageCount: number): RoomReport {
       description: clip(issue.description, 300),
     })),
     summary: clip(report.summary, 500),
+    layoutTips: [...new Set((report.layoutTips ?? []).map((tip) => clip(tip, 80)).filter(Boolean))].slice(0, 4),
   };
+}
+
+/**
+ * 리포트를 AI 배치 추천의 요청 글로 바꾼다 (배치 추천의 요청 글 한도 안으로).
+ * 배치 조언이 있으면 그것을, 없으면(예전 리포트) 채광·수납으로 만든다.
+ */
+export function requestFromReport(report: RoomReport, maxLength = MAX_REQUEST_LENGTH): string {
+  const tips = report.layoutTips ?? [];
+  const parts =
+    tips.length > 0
+      ? tips
+      : [
+          report.naturalLight.level === 'high' ? '책상은 밝은 창가 쪽에' : report.naturalLight.level === 'low' ? '창 앞은 비워 빛을 막지 않게' : null,
+          report.storage.level === 'low' ? '수납이 적으니 수납 가구를 벽에 붙여서' : null,
+          '문 앞과 통로는 넓게',
+        ].filter((v): v is string => v !== null);
+  let text = '';
+  for (const part of parts) {
+    const next = text ? `${text}, ${part}` : part;
+    if (next.length > maxLength) break;
+    text = next;
+  }
+  return text || parts[0]?.slice(0, maxLength) || '';
 }
 
 /** DB에서 읽은 리포트를 검증한다. 모양이 다르면 null */

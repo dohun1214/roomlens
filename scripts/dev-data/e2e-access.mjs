@@ -84,13 +84,14 @@ const WINDOW = { type: 'window', wallIndex: 2, from: 1, to: 2.2, widthM: 1.2 };
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const piece = (id, furnitureRef, x, z, rotationDeg = 0) => ({ id, furnitureRef, kind: 'catalog', x, z, rotationDeg });
 // 방 4 × 3 m. 문은 아래쪽 벽의 왼쪽(x -1.8 ~ -0.9), 창문은 위쪽 벽(x -0.2 ~ 1)
-const GOOD = [piece('f1', 'bed-single', 1.5, 0.5), piece('f2', 'desk', 0.3, -1.2)];
+const GOOD = [piece('f1', 'bed-single', 1.5, 0.4), piece('f2', 'desk', 0.3, -1.2)];
 // 위쪽 벽(z=1.5)에 붙인 옷장·서랍장은 180° 돌려 앞이 방 안쪽을 보게 한다
 const BLOCKING = [piece('f1', 'desk', -1.3, -1.2), piece('f2', 'wardrobe', 0.4, 1.2, 180), piece('f3', 'drawer', 1.5, 1.25, 180)];
 // 책상을 180° 돌려 앞이 벽을 보게 한 배치
-const FACING_WALL = [piece('f1', 'bed-single', 1.5, 0.5), piece('f2', 'desk', 0.3, -1.2, 180)];
-// 싱글 침대(1.0 × 2.0) 둘을 90° 돌려 방을 가로로 막고(벽에서 벽까지), 그 뒤(창문 쪽)에 의자를 둔다
-const WALLED = [piece('f1', 'bed-single', -1, 0, 90), piece('f2', 'bed-single', 1, 0, 90), piece('f3', 'chair', 0, 1.25)];
+const FACING_WALL = [piece('f1', 'bed-single', 1.5, 0.4), piece('f2', 'desk', 0.3, -1.2, 180)];
+// 90° 돌린 싱글 침대(길이 2.14 m)와 옷장(1.0)·서랍장(0.8)을 나란히 놓아 방을 가로로 막고(오른쪽 벽과 6cm), 그 뒤(창문 쪽)에 의자를 둔다.
+// 옷장·서랍장은 180° 돌려 앞이 문 쪽을 보게 한다
+const WALLED = [piece('f1', 'bed-single', -0.93, 0, 90), piece('f2', 'wardrobe', 0.64, 0, 180), piece('f3', 'drawer', 1.54, 0, 180), piece('f4', 'chair', 0, 1.2)];
 
 try {
   // 준비: 방 주인이 가입 → 방 만들고 파일 올리기 → 보정 값 넣기
@@ -149,9 +150,9 @@ try {
   const blocking = await load(BLOCKING, [DOOR, WINDOW]);
   check('저장된 문·창문으로 열어도 같은 결과', same(blocking.messages, ['책상: 문 앞을 막습니다', '옷장: 창문을 가립니다']) && blocking.errors === 1, blocking.messages);
 
-  // 4) 통로: 침대 둘이 방을 가로막으면 그 뒤의 의자는 문에서 갈 수 없다
+  // 4) 통로: 침대·옷장·서랍장이 방을 가로막으면 그 뒤의 의자는 문에서 갈 수 없다
   const walled = await load(WALLED, [DOOR, WINDOW]);
-  check('방을 가로막은 침대 뒤의 의자: "문에서 갈 수 없습니다 (통로 60cm 부족)", 침대는 괜찮음', same(walled.messages, ['의자: 문에서 갈 수 없습니다 (통로 60cm 부족)']) && walled.errors === 1, walled.messages);
+  check('방을 가로막은 가구 뒤의 의자: "문에서 갈 수 없습니다 (통로 60cm 부족)", 나머지는 괜찮음', same(walled.messages, ['의자: 문에서 갈 수 없습니다 (통로 60cm 부족)']) && walled.errors === 1, walled.messages);
   await owner.waitForTimeout(1000);
   await owner.screenshot({ path: path.join(dataDir, '_e2e', 'access-walled.png') });
   // 뒤쪽 벽에 문을 하나 더 내면 갈 수 있다
@@ -173,7 +174,7 @@ try {
   await admin.from('layouts').update({ items: [] }).eq('id', layout.id);
   await admin.from('rooms').update({ openings: [centerDoor] }).eq('id', roomId);
   await openRoom(owner, roomId);
-  await owner.getByTestId('furniture-panel').getByRole('button', { name: '+ 의자', exact: true }).click();
+  await owner.getByTestId('furniture-panel').getByRole('button', { name: '+ 의자 · 회전', exact: true }).click();
   const placed = JSON.parse(await owner.getByTestId('furniture-panel').getAttribute('data-json'))[0];
   const after = await readPanel();
   // 문 앞 구역: x -0.8 ~ 0.8, z -1.5 ~ 0.1. 방 가운데(0, 0)는 그 안이다

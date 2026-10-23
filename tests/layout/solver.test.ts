@@ -230,6 +230,35 @@ describe('배치 솔버: 자리가 없을 때', () => {
   });
 });
 
+describe('배치 솔버: 통로', () => {
+  // 3.0 × 4.0 m. 가운데를 가로막은 칸막이(원래 가구)에 동쪽 1.0 m만 트여 있고, 남쪽에 원래 침대가 있다
+  const room: SolverRoom = {
+    polygon: [
+      [-1.5, -2],
+      [1.5, -2],
+      [1.5, 2],
+      [-1.5, 2],
+    ],
+    openings: [{ type: 'door', wallIndex: 0, from: 0.1, to: 1.0, widthM: 0.9 }],
+    fixtures: [
+      { id: 'wall', name: '칸막이', x: -0.5, z: 0, w: 2.0, d: 0.2, h: 1.2, rotationDeg: 0 },
+      { id: 'bed', name: '침대', x: -0.5, z: 1.2, w: 1.6, d: 1.0, h: 0.45, rotationDeg: 0 },
+      { id: 'fridge', name: '냉장고', x: 1.2, z: -1.6, w: 0.6, d: 0.6, h: 1.8, rotationDeg: 0 },
+    ],
+  };
+  // 동쪽 벽(W2) 어디에 붙여도 트인 곳을 좁혀 침대로 가는 길을 막는 긴 책장
+  const LONG_SHELF: SolverItem = { id: 'shelf', name: '긴 책장', category: 'storage', w: 2.0, d: 0.5, h: 1.0, clearance: 0 };
+
+  it('요청한 벽에 붙이면 길이 막히면, 길을 막지 않는 자리를 찾는다', () => {
+    const result = solveLayout(room, [LONG_SHELF], [place('shelf', 'against_wall', { wallId: 'W2' })]);
+    const shelf = find(result, 'shelf');
+    expect(shelf).toBeDefined();
+    expect(Math.abs(shelf!.x - 1.25)).toBeGreaterThan(0.1);
+    const unreachable = checkLayout(result.placed, room.polygon, room.openings, room.fixtures).filter((v) => v.type === 'unreachable');
+    expect(unreachable).toEqual([]);
+  });
+});
+
 describe('배치 솔버: 의도가 이상할 때', () => {
   it('없는 가구 id는 무시하고, 의도에서 빠진 가구는 아무 벽에나 붙인다', () => {
     const result = solveLayout(ROOM, [DESK, WARDROBE], [place('ghost', 'center'), place('desk', 'against_wall', { wallId: 'W2' })]);

@@ -12,6 +12,8 @@ export type MyLayout = SavedLayout & {
   createdBy: 'user' | 'ai';
   /** AI 배치일 때: 전체 의도와 가구별 이유 */
   aiSummary: string | null;
+  /** 링크로 공개했는지 (공개 방이면 링크를 받은 사람이 볼 수 있다) */
+  isPublic: boolean;
 };
 
 /** 한 방에 남겨 두는 내 AI 배치의 수 (새로 추천받으면 오래된 것부터 지운다) */
@@ -20,9 +22,9 @@ export const MAX_AI_LAYOUTS = 5;
 export const MY_LAYOUT_NAME = '내 배치';
 
 type Client = SupabaseClient<Database>;
-type LayoutRow = { id: string; name: string; items: unknown; created_by: string; ai_summary: string | null };
+type LayoutRow = { id: string; name: string; items: unknown; created_by: string; ai_summary: string | null; is_public?: boolean };
 
-const COLUMNS = 'id, name, items, created_by, ai_summary';
+const COLUMNS = 'id, name, items, created_by, ai_summary, is_public';
 
 export function fromLayoutRow(row: LayoutRow): MyLayout {
   return {
@@ -31,6 +33,7 @@ export function fromLayoutRow(row: LayoutRow): MyLayout {
     items: parseSavedItems(row.items),
     createdBy: row.created_by === 'ai' ? 'ai' : 'user',
     aiSummary: row.created_by === 'ai' ? row.ai_summary : null,
+    isPublic: row.is_public ?? false,
   };
 }
 
@@ -48,20 +51,21 @@ export async function loadMyLayouts(supabase: Client, roomId: string, userId: st
 
 /**
  * 배치를 저장하고 그 id를 돌려준다. 실패하면 null.
- * layoutId가 있으면 그 배치를 고치고, 없거나 그 배치가 사라졌으면 "내 배치"를 새로 만든다.
+ * layoutId가 있으면 그 배치를 고치고, 없거나 그 배치가 사라졌으면 새 배치를 만든다 (이름은 name, 없으면 "내 배치").
  */
 export async function saveMyLayout(
   supabase: Client,
   roomId: string,
   layoutId: string | null,
   items: SavedItem[],
+  name?: string,
 ): Promise<string | null> {
   if (layoutId) {
     const { data, error } = await supabase.from('layouts').update({ items }).eq('id', layoutId).select('id').maybeSingle();
     if (error) return null;
     if (data) return data.id;
   }
-  const { data, error } = await supabase.from('layouts').insert({ room_id: roomId, items }).select('id').maybeSingle();
+  const { data, error } = await supabase.from('layouts').insert({ room_id: roomId, items, ...(name ? { name } : {}) }).select('id').maybeSingle();
   return error || !data ? null : data.id;
 }
 

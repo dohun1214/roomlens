@@ -39,6 +39,13 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
+// R2의 CORS는 정해진 주소만 허락한다. 다른 포트의 개발 서버로 열 때를 위해 허락 머리말을 붙인다
+await page.route(/r2\.cloudflarestorage\.com/, async (route) => {
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, HEAD, PUT, OPTIONS', 'access-control-expose-headers': '*' };
+  if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+  const response = await route.fetch();
+  return route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+});
 
 const api = (method, url, body) =>
   page.evaluate(
@@ -119,7 +126,7 @@ try {
   check('다시 열면: 보정 표시가 "저장됨"으로 시작', (await page.getByTestId('calibration-save-state').getAttribute('data-state')) === 'saved', null);
   check('다시 열면: 바로 가구를 놓을 수 있음 (가구 패널 표시)', await page.getByTestId('furniture-panel').isVisible(), null);
   const catalogButtons = await page.getByTestId('furniture-catalog').getByRole('button', { name: /^\+ / }).evaluateAll((buttons) => buttons.map((b) => b.getAttribute('aria-label')));
-  check('가구 패널에 DB 카탈로그 10종이 나옴', catalogButtons.length === 10 && catalogButtons.includes('+ 책장') && catalogButtons[0] === '+ 싱글 침대', catalogButtons);
+  check('가구 패널에 DB 카탈로그 36칸(18종 × 두 모양)이 나옴', catalogButtons.length === 36 && catalogButtons.includes('+ 책장 · 철제') && catalogButtons[0] === '+ 싱글 침대 · 원목', catalogButtons.slice(0, 4));
   check('보정된 방에는 X축 뒤집기 버튼이 없음', (await page.getByRole('button', { name: /X축 180/ }).count()) === 0, null);
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'calibration-saved.png') });
@@ -136,19 +143,18 @@ try {
     await page.mouse.click(s.x, s.y);
     await page.waitForTimeout(400);
   }
-  const picked = {
-    wall: await page.getByTestId('openings-wall').inputValue(),
-    from: Number(await page.getByTestId('openings-from').inputValue()),
-    width: Number(await page.getByTestId('openings-width').inputValue()),
-  };
+  // 두 점을 찍으면 바로 목록에 들어간다 ("추가"를 따로 누르지 않는다)
+  const pickedList = JSON.parse(await page.getByTestId('openings').getAttribute('data-json'));
+  const [pickedDoor] = pickedList;
+  const picked = { count: pickedList.length, wall: pickedDoor?.wallIndex, from: pickedDoor?.from, width: pickedDoor?.widthM, type: pickedDoor?.type };
   const expected = { from: round(savedWalls[0] * 0.3, 2), width: round(savedWalls[0] * 0.3, 2) };
   check(
-    `화면에서 두 점을 찍으면 벽 1의 위치가 채워짐 (기대 시작 ${expected.from} m·폭 ${expected.width} m, 오차 10cm 이내)`,
-    picked.wall === '0' && Math.abs(picked.from - expected.from) < 0.1 && Math.abs(picked.width - expected.width) < 0.1,
+    `화면에서 두 점을 찍으면 벽 1에 문이 바로 들어감 (기대 시작 ${expected.from} m·폭 ${expected.width} m, 오차 10cm 이내)`,
+    picked.count === 1 && picked.type === 'door' && picked.wall === 0 && Math.abs(picked.from - expected.from) < 0.1 && Math.abs(picked.width - expected.width) < 0.1 &&
+      (await page.getByTestId('openings-message').innerText()).includes('벽 1에 문을 넣었습니다'),
     picked,
   );
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'openings-picked.png') });
-  await page.getByTestId('openings-add').click();
   await page.getByTestId('openings-save').click();
   await page.waitForFunction(() => document.querySelector('[data-testid=openings-save-state]')?.getAttribute('data-state') === 'saved', null, { timeout: 10000 });
   const { data: withDoor } = await admin.from('rooms').select('openings').eq('id', roomId).maybeSingle();
@@ -161,7 +167,7 @@ try {
   const { data: still } = await admin.from('rooms').select('transform').eq('id', roomId).maybeSingle();
   check('다시 찍기: 화면의 보정은 풀리고 DB 값은 그대로', reset.scale === 1 && still?.transform?.s === row.transform.s, round(reset.scale, 4));
 
-  // 6) 보정을 새로 해서 저장하면 벽이 달라지므로 문·창문을 비운다
+  // 6) 보정을 새로 해서 저장하면 문·창문을 새 벽 위로 옮긴다 (새 모서리에 걸친 것은 빠진다)
   process.env.JITTER_PX = '3';
   // 이번에는 벽 1의 가운데에도 한 점을 찍어 모서리 다섯 개로 보정한다
   await calibrate(page, scene, { alreadyOpen: true, midWall: true });
@@ -183,8 +189,8 @@ try {
     fiveWalls.map((v) => round(v)),
   );
   check(
-    '새 보정을 저장: DB의 문·창문이 비워지고(1 → 0) 다시 넣을 수 있게 됨',
-    beforeSave?.openings?.length === 1 && afterSave?.openings?.length === 0 && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
+    '새 보정을 저장: 문은 새 벽(1 또는 2) 위로 옮겨지거나 새 모서리에 걸치면 빠지고, 다시 넣을 수 있게 됨',
+    beforeSave?.openings?.length === 1 && (afterSave?.openings?.length === 0 || (afterSave.openings.length === 1 && afterSave.openings[0].wallIndex <= 1)) && JSON.stringify(afterSave.floor_polygon) !== JSON.stringify(row.floor_polygon) && (await page.getByTestId('openings-locked').count()) === 0 && (await page.getByTestId('openings-add').isVisible()),
     [beforeSave?.openings?.length, afterSave?.openings?.length],
   );
 } catch (err) {

@@ -21,7 +21,7 @@ export function fitScale(size: [number, number, number], w: number, h: number, d
 
 /**
  * 불러온 모델로 틀을 만든다: 경계 상자의 바닥 가운데를 원점으로 옮기고,
- * 조명을 받지 않는 재질(unlit)은 음영이 생기는 재질로 바꾼다. 그릴 것이 없으면 null.
+ * 조명을 받지 않는 재질(unlit)은 음영이 생기는 재질로 바꾼다 (3D 스캔 가구는 그대로). 그릴 것이 없으면 null.
  */
 export function makeModelTemplate(scene: THREE.Object3D): ModelTemplate | null {
   scene.updateMatrixWorld(true);
@@ -35,7 +35,8 @@ export function makeModelTemplate(scene: THREE.Object3D): ModelTemplate | null {
     if (!mesh.isMesh) return;
     const convert = (material: THREE.Material) => {
       const basic = material as THREE.MeshBasicMaterial;
-      if (!basic.isMeshBasicMaterial) return material;
+      // 3D 스캔 가구는 사진에 빛이 이미 들어 있어 조명을 받지 않는 그대로 둔다
+      if (!basic.isMeshBasicMaterial || basic.userData?.roomlensScan) return material;
       const lit = new THREE.MeshLambertMaterial({ color: basic.color, map: basic.map, transparent: basic.transparent, opacity: basic.opacity, side: basic.side });
       basic.dispose();
       return lit;

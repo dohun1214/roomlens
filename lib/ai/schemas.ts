@@ -12,7 +12,7 @@ export const LayoutIntent = z.object({
       itemId: z.string(),
       zone: z.enum(['against_wall', 'corner', 'under_window', 'beside_item', 'center']),
       wallId: z.string().describe('W1..Wn, 해당 없으면 빈 문자열'),
-      nearItemId: z.string().describe('beside_item일 때 기준 가구, 아니면 빈 문자열'),
+      nearItemId: z.string().describe('beside_item일 때 기준 가구, against_wall에서 마주 볼 가구, 아니면 빈 문자열'),
       facing: z.enum(['into_room', 'toward_window', 'toward_wall', 'any']),
       priority: z.number().int().min(1).max(10),
       reason: z.string(),
@@ -71,5 +71,7 @@ export const RoomReport = z.object({
     }),
   ),
   summary: z.string().describe('한국어 3문장 이내'),
+  // 10/21 추가: 예전 리포트에는 없으므로 읽을 때는 빈 목록으로 채운다
+  layoutTips: z.array(z.string()).default([]).describe('가구 배치 조언 2~4개, 각 40자 이내. "무엇을 어디에" 형태'),
 });
 export type RoomReport = z.infer<typeof RoomReport>;

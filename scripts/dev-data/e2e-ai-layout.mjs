@@ -115,7 +115,7 @@ try {
   check('처음 연 방: "AI 배치 추천 · 오늘 10회 남음", 가구가 없어 버튼은 꺼져 있고 안내가 보임', (await ai.getAttribute('data-remaining')) === '10' && (await page.getByTestId('ai-open').isDisabled()) && (await page.getByTestId('ai-hint').innerText()).includes('가구를 먼저') && (await chooser.count()) === 0, await ai.innerText());
 
   // 2) 가구 4개를 놓고 추천받기 (저장하지 않은 지금 배치는 먼저 "내 배치"로 저장된다)
-  for (const name of ['싱글 침대', '책상', '옷장', '의자']) await add(name);
+  for (const name of ['싱글 침대 · 원목', '책상 · 서랍형', '옷장 · 원목', '의자 · 회전']) await add(name);
   const mine = await items();
   await page.getByTestId('ai-open').click();
   await page.getByTestId('ai-request').fill('책상은 창가에 두고 싶어요');
@@ -159,7 +159,7 @@ try {
   check('AI 배치를 다시 고르면 추천 자리와 결과가 다시 보임', same(positions(await items()), positions(suggested)), positions(await items()));
 
   // 4) AI 배치를 고친 뒤 다른 배치로 바꾸면 먼저 저장된다
-  await add('서랍장');
+  await add('서랍장 · 원목');
   check('AI 배치에 가구를 더하면 "저장 안 됨"', (await saveState()) === 'dirty' && (await items()).length === 5, await saveState());
   await page.getByTestId('layout-select').selectOption({ label: '내 배치' });
   await page.waitForFunction((id) => document.querySelector('[data-testid=layout-chooser]')?.getAttribute('data-current') !== id, aiId);

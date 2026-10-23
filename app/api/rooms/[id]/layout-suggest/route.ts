@@ -11,6 +11,7 @@ import { MAX_AI_LAYOUTS } from '@/lib/layout/store';
 import type { SolverItem } from '@/lib/layout/solver';
 import { fromUserFurnitureRow } from '@/lib/layout/userFurniture';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
+import { fixtureObstacles, parseFixtures } from '@/lib/rooms/fixtures';
 import { parseOpenings } from '@/lib/rooms/openings';
 import { firstIssueMessage, RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
@@ -38,12 +39,14 @@ export async function POST(request: Request, { params }: Context) {
 
   // 로그인한 사용자의 권한(RLS)으로 읽으므로 공개 방이거나 본인 방일 때만 보인다
   const supabase = await createClient();
-  const { data: room, error } = await supabase.from('rooms').select('id, status, transform, floor_polygon, openings').eq('id', id.data).maybeSingle();
+  const { data: room, error } = await supabase.from('rooms').select('id, status, transform, floor_polygon, openings, fixtures').eq('id', id.data).maybeSingle();
   if (error) return apiError(500, 'DB_ERROR', '방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
   if (!room || room.status !== 'ready') return notFound();
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
   if (!calibration) return apiError(400, 'NOT_CALIBRATED', '방의 크기·바닥 보정을 먼저 저장해 주세요.');
   const openings = parseOpenings(room.openings, calibration.floorPolygon);
+  // 방에 원래 있던 가구 (치울 가구는 빼고). 새 가구는 이 자리를 피한다
+  const fixtures = fixtureObstacles(parseFixtures(room.fixtures, calibration.floorPolygon));
 
   // 가구의 이름·치수는 브라우저가 보낸 값을 믿지 않고 DB에서 다시 읽는다 (내 가구는 RLS로 본인 것만 보인다)
   const catalogIds = [...new Set(input.items.filter((item) => item.kind === 'catalog').map((item) => item.furnitureRef))];
@@ -82,7 +85,7 @@ export async function POST(request: Request, { params }: Context) {
 
   let suggestion;
   try {
-    suggestion = await suggestLayout({ polygon: calibration.floorPolygon, openings }, items, input.request, generate);
+    suggestion = await suggestLayout({ polygon: calibration.floorPolygon, openings, fixtures }, items, input.request, generate);
   } catch (err) {
     // 실패한 호출은 하루 횟수에서 빠진다
     await finishAiCall(call.callId, { status: 'failed', error: err instanceof AiError ? err.code : 'UNKNOWN' });

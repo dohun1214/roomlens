@@ -27,6 +27,9 @@ const wardrobe = make('wardrobe', 'storage', 0.9, 0.6, 0.6);
 const bed = make('bed', 'bed', 1.0, 2.0, 0.6);
 const table = make('table', 'table', 0.8, 0.6, 0.6);
 const chair = make('chair', 'chair', 0.5, 0.5, 0);
+const sofa = make('sofa', 'sofa', 1.7, 0.96, 0.6);
+const coffee = make('coffee', 'table', 1.2, 0.6, 0);
+const drawer = make('drawer', 'storage', 0.8, 0.43, 0.6);
 
 describe('가구 종류별 쓰는 쪽', () => {
   it('책상·수납은 앞, 침대는 긴 변 한쪽, 식탁은 긴 변 양쪽', () => {
@@ -34,6 +37,16 @@ describe('가구 종류별 쓰는 쪽', () => {
     expect(accessRule(wardrobe(0, 0))).toMatchObject({ sides: ['front'], mode: 'all' });
     expect(accessRule(bed(0, 0))).toMatchObject({ sides: ['left', 'right'], mode: 'any', footHalf: true });
     expect(accessRule(table(0, 0))).toMatchObject({ sides: ['front', 'back'], mode: 'all' });
+  });
+
+  it('소파는 앞, 앞의 탁자(커피테이블)는 막는 것으로 보지 않는다', () => {
+    expect(accessRule(sofa(0, 0))).toMatchObject({ sides: ['front'], mode: 'all', ignore: ['table'] });
+    // 벽(z = -1.5)에 등을 대고 앞에 커피테이블
+    expect(accessBlocked(sofa(0, -1.02), [sofa(0, -1.02), coffee(0, -0.1)], ROOM)).toBe(false);
+    // 앞에 서랍장이 있으면 막힘
+    expect(accessBlocked(sofa(0, -1.02), [sofa(0, -1.02), drawer(0, -0.2)], ROOM)).toBe(true);
+    // 앞이 벽이면 막힘
+    expect(accessBlocked(sofa(0, -1.02, 180), [sofa(0, -1.02, 180)], ROOM)).toBe(true);
   });
 
   it('긴 변은 치수로 정한다', () => {

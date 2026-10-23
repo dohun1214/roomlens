@@ -121,7 +121,7 @@ try {
   check('방 그림의 가로세로 비율이 4:3', near((room.width - 5) / (room.height - 5), 4 / 3, 0.02), [Math.round(room.width), Math.round(room.height)]);
 
   // 2) 가구를 추가하면 평면도에 나온다
-  await panel.getByRole('button', { name: '+ 책상', exact: true }).click();
+  await panel.getByRole('button', { name: '+ 책상 · 서랍형', exact: true }).click();
   const added = (await items())[0];
   /** 평면도에 그려진 가구의 가로·세로 (m): 다각형 꼭짓점에서 계산 */
   const drawnSize = (id) =>
@@ -133,7 +133,7 @@ try {
   const deskSize = await drawnSize('f1');
   const deskBox = await planItem('f1').boundingBox();
   const { scale } = await toScreen(0, 0);
-  check('책상이 방 가운데에 실제 크기(1.2 × 0.6 m)로 그려짐', near(added.x, 0) && near(added.z, 0) && near(deskSize[0], 1.2) && near(deskSize[1], 0.6) && near(deskBox.width / scale, 1.2, 0.1), deskSize);
+  check('책상이 방 가운데에 실제 크기(1.25 × 0.6 m)로 그려짐', near(added.x, 0) && near(added.z, 0) && near(deskSize[0], 1.25) && near(deskSize[1], 0.6) && near(deskBox.width / scale, 1.25, 0.1), deskSize);
 
   // 3) 끌어서 옮기기
   await dragTo('f1', 1, 0.5);
@@ -144,15 +144,15 @@ try {
   check('5cm 격자에 맞음 (0.83, -0.38 → 0.85, -0.40)', near(snapped.x, 0.85) && near(snapped.z, -0.4), [snapped.x, snapped.z]);
   await dragTo('f1', 2.3, 0);
   const walled = (await items())[0];
-  check('벽 너머로 끌면 벽에 붙음 (x = 2.0 − 0.6 = 1.40)', near(walled.x, 1.4) && near(walled.z, 0), [walled.x, walled.z]);
+  check('벽 너머로 끌면 벽에 붙음 (x = 2.0 − 0.625 = 1.375)', near(walled.x, 1.375) && near(walled.z, 0), [walled.x, walled.z]);
 
   // 4) 검사 결과가 평면도에도 나온다
   await dragTo('f1', -1.35, -1.2);
   check('문 앞으로 끌면: 평면도에서 빨강, "책상: 문 앞을 막습니다"', (await planItem('f1').getAttribute('data-state')) === 'error' && (await messages()).includes('책상: 문 앞을 막습니다'), await messages());
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'plan-door.png') });
-  await dragTo('f1', 1.4, -1.2);
+  await dragTo('f1', 1.35, -1.2); // 벽에서 10cm 안이면 벽에 붙는다 (x = 1.375)
   check('문 옆 벽으로 옮기면 문제 없음', (await planItem('f1').getAttribute('data-state')) === 'ok' && (await page.getByTestId('layout-violations').getAttribute('data-count')) === '0', null);
-  await panel.getByRole('button', { name: '+ 옷장', exact: true }).click();
+  await panel.getByRole('button', { name: '+ 옷장 · 원목', exact: true }).click();
   await dragTo('f2', 0.4, 1.2);
   check('옷장을 창문 앞으로 끌면: 평면도에서 노랑, "옷장: 창문을 가립니다"', (await planItem('f2').getAttribute('data-state')) === 'warning' && (await messages()).includes('옷장: 창문을 가립니다'), await messages());
 
@@ -163,11 +163,11 @@ try {
   const f1 = await planItem('f1').boundingBox();
   await page.mouse.click(f1.x + f1.width / 2, f1.y + f1.height / 2);
   const before = (await items())[0];
-  check('빈 곳을 누르면 선택 해제, 가구를 누르면(끌지 않고) 선택만 되고 움직이지 않음', noneSelected && (await planItem('f1').getAttribute('data-selected')) === 'true' && near(before.x, 1.4) && near(before.z, -1.2), [before.x, before.z]);
+  check('빈 곳을 누르면 선택 해제, 가구를 누르면(끌지 않고) 선택만 되고 움직이지 않음', noneSelected && (await planItem('f1').getAttribute('data-selected')) === 'true' && near(before.x, 1.375) && near(before.z, -1.2), [before.x, before.z]);
   await page.getByTestId('selection-bar').getByRole('button', { name: '90° 회전', exact: true }).click();
   const rotated = (await items())[0];
   const rotatedSize = await drawnSize('f1');
-  check('고른 가구 띠의 90° 회전이 평면도에 반영됨 (가로 0.6 × 세로 1.2로 보임)', rotated.rotationDeg === 90 && near(rotatedSize[0], 0.6) && near(rotatedSize[1], 1.2), rotatedSize);
+  check('고른 가구 띠의 90° 회전이 평면도에 반영됨 (가로 0.6 × 세로 1.25로 보임)', rotated.rotationDeg === 90 && near(rotatedSize[0], 0.6) && near(rotatedSize[1], 1.25), rotatedSize);
   await page.waitForTimeout(300);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'plan.png') });
 

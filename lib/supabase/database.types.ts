@@ -12,6 +12,7 @@ export type Database = {
       ai_calls: {
         Row: {
           attempts: number;
+          bundle_of: string | null;
           created_at: string;
           error: string | null;
           finished_at: string | null;
@@ -26,6 +27,7 @@ export type Database = {
         };
         Insert: {
           attempts?: number;
+          bundle_of?: string | null;
           created_at?: string;
           error?: string | null;
           finished_at?: string | null;
@@ -40,6 +42,7 @@ export type Database = {
         };
         Update: {
           attempts?: number;
+          bundle_of?: string | null;
           created_at?: string;
           error?: string | null;
           finished_at?: string | null;
@@ -53,6 +56,13 @@ export type Database = {
           status?: string;
         };
         Relationships: [
+          {
+            foreignKeyName: 'ai_calls_bundle_of_fkey';
+            columns: ['bundle_of'];
+            isOneToOne: false;
+            referencedRelation: 'ai_calls';
+            referencedColumns: ['id'];
+          },
           {
             foreignKeyName: 'ai_calls_room_id_fkey';
             columns: ['room_id'];
@@ -105,6 +115,7 @@ export type Database = {
           model_key: string | null;
           name_ko: string;
           sort_order: number;
+          style_ko: string | null;
           width_m: number;
         };
         Insert: {
@@ -117,6 +128,7 @@ export type Database = {
           model_key?: string | null;
           name_ko: string;
           sort_order?: number;
+          style_ko?: string | null;
           width_m: number;
         };
         Update: {
@@ -129,6 +141,7 @@ export type Database = {
           model_key?: string | null;
           name_ko?: string;
           sort_order?: number;
+          style_ko?: string | null;
           width_m?: number;
         };
         Relationships: [];
@@ -318,6 +331,7 @@ export type Database = {
           created_at: string;
           credit: string;
           description: string;
+          fixtures: Json;
           floor_polygon: Json | null;
           id: string;
           is_public: boolean;
@@ -328,6 +342,7 @@ export type Database = {
           splat_format: string | null;
           splat_key: string | null;
           status: string;
+          thumbnail_key: string | null;
           title: string;
           transform: Json | null;
           updated_at: string;
@@ -337,6 +352,7 @@ export type Database = {
           created_at?: string;
           credit?: string;
           description?: string;
+          fixtures?: Json;
           floor_polygon?: Json | null;
           id?: string;
           is_public?: boolean;
@@ -347,6 +363,7 @@ export type Database = {
           splat_format?: string | null;
           splat_key?: string | null;
           status?: string;
+          thumbnail_key?: string | null;
           title: string;
           transform?: Json | null;
           updated_at?: string;
@@ -356,6 +373,7 @@ export type Database = {
           created_at?: string;
           credit?: string;
           description?: string;
+          fixtures?: Json;
           floor_polygon?: Json | null;
           id?: string;
           is_public?: boolean;
@@ -366,6 +384,7 @@ export type Database = {
           splat_format?: string | null;
           splat_key?: string | null;
           status?: string;
+          thumbnail_key?: string | null;
           title?: string;
           transform?: Json | null;
           updated_at?: string;

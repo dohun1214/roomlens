@@ -8,12 +8,31 @@ export const ROOM_DESCRIPTION_MAX = 500;
 /** 한 사람이 만들 수 있는 방 개수 (R2 무료 10GB 안에서 쓰기 위한 제한) */
 export const MAX_ROOMS_PER_USER = 10;
 
+/**
+ * 방 개수 제한을 받지 않는 계정인지. 서버 환경변수 UNLIMITED_ROOM_USER_IDS(쉼표로 나눈 사용자 id)에 있으면 제한 없음.
+ * 계정 정보를 저장소에 남기지 않으려고 환경변수로 둔다.
+ */
+export function isRoomLimitExempt(userId: string, unlimitedIds: string | undefined): boolean {
+  if (!unlimitedIds) return false;
+  return unlimitedIds
+    .split(',')
+    .map((id) => id.trim().toLowerCase())
+    .filter(Boolean)
+    .includes(userId.toLowerCase());
+}
+
 export const RoomId = z.uuid();
 
 export const ROOM_CREDIT_MAX = 300;
 /** 방 3D 파일을 어떻게 얻었는지. scaniverse = 직접 찍음, dataset = 공개 데이터셋 등 다른 사람이 만든 것 */
 export const ROOM_SOURCES = ['scaniverse', 'dataset'] as const;
 export type RoomSource = (typeof ROOM_SOURCES)[number];
+
+/** 방 이름·설명 고치기 (방 주인이 방 화면에서) */
+export const RoomInfoInput = z.object({
+  title: z.string().trim().min(1, '방 이름을 입력해 주세요.').max(ROOM_TITLE_MAX, `방 이름은 ${ROOM_TITLE_MAX}자까지입니다.`),
+  description: z.string().trim().max(ROOM_DESCRIPTION_MAX, `설명은 ${ROOM_DESCRIPTION_MAX}자까지입니다.`),
+});
 
 export const CreateRoomInput = z
   .object({

@@ -7,7 +7,7 @@ import { countByRoom, PUBLIC_ROOMS_LIMIT, toRoomCards, type RoomListRow } from '
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 import heroImage from '@/public/samples/studio11-living.jpg';
 
-const COLUMNS = 'id, owner_id, title, description, is_public, status, source, created_at, transform, floor_polygon, openings';
+const COLUMNS = 'id, owner_id, title, description, is_public, status, source, created_at, transform, floor_polygon, openings, thumbnail_key';
 
 const STEPS: { icon: IconName; tile: string; title: string; text: string }[] = [
   { icon: 'upload', tile: 'bg-[#e3ecfc] text-[#3d63bf]', title: '방 올리기', text: 'Scaniverse 같은 앱으로 찍은 3D 파일(.spz, .ply)을 올립니다.' },
@@ -66,8 +66,8 @@ export default async function Home() {
             찍은 방을 3D로 둘러보고, <span className="text-accent">실제 치수</span>의 가구를 놓아 봅니다
           </h1>
           <p className="max-w-[30em] text-[15px] text-pretty text-sub sm:text-[17px]">
-            휴대폰으로 찍은 방을 올리고 벽 하나의 길이만 알려 주면, 침대와 책상이 들어가는지, 문 앞과 통로를 막지 않는지 방에 가 보지 않고 확인할 수
-            있습니다.
+            이사 갈 방은 가 보지 않고, 지금 사는 방은 가구를 옮기지 않고 미리 배치해 봅니다. 침대와 책상이 들어가는지, 문 앞과 통로를 막지 않는지
+            확인하고 AI 추천도 받을 수 있습니다.
           </p>
           <div className="flex flex-wrap items-center gap-3">
             <Link href="/rooms/new" className="btn btn-primary h-[52px] rounded-[14px] px-6 text-base shadow-accent" data-testid="home-create">

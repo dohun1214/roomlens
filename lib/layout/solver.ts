@@ -5,6 +5,7 @@
 import { parseWallId, wallId } from '@/lib/ai/roomSummary';
 import type { LayoutIntent } from '@/lib/ai/schemas';
 import { openingSegment, type Opening } from '@/lib/rooms/openings';
+import type { FixtureObstacle } from '@/lib/rooms/fixtures';
 import { halfExtentAlong, signedArea, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { doorZone, findUnreachable, TALL_FURNITURE_HEIGHT, windowZone } from './access';
 import { accessBlocked, accessRule, frontDirection } from './accessSide';
@@ -12,7 +13,8 @@ import { checkLayout } from './check';
 import { distanceToPolygon, footprintInsideRoom, footprintsOverlap, interiorPoint, pointInPolygon } from './geometry';
 
 export type SolverItem = { id: string; name: string; category: string; w: number; d: number; h: number; clearance: number };
-export type SolverRoom = { polygon: Point2[]; openings: Opening[] };
+/** fixtures: 방에 원래 있던 가구 (옮길 수 없음). 새 가구는 겹치지 않게 놓고, 통로·쓰는 쪽을 따질 때도 장애물로 본다 */
+export type SolverRoom = { polygon: Point2[]; openings: Opening[]; fixtures?: FixtureObstacle[] };
 export type Placement = LayoutIntent['placements'][number];
 /** 자리가 정해진 가구. reason은 Gemini가 적은 이유 */
 export type SolvedItem = SolverItem & Footprint & { reason: string };
@@ -40,7 +42,10 @@ const WALL_STEP = 0.05;
 /** 방 가운데 후보의 격자 간격 (m) */
 const CENTER_STEP = 0.1;
 /** 통로가 막히는지 확인해 볼 후보 수 (점수가 높은 순서) */
-const WALKWAY_TRIES = 12;
+const WALKWAY_TRIES = 60;
+/** 소파 앞 커피테이블처럼 "앞에 두는 낮은 탁자"의 높이 상한과 소파와의 틈 (m) */
+const LOW_TABLE_HEIGHT = 0.55;
+const LOW_TABLE_GAP = 0.35;
 /** 이 거리 안이면 벽에 붙은 것으로 본다 (m) */
 const TOUCH = 0.03;
 /** 요청한 자리를 못 얻은 가구를 앞 순서로 올려 다시 풀어 보는 횟수 */
@@ -69,6 +74,8 @@ function rotationFacing(front: Point2): number {
 }
 
 const round3 = (v: number) => Math.round(v * 1000) / 1000 + 0;
+/** 신발장: 이름으로 안다 (분류는 수납) */
+const isShoeCabinet = (item: Pick<SolverItem, 'name'>) => item.name.includes('신발장');
 const neg = (v: Point2): Point2 => [-v[0], -v[1]];
 const dot = (a: Point2, b: Point2) => a[0] * b[0] + a[1] * b[1];
 
@@ -158,28 +165,41 @@ function underWindows(item: SolverItem, frames: Frame[], windows: Opening[]): Ca
   });
 }
 
-/** 기준 가구의 양옆(같은 방향, 뒷면을 맞춤)과 앞(마주 보게: 책상 앞의 의자) */
-function besideItem(item: SolverItem, ref: Footprint): Candidate[] {
+/** 기준 가구 앞에 두는 것이 제자리인 가구: 책상·식탁 앞의 의자, 소파 앞의 낮은 탁자(커피테이블) */
+function belongsInFront(item: SolverItem, ref: SolverItem | Footprint): boolean {
+  if (item.category === 'chair') return true;
+  const refCategory = (ref as Partial<SolverItem>).category;
+  return item.category === 'table' && item.h <= LOW_TABLE_HEIGHT && refCategory === 'sofa';
+}
+
+/**
+ * 기준 가구의 양옆(같은 방향, 뒷면을 맞춤)과 앞(마주 보게: 책상 앞의 의자, 소파 앞의 커피테이블).
+ * 조명은 앞에 두지 않는다 (소파·책상의 앞을 막는다).
+ */
+function besideItem(item: SolverItem, ref: SolvedItem): Candidate[] {
   const front = frontDirection(ref.rotationDeg);
   const right: Point2 = [front[1], -front[0]];
   const back = (item.d - ref.d) / 2;
   const out: Candidate[] = [];
+  const inFront = belongsInFront(item, ref);
   for (const side of [-1, 1]) {
     const k = side * (ref.w / 2 + item.w / 2);
     out.push({
       pose: { x: ref.x + right[0] * k + front[0] * back, z: ref.z + right[1] * k + front[1] * back, w: item.w, d: item.d, rotationDeg: ref.rotationDeg },
       wallIndex: null,
       headOnWall: false,
-      bias: 0,
+      bias: inFront ? -1 : 0,
     });
   }
-  const k = ref.d / 2 + item.d / 2 + 0.05;
+  if (item.category === 'lamp') return out;
+  const gap = item.category === 'table' && inFront ? LOW_TABLE_GAP : 0.05;
+  const k = ref.d / 2 + item.d / 2 + gap;
   out.push({
     pose: { x: ref.x + front[0] * k, z: ref.z + front[1] * k, w: item.w, d: item.d, rotationDeg: (ref.rotationDeg + 180) % 360 },
     wallIndex: null,
     headOnWall: false,
-    // 의자는 책상·식탁 앞이 제자리, 다른 가구는 옆이 먼저
-    bias: item.category === 'chair' ? 1 : -1,
+    // 의자·커피테이블은 앞이 제자리, 다른 가구는 옆이 먼저
+    bias: inFront ? 1 : -1,
   });
   return out;
 }
@@ -218,13 +238,15 @@ const DEFAULT_PLACEMENT = { zone: 'against_wall', wallId: '', nearItemId: '', fa
 
 /**
  * 배치 의도를 좌표로 바꾼다.
- * 돌려준 placed는 서로 겹치지 않고, 방 안에 있고, 문 앞을 막지 않는다.
+ * 돌려준 placed는 서로 겹치지 않고, 원래 있던 가구와도 겹치지 않고, 방 안에 있고, 문 앞을 막지 않는다.
  * 통로·창문·쓰는 쪽은 되도록 지키고, 못 지킨 것은 unmet에 적는다.
  * 의도에 없는 가구 id는 무시하고, 의도에서 빠진 가구는 아무 벽에나 붙인다.
  */
 export function solveLayout(room: SolverRoom, items: SolverItem[], placements: Placement[], options: SolveOptions = {}): SolveResult {
   const fallback = options.fallback ?? true;
   const { polygon, openings } = room;
+  const fixtures = room.fixtures ?? [];
+  const fixtureNames = new Map(fixtures.map((f) => [f.id, f.name]));
   const frames = wallFrames(polygon);
   const doors = openings.filter((o) => o.type === 'door');
   const windows = openings.filter((o) => o.type === 'window');
@@ -258,7 +280,8 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
     const visit = (p: Placement, stack: Set<string>) => {
       if (order.includes(p) || stack.has(p.itemId)) return;
       stack.add(p.itemId);
-      const ref = p.zone === 'beside_item' ? list.find((q) => q.itemId === p.nearItemId) : undefined;
+      // "다른 가구 옆"과 "다른 가구와 마주 보는 벽"은 기준 가구가 먼저 놓여야 한다
+      const ref = p.nearItemId ? list.find((q) => q.itemId === p.nearItemId) : undefined;
       if (ref) visit(ref, stack);
       order.push(p);
     };
@@ -288,9 +311,11 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
 
     const whyInvalid = (pose: Footprint): { type: 'outside' | 'door' | 'overlap'; otherId?: string } | null => {
       if (!footprintInsideRoom(pose, polygon)) return { type: 'outside' };
-      const other = placed.find((q) => footprintsOverlap(pose, q));
+      const other = placed.find((q) => footprintsOverlap(pose, q)) ?? fixtures.find((f) => footprintsOverlap(pose, f));
       if (other) return { type: 'overlap', otherId: other.id };
-      if (doorZones.some((zone) => footprintsOverlap(pose, zone))) return { type: 'door' };
+      // 좌표를 mm로 반올림해도 문 앞에 걸치지 않게 1cm 여유를 둔다
+      const padded = { ...pose, w: pose.w + 0.02, d: pose.d + 0.02 };
+      if (doorZones.some((zone) => footprintsOverlap(padded, zone))) return { type: 'door' };
       return null;
     };
 
@@ -300,6 +325,8 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
       const target = parseWallId(p.wallId, polygon.length);
       const targetFrames = target === null ? frames : frames.filter((f) => f.index === target);
       const ref = p.zone === 'beside_item' ? placed.find((q) => q.id === p.nearItemId) : undefined;
+      // 벽에 붙이면서 기준 가구를 준 경우(TV장 ↔ 소파): 그 가구와 마주 보도록 정면에 가까운 자리를 고른다
+      const facingRef = p.zone !== 'beside_item' && p.nearItemId ? placed.find((q) => q.id === p.nearItemId) : undefined;
 
       // 후보를 단계별로: ① 요청한 벽·구역 ② 같은 구역, 다른 벽 ③ 아무 벽이나 방 가운데
       const zoneOn = (on: Frame[]): Candidate[] => {
@@ -325,32 +352,35 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
         });
       }
 
-      let valid: Candidate[] = [];
-      let tierUsed: (typeof tiers)[number]['kind'] = 'asked';
-      let firstCandidates: Candidate[] = [];
-      for (const tier of tiers) {
-        const candidates = tier.make();
-        if (tier.kind === 'asked') firstCandidates = candidates;
-        valid = candidates.filter((c) => whyInvalid(c.pose) === null);
-        tierUsed = tier.kind;
-        if (valid.length > 0) break;
-      }
+      // 단계마다 놓을 수 있는 후보 (필요할 때만 만든다)
+      const asked: { list: Candidate[] } = { list: [] };
+      const tierValid = tiers.map((tier) => {
+        let cache: Candidate[] | null = null;
+        return () => {
+          if (cache) return cache;
+          const candidates = tier.make();
+          if (tier.kind === 'asked') asked.list = candidates;
+          cache = candidates.filter((c) => whyInvalid(c.pose) === null);
+          return cache;
+        };
+      });
+      const firstTier = tierValid.findIndex((get) => get().length > 0);
 
-      if (valid.length === 0) {
+      if (firstTier < 0) {
         /** 요청한 자리에 왜 못 놓았는지 (Gemini에 다시 물어볼 때 보낸다) */
         const whyNone = (): string => {
           const where = `${target !== null ? `${wallId(target)}의 ` : ''}${ZONE_LABEL[p.zone]}`;
           if (p.zone === 'beside_item' && !ref) return `기준 가구(${p.nearItemId || '없음'})가 놓이지 않아 옆에 둘 수 없음`;
           if (p.zone === 'under_window' && windows.every((w) => target !== null && w.wallIndex !== target)) return `${where}: 창문이 없음`;
-          if (firstCandidates.length === 0) return `${where}에 놓을 수 없음 (가구가 들어갈 길이가 안 됨)`;
+          if (asked.list.length === 0) return `${where}에 놓을 수 없음 (가구가 들어갈 길이가 안 됨)`;
           const counts = new Map<string, number>();
-          for (const c of firstCandidates) {
+          for (const c of asked.list) {
             const why = whyInvalid(c.pose);
             const key = why === null ? '' : why.type === 'overlap' ? `overlap:${why.otherId}` : why.type;
             counts.set(key, (counts.get(key) ?? 0) + 1);
           }
           const [top] = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-          if (top.startsWith('overlap:')) return `${where}에 자리가 없음 (${byId.get(top.slice(8))?.name ?? '다른 가구'}와(과) 겹침)`;
+          if (top.startsWith('overlap:')) return `${where}에 자리가 없음 (${byId.get(top.slice(8))?.name ?? fixtureNames.get(top.slice(8)) ?? '다른 가구'}와(과) 겹침)`;
           if (top === 'door') return `${where}에 자리가 없음 (문 앞을 막음)`;
           return `${where}에 자리가 없음 (방 밖으로 나감)`;
         };
@@ -359,11 +389,12 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
       }
 
       // 점수: 쓰는 쪽이 비었는지, 다른 가구의 쓰는 쪽을 막는지, 창문을 가리는지, 침대 머리, 모서리, 보는 방향, 기준 가구와의 거리
-      const blockedBefore = new Set(placed.filter((q) => accessBlocked(q, placed, polygon)).map((q) => q.id));
+      const around = [...placed, ...fixtures];
+      const blockedBefore = new Set(placed.filter((q) => accessBlocked(q, around, polygon)).map((q) => q.id));
       const hasRule = accessRule(item) !== null;
       const score = (c: Candidate): number => {
         const self = { ...item, ...c.pose };
-        const all = [...placed, self];
+        const all = [...around, self];
         let s = c.bias;
         if (hasRule) s += accessBlocked(self, all, polygon) ? -2 : 2;
         for (const q of placed) {
@@ -382,21 +413,48 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
           s += dot(front, nearest.outward);
         }
         if (ref) s -= Math.hypot(ref.x - here[0], ref.z - here[1]);
-        // 문에서 조금 떨어진 자리를 살짝 선호한다 (드나드는 곳을 넓게)
-        if (doorCenters.length > 0) s += 0.1 * Math.min(2, Math.min(...doorCenters.map((dc) => Math.hypot(dc[0] - here[0], dc[1] - here[1]))));
+        if (facingRef) {
+          // 기준 가구의 앞 방향 직선에서 얼마나 비켜 있는지와, 서로 마주 보는지
+          const refFront = frontDirection(facingRef.rotationDeg);
+          const rel: Point2 = [here[0] - facingRef.x, here[1] - facingRef.z];
+          const lateral = Math.abs(rel[0] * refFront[1] - rel[1] * refFront[0]);
+          const len = Math.hypot(rel[0], rel[1]) || 1;
+          s -= lateral;
+          s += dot(front, [-rel[0] / len, -rel[1] / len]);
+        }
+        const doorDistance = doorCenters.length > 0 ? Math.min(...doorCenters.map((dc) => Math.hypot(dc[0] - here[0], dc[1] - here[1]))) : null;
+        if (doorDistance !== null) {
+          // 신발장은 문 가까이, 나머지는 문에서 조금 떨어진 자리를 살짝 선호한다 (드나드는 곳을 넓게)
+          if (isShoeCabinet(item)) s -= 0.6 * doorDistance;
+          else s += 0.1 * Math.min(2, doorDistance);
+        }
+        // 책상·화장대는 창가가 밝아 좋다 (같은 벽·구역 안에서 창문에 가까운 자리)
+        if (item.category === 'desk' && windowViews.length > 0) s -= 0.3 * Math.min(4, Math.min(...windowViews.map((w) => Math.hypot(w.center[0] - here[0], w.center[1] - here[1]))));
         return s;
       };
-      const ranked = valid.map((c, index) => ({ c, index, s: score(c) })).sort((a, b) => b.s - a.s || a.index - b.index);
-
-      // 통로: 점수가 높은 후보부터, 이미 놓은 가구나 이 가구로 가는 길을 새로 막지 않는 첫 자리
+      const rank = (list: Candidate[]) => list.map((c, index) => ({ c, index, s: score(c) })).sort((a, b) => b.s - a.s || a.index - b.index);
+      const ranked = rank(tierValid[firstTier]());
+      let tierUsed = tiers[firstTier].kind;
       let chosen = ranked[0].c;
+
+      // 통로: 점수가 높은 후보부터, 이미 놓은 가구나 이 가구로 가는 길을 새로 막지 않는 첫 자리.
+      // 요청한 구역에 그런 자리가 없으면 다음 단계(다른 벽·아무 곳)에서 찾고, 그래도 없으면 점수가 가장 높은 자리
       if (doors.length > 0) {
-        const before = new Set(findUnreachable(placed, polygon, doors) ?? []);
-        for (const { c } of ranked.slice(0, WALKWAY_TRIES)) {
-          const after = findUnreachable([...placed, { ...c.pose, id: item.id }], polygon, doors);
-          if (after === null || after.every((id) => before.has(id))) {
-            chosen = c;
-            break;
+        const before = new Set(findUnreachable(around, polygon, doors) ?? []);
+        const keepsWay = (c: Candidate) => {
+          const after = findUnreachable([...around, { ...c.pose, id: item.id, category: item.category }], polygon, doors);
+          return after === null || after.every((id) => before.has(id));
+        };
+        let found = false;
+        for (let t = firstTier; t < tiers.length && !found; t += 1) {
+          const list = t === firstTier ? ranked : rank(tierValid[t]());
+          for (const { c } of list.slice(0, WALKWAY_TRIES)) {
+            if (keepsWay(c)) {
+              chosen = c;
+              tierUsed = tiers[t].kind;
+              found = true;
+              break;
+            }
           }
         }
       }
@@ -418,9 +476,11 @@ export function solveLayout(room: SolverRoom, items: SolverItem[], placements: P
     }
 
     // 놓은 결과를 화면과 같은 검사로 확인해, 지키지 못한 조건을 모은다
-    const violations = checkLayout(placed, polygon, openings);
+    const violations = checkLayout(placed, polygon, openings, fixtures);
     const unmet = [...notes, ...violations.map((v) => ({ itemId: v.itemId, message: v.message }))];
     const missed = [...failures.map((f) => f.itemId), ...notes.map((n) => n.itemId)];
-    return { placed, failures, unmet, missed, cost: failures.length * 100 + notes.length * 10 + violations.length };
+    // 오류(겹침·길 막힘 등)는 경고보다 훨씬 나쁘다
+    const violationCost = violations.reduce((sum, v) => sum + (v.severity === 'error' ? 20 : 1), 0);
+    return { placed, failures, unmet, missed, cost: failures.length * 100 + notes.length * 10 + violationCost };
   }
 }

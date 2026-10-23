@@ -1,11 +1,15 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { isMobile, SparkRenderer, SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import CalibrationTool, { type AppliedCalibration } from './CalibrationTool';
 import OpeningsTool from './OpeningsTool';
+import FixturesTool from './FixturesTool';
+import RoomPrepBanner from './RoomPrepBanner';
+import Icon from '@/components/ui/Icon';
+import type { AutoDetect, AutoDetectResult, RoomPrep } from './roomPrep';
 import AnalysisPanel from './AnalysisPanel';
 import type { SavedReport } from '@/components/rooms/RoomReportView';
 import FurnitureLayer from '@/components/layout/FurnitureLayer';
@@ -13,16 +17,26 @@ import type { Point2 } from '@/lib/three/floorDrag';
 import type { CatalogItem } from '@/lib/layout/catalog';
 import type { SavedItem } from '@/lib/layout/saved';
 import { deleteMyLayout, MY_LAYOUT_NAME, saveMyLayout, type MyLayout } from '@/lib/layout/store';
+import { remapFurniture, setLayoutPublic, sharedCopyName, usedBorrowed, type SharedLayout } from '@/lib/layout/share';
 import { requestLayoutSuggestion, type AiResultView } from '@/lib/ai/suggestClient';
-import { createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
+import { copyScanFurniture, createScanFurniture, createUserFurniture, deleteUserFurniture, type UserFurnitureValue } from '@/lib/layout/userFurniture';
 import type { Engine } from './engine';
+import CommentsPanel from './CommentsPanel';
 import { ToolRail, type Slots, type ToolId } from './workspace';
 import { keepCameraInRoom } from '@/lib/three/cameraBounds';
 import { isMoveKey, isTypingTarget, moveStep, WALK_SPEED } from '@/lib/three/keyboardMove';
+import { LOOK_ROTATE_SPEED, lookTarget, panDelta, pinchDistance, wheelDistance } from '@/lib/three/viewMove';
 import { pickPoint } from '@/lib/three/pickPoint';
+import { captureThumbnail } from '@/lib/three/capture';
+import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH } from '@/lib/rooms/thumbnail';
+import { uploadThumbnail } from '@/lib/rooms/thumbnailClient';
+import { sampleScenePoints } from '@/lib/three/scenePoints';
+import { autoCalibrate } from '@/lib/three/autoCalibrate';
 import { setObjectRoomTransform } from '@/lib/three/roomTransform';
-import { startPoseForRoom, toCalibrationColumns, type SavedCalibration } from '@/lib/rooms/calibration';
+import { startPoseForRoom, type SavedCalibration } from '@/lib/rooms/calibration';
+import { saveRoomCalibration } from '@/lib/rooms/calibrationClient';
 import { sameOpenings, type Opening } from '@/lib/rooms/openings';
+import { sameFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
@@ -70,11 +84,26 @@ type Props = {
   userFurniture?: CatalogItem[];
   /** 방에 저장된 문·창문 (저장된 보정의 벽 기준) */
   initialOpenings?: Opening[];
+  /** 방에 원래 있는 가구 (저장된 보정의 방 좌표) */
+  initialFixtures?: Fixture[];
   /** 방의 출처·라이선스 (데이터셋 방). 3D 화면 아래에 표시한다 */
   credit?: string | null;
+  /** 방 주인 (코멘트에 표시) */
+  ownerId?: string | null;
+  /** 로그인한 사람의 아이디와 닉네임 (코멘트 쓰기) */
+  viewer?: { id: string; name: string } | null;
+  /** 방이 공개인지 (주인이 바꾸면 방 화면이 새로 읽어 넘긴다) */
+  isPublic?: boolean;
+  /** 공유 링크로 연 남의 배치. 있으면 이 배치로 시작하고, 저장하면 내 배치가 된다 */
+  sharedLayout?: SharedLayout | null;
+  /** 공유 링크로 왔지만 그 배치를 볼 수 없을 때 */
+  sharedMissing?: boolean;
+  /** 방 대표 사진 주소 (없으면 방 주인이 처음 열 때 지금 화면으로 만든다) */
+  thumbnail?: string | null;
 };
 
 const NO_OPENINGS: Opening[] = [];
+const NO_FIXTURES: Fixture[] = [];
 const NO_LAYOUTS: MyLayout[] = [];
 const NO_KEYS: string[] = [];
 
@@ -91,7 +120,14 @@ export default function SplatViewer({
   initialReport = null,
   userFurniture,
   initialOpenings = NO_OPENINGS,
+  initialFixtures = NO_FIXTURES,
   credit = null,
+  ownerId = null,
+  viewer = null,
+  isPublic = false,
+  sharedLayout = null,
+  sharedMissing = false,
+  thumbnail = null,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -101,7 +137,11 @@ export default function SplatViewer({
   // 저장된 배치들. 보정을 다시 해서 가구 층이 새로 만들어져도 마지막으로 저장한 배치에서 시작하게 여기에 둔다
   const [layouts, setLayouts] = useState<MyLayout[]>(initialLayouts);
   // 지금 보고 있는 배치 (null이면 아직 저장하지 않은 새 배치)
-  const [layoutId, setLayoutId] = useState<string | null>(initialLayouts[0]?.id ?? null);
+  // 남이 공유한 배치를 보고 있는지 (다른 배치를 고르거나 내 배치로 저장하면 끝난다)
+  const [viewingShared, setViewingShared] = useState(Boolean(sharedLayout));
+  const [layoutId, setLayoutId] = useState<string | null>(sharedLayout ? null : (initialLayouts[0]?.id ?? null));
+  // 내 가구. 가구 층은 처음 한 번만 읽으므로, 배치를 바꿔 층을 새로 만들어도 잃지 않게 여기에 둔다
+  const [myFurniture, setMyFurniture] = useState<CatalogItem[] | undefined>(userFurniture);
   const layoutIdRef = useRef(layoutId);
   // 다른 배치로 바꿀 때마다 올려서 가구 층을 새로 만든다 (저장만 할 때는 그대로)
   const [layoutNonce, setLayoutNonce] = useState(0);
@@ -113,6 +153,11 @@ export default function SplatViewer({
   const [openings, setOpenings] = useState({ key: savedPolygonKey, items: initialOpenings });
   // 화면에서 넣거나 지운(아직 저장 전일 수 있는) 문·창문. 가구 검사는 이것을 쓴다
   const [liveOpenings, setLiveOpenings] = useState<{ key: string | null; items: Opening[]; aiKeys: string[] } | null>(null);
+  // 방에 원래 있는 가구도 방 좌표로 저장하므로 문·창문처럼 평면도와 함께 기억하고, 보정을 새로 저장하면 비운다
+  const [fixtures, setFixtures] = useState({ key: savedPolygonKey, items: initialFixtures });
+  const [liveFixtures, setLiveFixtures] = useState<{ key: string | null; items: Fixture[] } | null>(null);
+  // 평면도에서 원래 가구 사각형을 그리는 중이면 그린 결과를 받을 곳
+  const [planDraw, setPlanDraw] = useState<{ onDraw: (a: Point2, b: Point2) => void } | null>(null);
   // 고른 도구 (아직 고르지 않았으면 보정된 방은 가구, 아니면 크기 보정)
   const [tool, setTool] = useState<ToolId | null>(null);
   // 도구들이 패널과 3D 화면 위에 자기 화면을 그려 넣을 자리
@@ -122,6 +167,21 @@ export default function SplatViewer({
   const [sheetClosed, setSheetClosed] = useState(false);
   // 3D 대신 평면도를 보고 있는지
   const [showPlan, setShowPlan] = useState(false);
+  // "AI로 방 준비하기" 진행 (보정 저장 → 문·창문 찾기 → 원래 가구 찾기 → 확인)
+  const [prep, setPrep] = useState<RoomPrep | null>(null);
+  // 방 대표 사진: 지금 주소, 찍는 중인지, 알림
+  const [thumbSrc, setThumbSrc] = useState<string | null>(thumbnail);
+  const [thumbBusy, setThumbBusy] = useState(false);
+  const [thumbMessage, setThumbMessage] = useState<{ text: string; tone: 'ok' | 'warn' } | null>(null);
+  // 처음 열 때 저절로 찍어 본 횟수 (아직 덜 그려져 빈 그림이면 조금 뒤에 다시)
+  const [thumbAutoTries, setThumbAutoTries] = useState(0);
+  // 방 분석 리포트의 조언으로 연 AI 배치 추천 (가구 층이 요청 칸에 넣는다)
+  const [aiPrefill, setAiPrefill] = useState<{ text: string; nonce: number } | null>(null);
+  // 가구 배치에 저장하지 않은 것이 있는지 (가구 층이 알려 준다)
+  const [furnitureUnsaved, setFurnitureUnsaved] = useState(false);
+  // 방 준비의 확인 단계에서 아직 저장하지 않은 단계가 있는지 (저장 콜백에서 최신 값을 읽으려고)
+  const prepOpeningsPendingRef = useRef(false);
+  const prepFixturesPendingRef = useRef(false);
   const [hasReport, setHasReport] = useState(initialReport !== null);
   const [debug] = useState(() => new URLSearchParams(window.location.search).has('debug'));
   const [stats, setStats] = useState<Stats>({ status: 'idle', name: '' });
@@ -139,6 +199,30 @@ export default function SplatViewer({
   const rawSpeedRef = useRef(WALK_SPEED);
   /** 카메라를 방 안에 머물게 할지 (보정된 방에서만 쓸 수 있다) */
   const [stayInside, setStayInside] = useState(true);
+  // 3D에 문·창문 판과 원래 가구 상자를 보일지 (브라우저에 기억한다)
+  const [markers, setMarkers] = useState<Markers>(readMarkers);
+  const [markersOpen, setMarkersOpen] = useState(false);
+  const markersRef = useRef<HTMLDivElement>(null);
+  // 메뉴 밖을 누르거나 Esc를 누르면 닫는다
+  useEffect(() => {
+    if (!markersOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!markersRef.current?.contains(e.target as Node)) setMarkersOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMarkersOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [markersOpen]);
+  const changeMarkers = (next: Markers) => {
+    setMarkers(next);
+    writeMarkers(next);
+  };
   /** 카메라가 머물 범위: 바닥 평면도와 천장 높이. null이면 막지 않는다 */
   const boundsRef = useRef<{ polygon: Point2[]; ceilingY: number | null } | null>(null);
   const [urlInput, setUrlInput] = useState(
@@ -187,6 +271,102 @@ export default function SplatViewer({
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    // 방 안에서 둘러보기: 끌기 = 제자리에서 고개 돌리기(바라보는 점을 카메라 바로 앞에 둔다, 아래 루프).
+    // 휠·옮기기는 OrbitControls 대신 아래에서 직접 한다 (바라보는 점이 가까워 OrbitControls로는 거의 안 움직인다)
+    controls.enableZoom = false;
+    controls.enablePan = false;
+    controls.rotateSpeed = LOOK_ROTATE_SPEED;
+    const canvas = renderer.domElement;
+
+    // 캡처처럼 카메라를 직접 옮기는 동안(controls.enabled = false)과 실측의 자유 카메라에서는 방 안에 가두지 않는다
+    const currentBounds = () => (controls.enabled && !engineRef.current?.freeCamera ? boundsRef.current : null);
+    let lastGood: Point2 | null = null;
+    /** 카메라와 바라보는 점을 같이 옮긴다. 방 안에 머물게 할 때는 벽에 막힌 만큼만 */
+    const moveBy = (delta: THREE.Vector3) => {
+      const bounds = currentBounds();
+      if (bounds) {
+        const wanted: [number, number, number] = [camera.position.x + delta.x, camera.position.y + delta.y, camera.position.z + delta.z];
+        const allowed = keepCameraInRoom(wanted, bounds.polygon, bounds.ceilingY, lastGood) ?? wanted;
+        delta.set(allowed[0] - camera.position.x, allowed[1] - camera.position.y, allowed[2] - camera.position.z);
+      }
+      camera.position.add(delta);
+      controls.target.add(delta);
+    };
+
+    // 휠: 보는 쪽으로 다가가기/물러나기
+    const forward = new THREE.Vector3();
+    const onWheel = (event: WheelEvent) => {
+      if (!controls.enabled) return;
+      event.preventDefault();
+      const distance = wheelDistance(event.deltaY, event.deltaMode, walkSpeedRef.current);
+      if (!distance) return;
+      camera.getWorldDirection(forward);
+      moveBy(forward.multiplyScalar(distance));
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+
+    // 오른쪽 끌기·Shift(Ctrl)+끌기: 옆·위아래로 옮기기. 두 손가락: 끌면 옮기고 벌리면 다가간다
+    // (가구를 잡은 포인터는 FurnitureLayer가 capture 단계에서 막아 여기로 오지 않는다)
+    const sideDir = new THREE.Vector3();
+    const panBy = (dx: number, dy: number) => {
+      sideDir.set(1, 0, 0).applyQuaternion(camera.quaternion);
+      sideDir.y = 0;
+      if (sideDir.lengthSq() < 1e-9) return;
+      sideDir.normalize();
+      moveBy(new THREE.Vector3(...panDelta(dx, dy, sideDir.toArray(), walkSpeedRef.current)));
+    };
+    let mousePan: { id: number; x: number; y: number } | null = null;
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { cx: number; cy: number; dist: number } | null = null;
+    const pinchState = () => {
+      const [a, b] = [...touches.values()];
+      return { cx: (a.x + b.x) / 2, cy: (a.y + b.y) / 2, dist: Math.hypot(a.x - b.x, a.y - b.y) };
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (!controls.enabled) return;
+      if (event.pointerType === 'touch') {
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        pinch = touches.size === 2 ? pinchState() : null;
+        // 두 손가락일 때는 돌리지 않는다 (OrbitControls는 확대·옮기기를 꺼 두면 두 손가락의 가운데로 계속 돌린다)
+        controls.enableRotate = touches.size < 2;
+        return;
+      }
+      if (event.button === 2 || (event.button === 0 && (event.shiftKey || event.ctrlKey || event.metaKey))) {
+        mousePan = { id: event.pointerId, x: event.clientX, y: event.clientY };
+      }
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        if (!touches.has(event.pointerId)) return;
+        touches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (touches.size !== 2 || !pinch) return;
+        const next = pinchState();
+        panBy(next.cx - pinch.cx, next.cy - pinch.cy);
+        const distance = pinchDistance(pinch.dist, next.dist, walkSpeedRef.current);
+        if (distance) {
+          camera.getWorldDirection(forward);
+          moveBy(forward.multiplyScalar(distance));
+        }
+        pinch = next;
+        return;
+      }
+      if (!mousePan || event.pointerId !== mousePan.id) return;
+      panBy(event.clientX - mousePan.x, event.clientY - mousePan.y);
+      mousePan = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    };
+    const onPointerEnd = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') {
+        touches.delete(event.pointerId);
+        pinch = touches.size === 2 ? pinchState() : null;
+        if (touches.size === 0) controls.enableRotate = true;
+        return;
+      }
+      if (mousePan && event.pointerId === mousePan.id) mousePan = null;
+    };
+    canvas.addEventListener('pointerdown', onPointerDown);
+    canvas.addEventListener('pointermove', onPointerMove);
+    canvas.addEventListener('pointerup', onPointerEnd);
+    canvas.addEventListener('pointercancel', onPointerEnd);
 
     // 키보드로 걸어 다니기 (W A S D·방향키, Q E, Shift). 글자를 넣는 중에는 움직이지 않는다
     const pressed = new Set<string>();
@@ -215,28 +395,21 @@ export default function SplatViewer({
     let frames = 0;
     let last = performance.now();
     let lastFrame = performance.now();
-    let lastGood: Point2 | null = null;
     renderer.setAnimationLoop(() => {
       const frameNow = performance.now();
-      // 캡처처럼 카메라를 직접 옮기는 동안(controls.enabled = false)과 실측의 자유 카메라에서는 막지 않는다
-      const bounds = controls.enabled && !engineRef.current?.freeCamera ? boundsRef.current : null;
+      const bounds = currentBounds();
       if (pressed.size > 0 && controls.enabled) {
         camera.getWorldDirection(viewDir);
         upDir.set(0, 1, 0).applyQuaternion(camera.quaternion);
         const delta = moveStep(pressed, viewDir.toArray(), upDir.toArray(), (frameNow - lastFrame) / 1000, walkSpeedRef.current);
-        if (delta) {
-          step.set(...delta);
-          if (bounds) {
-            // 벽에 막히면 막힌 만큼만 간다. 돌리는 중심도 같은 만큼만 옮겨야 벽 너머로 달아나지 않는다
-            const wanted: [number, number, number] = [camera.position.x + step.x, camera.position.y + step.y, camera.position.z + step.z];
-            const allowed = keepCameraInRoom(wanted, bounds.polygon, bounds.ceilingY, lastGood) ?? wanted;
-            step.set(allowed[0] - camera.position.x, allowed[1] - camera.position.y, allowed[2] - camera.position.z);
-          }
-          camera.position.add(step);
-          controls.target.add(step);
-        }
+        if (delta) moveBy(step.set(...delta));
       }
       lastFrame = frameNow;
+      if (controls.enabled) {
+        // 어디서 카메라를 옮겼든(첫 구도, "3D에서 보기" 등) 바라보는 점을 바로 앞으로 당겨 제자리에서 돌게 한다
+        const target = lookTarget(camera.position.toArray(), controls.target.toArray());
+        if (target) controls.target.set(...target);
+      }
       controls.update();
       if (bounds) {
         // 마우스로 돌리거나 물러나다 벽을 넘은 경우: 카메라만 방 안으로 데려오고 보던 곳은 그대로 본다
@@ -271,7 +444,44 @@ export default function SplatViewer({
 
     engineRef.current = { renderer, scene, camera, controls, spark, roomGroup, splat: null };
     if (process.env.NODE_ENV !== 'production') {
-      Object.assign(window, { __roomlens: engineRef.current, __roomlensPick: pickPoint });
+      Object.assign(window, {
+        __roomlens: engineRef.current,
+        __roomlensPick: pickPoint,
+        // 성능 재기용 (scripts/dev-data/eval-room-prep.mjs): 장면의 표면 점, 자동 보정 결과
+        __roomlensScenePoints: () => {
+          const splat = engineRef.current?.splat;
+          const points = splat ? sampleScenePoints(splat) : null;
+          if (!points) return null;
+          const b64 = (a: Float32Array) => {
+            const bytes = new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
+            let out = '';
+            for (let i = 0; i < bytes.length; i += 0x8000) out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+            return btoa(out);
+          };
+          return {
+            count: points.count,
+            positions: b64(points.positions),
+            normals: b64(points.normals),
+            weights: b64(points.weights),
+            brightness: points.brightness ? b64(points.brightness) : null,
+          };
+        },
+        __roomlensAutoCalibrate: () => {
+          const splat = engineRef.current?.splat;
+          if (!splat) return { ok: false, message: '장면이 없습니다.' };
+          const t0 = performance.now();
+          const result = autoCalibrate(splat);
+          if (!result.ok) return result;
+          const { estimate } = result;
+          return {
+            ok: true,
+            transform: result.transform,
+            flipX: flippedRef.current,
+            floorPolygon: result.floorPolygon,
+            info: { ms: Math.round(performance.now() - t0), height: result.height, scaleGuessed: result.scaleGuessed, scale: estimate.scale, up: estimate.up, ...estimate.info },
+          };
+        },
+      });
     }
 
     return () => {
@@ -281,6 +491,11 @@ export default function SplatViewer({
       window.removeEventListener('blur', releaseKeys);
       document.removeEventListener('visibilitychange', releaseKeys);
       window.removeEventListener('focusin', releaseKeys);
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerEnd);
+      canvas.removeEventListener('pointercancel', onPointerEnd);
       renderer.setAnimationLoop(null);
       engineRef.current?.splat?.dispose();
       controls.dispose();
@@ -397,26 +612,28 @@ export default function SplatViewer({
   const roomPolygonKey = room ? JSON.stringify(room.polygon) : null;
   const savedOpenings = roomPolygonKey === openings.key ? openings.items : NO_OPENINGS;
   const shownOpenings = liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.items : savedOpenings;
+  const savedFixtures = roomPolygonKey === fixtures.key ? fixtures.items : NO_FIXTURES;
+  const shownFixtures = liveFixtures && liveFixtures.key === roomPolygonKey ? liveFixtures.items : savedFixtures;
 
   // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
   const saveCalibration = useCallback(
     async (applied: AppliedCalibration) => {
       if (!roomId) return false;
-      // 평면도가 바뀌면 벽 번호가 달라지므로 문·창문도 함께 비운다
+      // 서버가 저장하면서 예전 방 좌표의 문·창문·원래 가구·배치를 새 방 좌표로 옮겨 준다
+      const result = await saveRoomCalibration(roomId, { ...applied, flipX: flippedRef.current });
+      if (!result) return false;
       const key = JSON.stringify(applied.floorPolygon);
-      const wallsChanged = key !== savedPolygonKeyRef.current;
-      const { data, error } = await createClient()
-        .from('rooms')
-        .update({ ...toCalibrationColumns({ ...applied, flipX: flippedRef.current }), ...(wallsChanged ? { openings: [] } : {}) })
-        .eq('id', roomId)
-        .select('id')
-        .maybeSingle();
-      if (error || data === null) return false;
       savedPolygonKeyRef.current = key;
       setSavedPolygonKey(key);
-      if (wallsChanged) {
-        setOpenings({ key, items: [] });
-        setLiveOpenings(null);
+      setOpenings({ key, items: result.openings });
+      setLiveOpenings(null);
+      setFixtures({ key, items: result.fixtures });
+      setLiveFixtures(null);
+      if (result.layouts.length) {
+        const moved = new Map(result.layouts.map((l) => [l.id, l.items]));
+        setLayouts((prev) => prev.map((l) => (moved.has(l.id) ? { ...l, items: moved.get(l.id)! } : l)));
+        // 옮긴 배치로 가구 층을 새로 만든다
+        setLayoutNonce((n) => n + 1);
       }
       return true;
     },
@@ -435,14 +652,116 @@ export default function SplatViewer({
     [roomId],
   );
 
+  // 방 주인이 원래 가구를 저장한다 (지금 저장돼 있는 평면도 기준)
+  const saveFixtures = useCallback(
+    async (items: Fixture[]) => {
+      if (!roomId) return false;
+      const { data, error } = await createClient().from('rooms').update({ fixtures: items }).eq('id', roomId).select('id').maybeSingle();
+      if (error || data === null) return false;
+      setFixtures({ key: savedPolygonKeyRef.current, items });
+      return true;
+    },
+    [roomId],
+  );
+  // "AI로 방 준비하기": 보정을 저장한 뒤 부른다. 문·창문 도구가 먼저 찾고, 끝나면 원래 가구 도구가 이어서 찾는다
+  const startPrep = useCallback(() => {
+    setPrep({ step: 'openings', token: String(Date.now()) });
+    setShowPlan(false);
+    setTool('openings');
+  }, []);
+  const openingsDone = useCallback((result: AutoDetectResult) => {
+    setPrep((p) => (p && p.step === 'openings' ? { ...p, step: 'fixtures', openings: result, bundleOf: (result.ok && result.callId) || undefined } : p));
+    setTool('fixtures');
+  }, []);
+  const fixturesDone = useCallback((result: AutoDetectResult) => {
+    setPrep((p) => (p && p.step === 'fixtures' ? { ...p, step: 'review', fixtures: result } : p));
+    setTool('openings');
+  }, []);
+  const openingsAuto = useMemo<AutoDetect | undefined>(() => (prep?.step === 'openings' ? { token: prep.token, onDone: openingsDone } : undefined), [prep, openingsDone]);
+  const fixturesAuto = useMemo<AutoDetect | undefined>(
+    () => (prep?.step === 'fixtures' ? { token: prep.token, bundleOf: prep.bundleOf, onDone: fixturesDone } : undefined),
+    [prep, fixturesDone],
+  );
+
+  // 방 준비의 확인 단계: 한 단계를 저장하면 아직 저장하지 않은 다음 단계로 넘어간다
+  const prepReview = prep?.step === 'review';
+  const saveOpeningsThenNext = useCallback(
+    async (items: Opening[]) => {
+      const ok = await saveOpenings(items);
+      if (ok && prepReview && prepFixturesPendingRef.current) setTool('fixtures');
+      return ok;
+    },
+    [saveOpenings, prepReview],
+  );
+  const saveFixturesThenNext = useCallback(
+    async (items: Fixture[]) => {
+      const ok = await saveFixtures(items);
+      if (ok && prepReview && prepOpeningsPendingRef.current) setTool('openings');
+      return ok;
+    },
+    [saveFixtures, prepReview],
+  );
+
+  // 원래 가구 도구가 평면도 그리기를 켜면 평면도를 연다
+  const changePlanDraw = useCallback((handler: ((a: Point2, b: Point2) => void) | null) => {
+    setPlanDraw(handler ? { onDraw: handler } : null);
+    if (handler) setShowPlan(true);
+  }, []);
+
   // 내 가구 만들기·지우기 (본인 권한으로 user_furniture에 직접)
-  const createFurniture = useCallback((value: UserFurnitureValue) => createUserFurniture(createClient(), value), []);
-  const deleteFurniture = useCallback((id: string) => deleteUserFurniture(createClient(), id), []);
+  const createFurniture = useCallback(async (value: UserFurnitureValue) => {
+    const created = await createUserFurniture(createClient(), value);
+    if (created) setMyFurniture((prev) => [...(prev ?? []), created]);
+    return created;
+  }, []);
+  const deleteFurniture = useCallback(async (id: string) => {
+    const ok = await deleteUserFurniture(id);
+    if (ok) setMyFurniture((prev) => prev?.filter((f) => f.id !== id));
+    return ok;
+  }, []);
+  // 3D 스캔(GLB)으로 내 가구 만들기 (모델은 서버가 R2에 올린다)
+  const createScan = useCallback(async (glb: Blob, value: UserFurnitureValue) => {
+    const result = await createScanFurniture(glb, value);
+    if (result.ok) setMyFurniture((prev) => [...(prev ?? []), result.item]);
+    return result;
+  }, []);
+
+  // 남이 공유한 배치를 내 배치로 저장한다. 그 사람의 가구는 내 가구로 사본을 만들어 바꿔 넣는다
+  const saveSharedCopy = useCallback(
+    async (items: SavedItem[]) => {
+      if (!roomId || !sharedLayout) return false;
+      const supabase = createClient();
+      const borrowed = usedBorrowed(items, sharedLayout.furniture);
+      const copies = new Map<string, string>();
+      const made: CatalogItem[] = [];
+      for (const f of borrowed) {
+        // 3D 스캔 가구는 모델 파일까지 서버가 복사한다
+        const copy = f.modelUrl ? await copyScanFurniture(f.id) : await createUserFurniture(supabase, { name: f.nameKo, w: f.w, d: f.d, h: f.h });
+        if (!copy) return false;
+        copies.set(f.id, copy.id);
+        made.push(copy);
+      }
+      const mapped = remapFurniture(items, new Set(borrowed.map((f) => f.id)), copies);
+      const name = sharedCopyName(sharedLayout.ownerName);
+      const id = await saveMyLayout(supabase, roomId, null, mapped, name);
+      if (!id) return false;
+      if (made.length) setMyFurniture((prev) => [...(prev ?? []), ...made]);
+      setLayouts((prev) => [{ id, name, createdBy: 'user', aiSummary: null, isPublic: false, items: mapped }, ...prev]);
+      setViewingShared(false);
+      // 가구 id가 바뀌었을 수 있으므로 저장한 배치로 가구 층을 새로 만든다
+      layoutIdRef.current = id;
+      setLayoutId(id);
+      setLayoutNonce((n) => n + 1);
+      return true;
+    },
+    [roomId, sharedLayout],
+  );
 
   // 지금 보고 있는 배치를 저장한다 (새 배치면 "내 배치"를 만들고, 그다음부터는 같은 배치를 고친다)
   const saveLayout = useCallback(
     async (items: SavedItem[]) => {
       if (!roomId) return false;
+      if (viewingShared) return saveSharedCopy(items);
       const id = await saveMyLayout(createClient(), roomId, layoutIdRef.current, items);
       if (!id) return false;
       layoutIdRef.current = id;
@@ -450,15 +769,23 @@ export default function SplatViewer({
       setLayouts((prev) =>
         prev.some((l) => l.id === id)
           ? prev.map((l) => (l.id === id ? { ...l, items } : l))
-          : [{ id, name: MY_LAYOUT_NAME, createdBy: 'user', aiSummary: null, items }, ...prev],
+          : [{ id, name: MY_LAYOUT_NAME, createdBy: 'user', aiSummary: null, isPublic: false, items }, ...prev],
       );
       return true;
     },
-    [roomId],
+    [roomId, viewingShared, saveSharedCopy],
   );
+
+  // 내 배치를 링크로 공개하거나 닫는다
+  const setLayoutShared = useCallback(async (id: string, next: boolean) => {
+    const ok = await setLayoutPublic(createClient(), id, next);
+    if (ok) setLayouts((prev) => prev.map((l) => (l.id === id ? { ...l, isPublic: next } : l)));
+    return ok;
+  }, []);
 
   // 다른 배치를 연다 (가구 층이 저장하지 않은 것을 먼저 저장한 뒤 부른다)
   const selectLayout = useCallback((id: string | null) => {
+    setViewingShared(false);
     layoutIdRef.current = id;
     setLayoutId(id);
     setLayoutNonce((n) => n + 1);
@@ -500,8 +827,51 @@ export default function SplatViewer({
   // 저장하지 않은 보정 위에서는 추천할 수 없다 (서버는 저장된 평면도로 계산한다)
   const aiBlocked = roomPolygonKey !== savedPolygonKey ? '보정을 저장한 뒤에 AI 추천을 쓸 수 있습니다.' : null;
 
+  // 지금 화면을 방 대표 사진으로 찍어 올린다 (방 주인). quiet면 실패해도 알리지 않는다 (처음 열 때 저절로 찍을 때)
+  const takeThumbnail = useCallback(
+    async (quiet: boolean): Promise<boolean> => {
+      const engine = engineRef.current;
+      if (!engine || !roomId) return false;
+      setThumbBusy(true);
+      if (!quiet) setThumbMessage(null);
+      try {
+        const image = await captureThumbnail(engine, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT });
+        const result = image ? await uploadThumbnail(roomId, image) : { ok: false as const, message: '3D가 다 보인 뒤에 다시 해 주세요.' };
+        if (result.ok) {
+          setThumbSrc(result.src);
+          if (!quiet) setThumbMessage({ text: '지금 화면을 방 대표 사진으로 정했습니다.', tone: 'ok' });
+          return true;
+        }
+        if (!quiet) setThumbMessage({ text: result.message, tone: 'warn' });
+        return false;
+      } catch (err) {
+        console.error(err);
+        if (!quiet) setThumbMessage({ text: '대표 사진을 찍지 못했습니다.', tone: 'warn' });
+        return false;
+      } finally {
+        setThumbBusy(false);
+      }
+    },
+    [roomId],
+  );
+  useEffect(() => {
+    if (!thumbMessage) return;
+    const timer = window.setTimeout(() => setThumbMessage(null), 3500);
+    return () => window.clearTimeout(timer);
+  }, [thumbMessage]);
+
   // 지금 쓸 수 있는 도구와 고른 도구
   const ready = stats.status === 'ready';
+  // 대표 사진이 없는 방은 방 주인이 처음 열었을 때 첫 화면으로 만든다 (3D가 다 그려지기를 조금 기다린다)
+  useEffect(() => {
+    if (!ready || !url || !roomId || !canEdit || thumbSrc || thumbAutoTries >= 3 || prep) return;
+    const timer = window.setTimeout(() => {
+      void takeThumbnail(true).then((ok) => {
+        if (!ok) setThumbAutoTries((n) => n + 1);
+      });
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [ready, url, roomId, canEdit, thumbSrc, thumbAutoTries, prep, takeThumbnail]);
   const calibrated = ready && room?.key === sceneKey;
   useEffect(() => {
     // 보정된 방은 m 단위이므로 걷는 빠르기가 정해져 있다
@@ -517,15 +887,31 @@ export default function SplatViewer({
     boundsRef.current = { polygon: roomPolygon, ceilingY: engine.splat ? sceneTopY(engine.splat) : null };
   }, [roomPolygon, stayInside]);
   const tools: ToolId[] = [];
-  if (calibrated) tools.push('furniture', 'openings');
+  if (calibrated) tools.push('furniture', 'openings', 'fixtures');
   // 보정 도구: 개발용 뷰어(/viewer)에서는 누구나, 방 화면에서는 방 주인만
   if (ready && (!url || canEdit)) tools.push('calibration');
-  if (ready && roomId) tools.push('analysis');
+  if (ready && roomId) tools.push('analysis', 'comments');
   const wanted = tool ?? (calibration ? 'furniture' : 'calibration');
   const active = tools.includes(wanted) ? wanted : (tools[0] ?? null);
   const slots: Slots = { panel: panelEl, stage: stageEl, active };
   const calibrationUnsaved = Boolean(roomId) && calibrated && roomPolygonKey !== savedPolygonKey;
   const openingsUnsaved = Boolean(roomId) && canEdit && liveOpenings !== null && liveOpenings.key === roomPolygonKey && !sameOpenings(liveOpenings.items, savedOpenings);
+  const fixturesUnsaved = Boolean(roomId) && canEdit && liveFixtures !== null && liveFixtures.key === roomPolygonKey && !sameFixtures(liveFixtures.items, savedFixtures);
+  // 저장하지 않은 것이 있으면 창을 닫거나 다른 주소로 갈 때 브라우저가 한 번 묻는다
+  const anyUnsaved = Boolean(url) && (furnitureUnsaved || calibrationUnsaved || openingsUnsaved || fixturesUnsaved);
+  useEffect(() => {
+    if (!anyUnsaved) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [anyUnsaved]);
+  useEffect(() => {
+    prepOpeningsPendingRef.current = openingsUnsaved;
+    prepFixturesPendingRef.current = fixturesUnsaved;
+  });
 
   const selectTool = (next: ToolId) => {
     // 폰에서 고른 탭을 다시 누르면 패널을 접었다 편다
@@ -542,12 +928,13 @@ export default function SplatViewer({
         marks={{
           ...(calibrationUnsaved ? { calibration: 'warn' as const } : {}),
           ...(openingsUnsaved ? { openings: 'warn' as const } : {}),
+          ...(fixturesUnsaved ? { fixtures: 'warn' as const } : {}),
           ...(hasReport ? { analysis: 'ok' as const } : {}),
         }}
       />
 
       <aside
-        className={`relative order-2 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface max-lg:-mt-5 max-lg:max-h-[58%] max-lg:rounded-t-[22px] max-lg:shadow-[0_-6px_24px_rgb(20_26_42/0.1)] lg:w-[376px] lg:rounded-2xl lg:shadow-panel ${
+        className={`relative order-2 flex min-h-0 shrink-0 flex-col overflow-hidden bg-surface max-lg:-mt-5 max-lg:max-h-[48%] max-lg:rounded-t-[22px] max-lg:shadow-[0_-6px_24px_rgb(20_26_42/0.1)] lg:w-[376px] lg:rounded-2xl lg:shadow-panel ${
           tools.length === 0 ? 'max-lg:hidden' : ''
         }`}
         data-testid="tool-panel"
@@ -563,6 +950,25 @@ export default function SplatViewer({
         >
           <span className="h-1 w-10 rounded-full bg-line-strong" aria-hidden="true" />
         </button>
+        {prep && calibrated && (
+          <RoomPrepBanner
+            prep={prep}
+            active={active}
+            saved={{ openings: !openingsUnsaved, fixtures: !fixturesUnsaved }}
+            hidden={sheetClosed}
+            onSelect={(next) => {
+              // 단계 버튼은 패널을 접지 않고 그 도구를 연다
+              setSheetClosed(false);
+              setTool(next);
+            }}
+            onFinish={() => {
+              setPrep(null);
+              setSheetClosed(false);
+              setTool('furniture');
+            }}
+            onClose={() => setPrep(null)}
+          />
+        )}
         <div ref={setPanelEl} className={`flex min-h-0 flex-1 flex-col ${sheetClosed ? 'max-lg:hidden' : ''}`}>
           {tools.length === 0 && <p className="p-5 text-sm text-sub">{stats.status === 'error' ? '3D 파일을 열지 못했습니다.' : '3D를 불러오는 중입니다…'}</p>}
         </div>
@@ -573,6 +979,77 @@ export default function SplatViewer({
 
         {/* 도구들이 3D 위에 띄우는 것 (평면도, 보기 전환, 고른 가구의 띠) */}
         <div ref={setStageEl} className="pointer-events-none absolute inset-0 *:pointer-events-auto" />
+
+        {/* 3D 오른쪽 위: 대표 사진 찍기(방 주인), 표시(문·창문 판, 원래 가구 상자) 켜고 끄기 */}
+        <div className="absolute top-3 right-3 flex items-start gap-2">
+          {ready && url && roomId && canEdit && !showPlan && (
+            <button
+              type="button"
+              className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft disabled:opacity-60"
+              disabled={thumbBusy}
+              onClick={() => void takeThumbnail(false)}
+              title="지금 보이는 화면을 홈의 방 카드와 공유 미리보기에 씁니다"
+              aria-label="지금 화면을 대표 사진으로"
+              data-testid="thumbnail-capture"
+              data-has={Boolean(thumbSrc)}
+            >
+              <Icon name="image" />
+              <span className="max-sm:hidden">{thumbBusy ? '찍는 중…' : '대표 사진'}</span>
+            </button>
+          )}
+          {ready && calibrated && !showPlan && (shownOpenings.length > 0 || shownFixtures.length > 0) && (
+            <div ref={markersRef} className="flex flex-col items-end gap-2" data-testid="markers">
+              <button
+                type="button"
+                className="flex h-11 items-center gap-2 rounded-xl bg-surface px-3.5 text-[13px] font-medium shadow-float hover:bg-soft"
+                aria-expanded={markersOpen}
+                aria-label="표시"
+                onClick={() => setMarkersOpen((v) => !v)}
+                data-testid="markers-toggle"
+              >
+                <Icon name="eye" />
+                <span className="max-sm:hidden">표시</span>
+              </button>
+              {markersOpen && (
+                <div className="flex w-56 flex-col gap-1 rounded-xl bg-surface p-2 text-[13px] shadow-float" data-testid="markers-menu">
+                  {(
+                    [
+                      ['openings', '문·창문', shownOpenings.length],
+                      ['fixtures', '원래 가구 상자', shownFixtures.length],
+                    ] as const
+                  ).map(([key, label, count]) =>
+                    count > 0 ? (
+                      <button
+                        key={key}
+                        type="button"
+                        role="switch"
+                        aria-checked={markers[key]}
+                        className="flex h-10 items-center justify-between gap-2 rounded-[10px] px-2.5 hover:bg-soft"
+                        onClick={() => changeMarkers({ ...markers, [key]: !markers[key] })}
+                        data-testid={`show-${key}`}
+                      >
+                        <span>
+                          {label} <span className="font-mono text-mute">{count}</span>
+                        </span>
+                        <span className={`rounded-full px-2 py-px text-[11px] font-semibold ${markers[key] ? 'bg-accent-soft text-accent-strong' : 'bg-chip text-sub'}`}>{markers[key] ? '보임' : '숨김'}</span>
+                      </button>
+                    ) : null,
+                  )}
+                  <p className="px-2.5 pt-1 pb-1.5 text-xs text-sub">숨겨도 그 도구를 쓰는 동안에는 보이고, 평면도와 배치 검사에는 그대로 쓰입니다.</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        {thumbMessage && (
+          <p
+            className={`absolute top-16 right-3 max-w-[min(20rem,calc(100%-1.5rem))] rounded-xl px-3.5 py-2.5 text-[13px] shadow-float ${thumbMessage.tone === 'ok' ? 'bg-surface text-ok' : 'bg-warn-tint text-warn'}`}
+            role="status"
+            data-testid="thumbnail-message"
+          >
+            {thumbMessage.text}
+          </p>
+        )}
 
         {/* 개발용 뷰어(/viewer): 파일 열기. 방 화면에서는 주소에 ?debug 를 붙였을 때만 수치를 보여준다 */}
         <div
@@ -724,10 +1201,19 @@ export default function SplatViewer({
           catalog={catalog}
           openings={shownOpenings}
           aiOpeningKeys={liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.aiKeys : NO_KEYS}
-          userFurniture={userFurniture}
+          fixtures={shownFixtures}
+          onDrawFixture={planDraw?.onDraw}
+          userFurniture={myFurniture}
           onCreateFurniture={roomId && signedIn ? createFurniture : undefined}
           onDeleteFurniture={roomId && signedIn ? deleteFurniture : undefined}
-          initialItems={currentLayout?.items}
+          onCreateScanFurniture={roomId && signedIn ? createScan : undefined}
+          initialItems={viewingShared && sharedLayout ? sharedLayout.items : currentLayout?.items}
+          borrowedFurniture={viewingShared && sharedLayout ? sharedLayout.furniture : undefined}
+          sharedFrom={viewingShared && sharedLayout ? { ownerName: sharedLayout.ownerName, layoutName: sharedLayout.name } : null}
+          sharedMissing={sharedMissing && layoutNonce === 0}
+          onUnsavedChange={setFurnitureUnsaved}
+          aiPrefill={aiPrefill}
+          share={roomId && signedIn ? { roomId, roomPublic: isPublic, onSetPublic: setLayoutShared } : undefined}
           onSave={roomId && signedIn ? saveLayout : undefined}
           loginHint={Boolean(roomId) && !signedIn}
           layouts={layouts}
@@ -752,8 +1238,28 @@ export default function SplatViewer({
           onLook={() => setShowPlan(false)}
           editable={!url || canEdit}
           locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
-          onSave={roomId && canEdit ? saveOpenings : undefined}
+          onSave={roomId && canEdit ? saveOpeningsThenNext : undefined}
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
+          auto={openingsAuto}
+          shown={markers.openings}
+        />
+      )}
+      {calibrated && room && (
+        <FixturesTool
+          key={`fixtures|${sceneKey}|${roomPolygonKey}`}
+          slots={slots}
+          engineRef={engineRef}
+          floorPolygon={room.polygon}
+          initial={savedFixtures}
+          onChange={(items) => setLiveFixtures({ key: roomPolygonKey, items })}
+          onLook={() => setShowPlan(false)}
+          onPlanDraw={changePlanDraw}
+          editable={!url || canEdit}
+          locked={Boolean(roomId) && roomPolygonKey !== savedPolygonKey}
+          onSave={roomId && canEdit ? saveFixturesThenNext : undefined}
+          detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
+          auto={fixturesAuto}
+          shown={markers.fixtures}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
@@ -768,8 +1274,19 @@ export default function SplatViewer({
           aiRemaining={aiRemaining}
           onRemaining={setAiRemaining}
           onReport={() => setHasReport(true)}
+          onSuggest={
+            calibrated && signedIn
+              ? (text) => {
+                  setShowPlan(false);
+                  setTool('furniture');
+                  setAiPrefill((prev) => ({ text, nonce: (prev?.nonce ?? 0) + 1 }));
+                }
+              : undefined
+          }
         />
       )}
+      {/* 코멘트: 방을 볼 수 있으면 읽고, 로그인하면 쓴다 */}
+      {ready && roomId && <CommentsPanel slots={slots} roomId={roomId} ownerId={ownerId} viewer={viewer} isPublic={isPublic} />}
       {ready && (!url || canEdit) && (
         <CalibrationTool
           key={sceneKey}
@@ -777,6 +1294,7 @@ export default function SplatViewer({
           engineRef={engineRef}
           initial={url && calibration ? { transform: calibration.transform, floorPolygon: calibration.floorPolygon } : null}
           onSave={roomId && canEdit ? saveCalibration : undefined}
+          onPrepare={roomId && canEdit && signedIn && aiRemaining !== 0 ? startPrep : undefined}
           onApplied={(polygon) => setRoom(polygon ? { key: sceneKey, polygon } : null)}
         />
       )}
@@ -840,4 +1358,26 @@ function frameCamera(engine: Engine, splat: SplatMesh): number | null {
   engine.camera.updateProjectionMatrix();
   engine.controls.update();
   return size;
+}
+
+/** 3D에 보일 표시 */
+type Markers = { openings: boolean; fixtures: boolean };
+const MARKERS_KEY = 'roomlens.markers';
+
+/** 브라우저에 기억해 둔 표시 설정 (없거나 읽지 못하면 모두 보임) */
+function readMarkers(): Markers {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(MARKERS_KEY) ?? 'null') as Partial<Markers> | null;
+    return { openings: saved?.openings !== false, fixtures: saved?.fixtures !== false };
+  } catch {
+    return { openings: true, fixtures: true };
+  }
+}
+
+function writeMarkers(markers: Markers) {
+  try {
+    window.localStorage.setItem(MARKERS_KEY, JSON.stringify(markers));
+  } catch {
+    // 저장할 수 없는 브라우저(사생활 보호 모드 등)에서는 이번에만 적용된다
+  }
 }

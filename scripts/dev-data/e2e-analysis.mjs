@@ -119,7 +119,7 @@ try {
   const emptyText = await panel.innerText();
   check('"방 분석"을 누르면: "아직 분석한 적이 없습니다", 무엇을 보내는지와 남은 횟수 10', emptyText.includes('아직 분석한 적이 없습니다') && emptyText.includes('Google Gemini') && emptyText.includes('저장하지 않습니다') && (await page.getByTestId('analysis-controls').getAttribute('data-remaining')) === '10', emptyText);
 
-  // 3) 분석: 방 안에서 여섯 방향을 캡처해 보낸다
+  // 3) 분석: 위에서 내려다본 그림 1장 + 방 안에서 여섯 방향을 캡처해 보낸다
   const before = await sceneState(page);
   const started = Date.now();
   await page.getByTestId('analysis-run').click();
@@ -131,7 +131,7 @@ try {
   console.log(JSON.stringify(first, null, 1));
   const sent = await page.getByTestId('analysis-sent').locator('img').evaluateAll((imgs) => imgs.map((img) => img.src));
   sent.forEach((src, i) => writeFileSync(path.join(dataDir, '_e2e', `analysis-sent-${i + 1}.jpg`), Buffer.from(src.replace(/^data:image\/jpeg;base64,/, ''), 'base64')));
-  check('누르면 "화면 캡처 중 (n/6)", 그림 6장을 보냄 (한 장 20KB 이상 = 빈 그림이 아님)', /화면 캡처 중 \(\d\/6\)/.test(capturingText) && sent.length === 6 && sent.every((src) => src.startsWith('data:image/jpeg;base64,/9j/') && src.length > 27000), [capturingText, sent.map((s) => Math.round((s.length * 0.75) / 1024))]);
+  check('누르면 "화면 캡처 중 (n/7)", 그림 7장(위에서 본 그림 + 여섯 방향)을 보냄 (한 장 20KB 이상 = 빈 그림이 아님)', /화면 캡처 중 \(\d\/7\)/.test(capturingText) && sent.length === 7 && sent.every((src) => src.startsWith('data:image/jpeg;base64,/9j/') && src.length > 27000), [capturingText, sent.map((s) => Math.round((s.length * 0.75) / 1024))]);
   check('리포트: 옵션 12가지가 모두 한 번씩, 수납·채광·요약이 한국어로 옴', first.options.length === 12 && OPTION_NAMES.every((name) => first.options.filter((o) => o.name === name).length === 1) && ['low', 'medium', 'high', 'unknown'].includes(first.storage.level) && /[가-힣]/.test(first.summary) && first.options.every((o) => /[가-힣]/.test(o.evidence)), first.options.map((o) => `${o.name}:${o.status}`));
   const text = await report.innerText();
   check('화면: 요약, 옵션(있음/없음/확인 안 됨), 수납, 채광, "AI 참고용, 직접 확인 필요", 치수는 추정하지 않는다는 말', ['옵션', '수납', '채광', 'AI 참고용, 직접 확인 필요', '치수는 AI가 추정하지 않습니다'].every((word) => text.includes(word)) && text.includes(first.summary), text);
@@ -144,18 +144,18 @@ try {
   const rows = await reportsOf();
   const calls = await callsOf();
   check('DB: 리포트 1건(모델 이름과 함께), 호출 기록 1건(analysis, done)', rows.length === 1 && rows[0].model.startsWith('gemini') && rows[0].report.options.length === 12 && calls.length === 1 && calls[0].kind === 'analysis' && calls[0].status === 'done' && calls[0].input_tokens > 1000, [rows.length, calls]);
-  check('그림은 저장하지 않음 (R2에는 3D 파일 하나뿐)', (await listKeys(`rooms/${roomId}/`)).length === 1 && ((await admin.from('room_photos').select('id').eq('room_id', roomId)).data ?? []).length === 0, await listKeys(`rooms/${roomId}/`));
+  check('그림은 저장하지 않음 (R2에는 3D 파일과 대표 사진뿐)', (await listKeys(`rooms/${roomId}/`)).filter((key) => !/\/thumbnail-\d+\.jpg$/.test(key)).length === 1 && ((await admin.from('room_photos').select('id').eq('room_id', roomId)).data ?? []).length === 0, await listKeys(`rooms/${roomId}/`));
   await page.waitForTimeout(1500);
   await page.screenshot({ path: path.join(dataDir, '_e2e', 'analysis-report.png') });
 
-  // 4) 사진을 넣어 다시 분석: 그림 7장, 리포트는 새것 하나만 남는다
+  // 4) 사진을 넣어 다시 분석: 그림 8장, 리포트는 새것 하나만 남는다
   await page.getByTestId('analysis-photos').setInputFiles(path.join(dataDir, '_e2e', 'analysis-sent-1.jpg'));
   await page.getByTestId('analysis-photo-list').waitFor({ timeout: 10000 });
   const photoText = await page.getByTestId('analysis-photo-list').innerText();
   await page.getByTestId('analysis-run').click();
   await page.waitForFunction((id) => document.querySelector('[data-testid=analysis-report]')?.getAttribute('data-report-id') !== id, rows[0].id, { timeout: 150000 });
   const second = await reportsOf();
-  check('사진 1장을 넣어 "다시 분석": 그림 7장을 보내고, 리포트는 새것 하나만 남음', photoText.includes('사진 1장') && (await page.getByTestId('analysis-sent').getAttribute('data-count')) === '7' && second.length === 1 && second[0].id !== rows[0].id && (await callsOf()).length === 2, [photoText, second.length]);
+  check('사진 1장을 넣어 "다시 분석": 그림 8장을 보내고, 리포트는 새것 하나만 남음', photoText.includes('사진 1장') && (await page.getByTestId('analysis-sent').getAttribute('data-count')) === '8' && second.length === 1 && second[0].id !== rows[0].id && (await callsOf()).length === 2, [photoText, second.length]);
 
   // 5) 다시 열어도 리포트가 보인다
   await openRoom();

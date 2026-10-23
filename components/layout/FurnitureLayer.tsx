@@ -1,15 +1,20 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { DEFAULT_CATALOG, type CatalogItem } from '@/lib/layout/catalog';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { catalogLabel, catalogThumbnail, DEFAULT_CATALOG, modelCredits, type CatalogItem } from '@/lib/layout/catalog';
 import { doorZone } from '@/lib/layout/access';
 import { blocksAccess } from '@/lib/layout/accessSide';
 import type { AiResultView } from '@/lib/ai/suggestClient';
 import { MAX_SUGGEST_ITEMS } from '@/lib/ai/layoutSuggest';
 import { MAX_REQUEST_LENGTH } from '@/lib/ai/roomSummary';
 import { checkLayout, findFreeSpot, violatingIds, warningIds } from '@/lib/layout/check';
+import { lastInsideAlong } from '@/lib/layout/geometry';
+import { emptyHistory, historyShortcut, record, redo, undo, type History } from '@/lib/layout/history';
+import { angleDelta, normalizeRotation, parseRotationInput, ROTATE_STEP, rotationTowards, snapRotation } from '@/lib/layout/rotation';
+import { isTypingTarget } from '@/lib/three/keyboardMove';
 import {
   MAX_USER_FURNITURE,
   parseUserFurnitureForm,
@@ -18,6 +23,7 @@ import {
   type UserFurnitureValue,
 } from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
+import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
 import {
   MAX_LAYOUT_ITEMS,
   nextItemNumber,
@@ -31,12 +37,17 @@ import {
 import { placeOnFloor, rayFloorPoint, type Footprint, type Point2 } from '@/lib/three/floorDrag';
 import { disposeModelTemplate, instantiateModel, makeModelTemplate, type ModelTemplate } from '@/lib/three/furnitureModel';
 import { pointerToNdc } from '@/lib/three/pickPoint';
+import { flyTo, furnitureViewpoint } from '@/lib/three/focusView';
+import { makeShadowTexture, shadowSize } from '@/lib/three/softShadow';
 import type { Engine } from '@/components/viewer/engine';
 import FurnitureGlyph from '@/components/ui/FurnitureGlyph';
+import FurnitureThumb from '@/components/ui/FurnitureThumb';
 import Icon from '@/components/ui/Icon';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
 import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
+import ScanFurnitureForm from './ScanFurnitureForm';
 import FloorPlan from './FloorPlan';
+import LayoutShareBox from './LayoutShareBox';
 
 type Item = PlacedItem;
 
@@ -46,16 +57,27 @@ const VIOLATION_EDGE_COLOR = 0xff3b30;
 const VIOLATION_EMISSIVE = 0x7a1010;
 const WARNING_EDGE_COLOR = 0xffc233;
 const WARNING_EMISSIVE = 0x4a3800;
+/** 가구 밑 그림자의 진하기와 바닥에서 띄우는 높이 (m, 바닥과 겹쳐 깜빡이지 않게) */
+const SHADOW_OPACITY = 0.45;
+const SHADOW_LIFT = 0.004;
 const NO_OPENINGS: Opening[] = [];
+const NO_FIXTURES: Fixture[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
 const NO_LAYOUTS: LayoutChoice[] = [];
 const NO_KEYS: string[] = [];
 
 /** 배치를 고르는 칸에 보여줄 것 */
-export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai' };
+export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai'; isPublic?: boolean };
 const EMPTY_MINE_FORM: UserFurnitureForm = { name: '', width: '', depth: '', height: '' };
 
-type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint };
+type Drag = {
+  id: string;
+  pointerId: number;
+  offset: Point2;
+  current: Footprint;
+  /** Shift+끌기로 돌리는 중이면: 잡을 때 포인터 방향과 가구 각도 */
+  rotate: { startPointer: number; startDeg: number } | null;
+};
 
 /**
  * 보정된 방(바닥 y=0, 단위 m) 위에 박스 가구를 놓고 바닥 평면에서 끈다.
@@ -64,6 +86,12 @@ type Drag = { id: string; pointerId: number; offset: Point2; current: Footprint 
  * onSave가 있으면 저장 버튼을 보여주고, initialItems(저장된 배치)로 시작한다.
  * 배치를 바꾸거나(내 배치 ↔ AI 배치) 새로 추천받으면 부모가 key를 바꿔 이 층을 새로 만든다.
  */
+/** 방 좌표의 한 점이 지금 3D 화면 안(가장자리 10% 제외)에 보이는지 */
+function inView(engine: Engine, x: number, y: number, z: number): boolean {
+  const p = new THREE.Vector3(x, y, z).project(engine.camera);
+  return p.z > -1 && p.z < 1 && Math.abs(p.x) < 0.9 && Math.abs(p.y) < 0.9;
+}
+
 export default function FurnitureLayer({
   slots,
   showPlan,
@@ -73,9 +101,12 @@ export default function FurnitureLayer({
   catalog = DEFAULT_CATALOG,
   openings = NO_OPENINGS,
   aiOpeningKeys = NO_KEYS,
+  fixtures = NO_FIXTURES,
+  onDrawFixture,
   userFurniture = NO_FURNITURE,
   onCreateFurniture,
   onDeleteFurniture,
+  onCreateScanFurniture,
   initialItems,
   onSave,
   loginHint = false,
@@ -88,6 +119,12 @@ export default function FurnitureLayer({
   aiBlocked = null,
   aiResult = null,
   aiSummary = null,
+  borrowedFurniture = NO_FURNITURE,
+  sharedFrom = null,
+  sharedMissing = false,
+  share,
+  onUnsavedChange,
+  aiPrefill = null,
 }: {
   /** 패널과 3D 화면 위에 그려 넣을 자리 */
   slots: Slots;
@@ -102,12 +139,18 @@ export default function FurnitureLayer({
   openings?: Opening[];
   /** 그 가운데 AI가 찾아 아직 확인하지 않은 것 (평면도에서 점선으로 그린다) */
   aiOpeningKeys?: string[];
+  /** 방에 원래 있는 가구. 새 가구는 피해서 놓고, 겹치면 문제로 알린다 ("치울 가구"는 없는 것으로 본다) */
+  fixtures?: Fixture[];
+  /** 평면도에서 원래 가구 사각형을 그리는 중이면 그린 두 모서리를 받는다 */
+  onDrawFixture?: (a: Point2, b: Point2) => void;
   /** 내가 만들어 둔 가구. 처음 한 번만 읽는다 */
   userFurniture?: CatalogItem[];
   /** 내 가구를 만든다 (주면 "내 가구" 칸이 생긴다). 실패하면 null */
   onCreateFurniture?: (value: UserFurnitureValue) => Promise<CatalogItem | null>;
   /** 내 가구를 지운다. 지웠으면 true */
   onDeleteFurniture?: (id: string) => Promise<boolean>;
+  /** 3D 스캔(다듬은 GLB)으로 내 가구를 만든다 */
+  onCreateScanFurniture?: (glb: Blob, value: UserFurnitureValue) => Promise<{ ok: true; item: CatalogItem } | { ok: false; message: string }>;
   /** 저장된 배치. 처음 한 번만 읽는다 */
   initialItems?: SavedItem[];
   /** 배치를 저장한다. 성공하면 true */
@@ -131,17 +174,31 @@ export default function FurnitureLayer({
   aiResult?: AiResultView | null;
   /** 저장된 AI 배치에 붙어 있는 글 (전체 의도와 가구별 이유) */
   aiSummary?: string | null;
+  /** 남이 공유한 배치에 쓰인 그 사람의 가구 (그리기만 하고 "내 가구"에는 넣지 않는다) */
+  borrowedFurniture?: CatalogItem[];
+  /** 남이 공유한 배치를 보고 있으면 그 사람과 배치 이름. 저장하면 내 배치가 된다 */
+  sharedFrom?: { ownerName: string; layoutName: string } | null;
+  /** 공유 링크로 왔지만 그 배치를 볼 수 없을 때 (비공개로 바뀌었거나 지워졌음) */
+  sharedMissing?: boolean;
+  /** 지금 배치를 링크로 공유하기 (주면 저장된 내 배치에 "공유" 버튼이 생긴다) */
+  share?: { roomId: string; roomPublic: boolean; onSetPublic: (layoutId: string, next: boolean) => Promise<boolean> };
+  /** 저장할 수 있는데 저장하지 않은 배치가 있는지 알려 준다 (나갈 때 묻기). 공유받은 배치를 둘러보는 것은 빼고 */
+  onUnsavedChange?: (unsaved: boolean) => void;
+  /** 방 분석에서 넘어온 AI 추천 요청 글. nonce가 바뀔 때마다 요청 칸을 열고 글을 넣는다 */
+  aiPrefill?: { text: string; nonce: number } | null;
 }) {
-  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, userFurniture));
+  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, [...userFurniture, ...borrowedFurniture]));
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
   const [mineFormOpen, setMineFormOpen] = useState(false);
   const [mineForm, setMineForm] = useState<UserFurnitureForm>(EMPTY_MINE_FORM);
+  const [scanOpen, setScanOpen] = useState(false);
   const [mineMessage, setMineMessage] = useState<string | null>(null);
   const [mineBusy, setMineBusy] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [items, setItems] = useState<Item[]>(restored.items);
   // 마지막으로 저장한 배치 (지금 배치와 다르면 "저장 안 됨")
-  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => toSavedItems(restored.items));
+  // 남이 공유한 배치는 아직 내 것이 아니므로 "저장 안 됨"으로 시작한다
+  const [savedItems, setSavedItems] = useState<SavedItem[]>(() => (sharedFrom ? [] : toSavedItems(restored.items)));
   const [savePhase, setSavePhase] = useState<'idle' | 'saving' | 'error'>('idle');
   // 불러온 3D 모델 틀 (주소 → 틀, 받는 중이거나 실패했으면 null). 다 받으면 modelVersion을 올려 다시 그린다
   const [modelCache] = useState(() => new Map<string, ModelTemplate | null>());
@@ -152,26 +209,113 @@ export default function FurnitureLayer({
   const [aiRequest, setAiRequest] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
   const [aiMessage, setAiMessage] = useState<string | null>(null);
+  const aiFormRef = useRef<HTMLDivElement>(null);
+  const [prefillNonce, setPrefillNonce] = useState(0);
+  if (aiPrefill && aiPrefill.nonce !== prefillNonce) {
+    // 넘어온 요청 글을 칸에 넣는다 (그리는 중에 상태를 맞추는 React 방식)
+    setPrefillNonce(aiPrefill.nonce);
+    setAiRequest(aiPrefill.text.slice(0, MAX_REQUEST_LENGTH));
+    setAiOpen(true);
+    setAiMessage(null);
+  }
+  // 넘어온 요청 칸이 보이게 하고 글을 고칠 수 있게 초점을 준다
+  useEffect(() => {
+    if (prefillNonce === 0) return;
+    const form = aiFormRef.current;
+    form?.scrollIntoView({ block: 'nearest' });
+    form?.querySelector('textarea')?.focus();
+  }, [prefillNonce]);
   const [layoutBusy, setLayoutBusy] = useState(false);
   const [confirmLayoutDelete, setConfirmLayoutDelete] = useState(false);
-  const itemsRef = useRef<Item[]>([]);
+  const [shareOpen, setShareOpen] = useState(false);
+  // 끌거나 돌리는 중인 가구의 지금 자리 (손을 떼기 전). 이것으로 바로 검사해 보여 준다
+  const [live, setLive] = useState<{ id: string; pose: Footprint } | null>(null);
+  const [angleText, setAngleText] = useState<string | null>(null);
+  const itemsRef = useRef<Item[]>(restored.items);
+  // 단축키(R)가 쓰는 지금 고른 가구와 돌리기 함수
+  const selectedRef = useRef<string | null>(null);
+  const rotateToRef = useRef<(id: string, deg: number) => void>(() => {});
   const groupRef = useRef<THREE.Group | null>(null);
+  // 되돌리기·다시하기 기록 (화면에는 단계 수만 쓴다)
+  const [history, setHistory] = useState<History<Item[]>>(emptyHistory);
+  const historyRef = useRef(history);
 
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
 
-  const violations = useMemo(() => checkLayout(items, floorPolygon, openings), [items, floorPolygon, openings]);
+  /** 배치를 바꾼다. 바뀌기 전 배치를 되돌리기 기록에 남긴다 (실제로 달라진 것이 없으면 남기지 않는다) */
+  const commit = useCallback((change: (prev: Item[]) => Item[]) => {
+    const prev = itemsRef.current;
+    const next = change(prev);
+    if (next === prev || (next.length === prev.length && sameSavedItems(toSavedItems(next), toSavedItems(prev)))) return;
+    itemsRef.current = next;
+    historyRef.current = record(historyRef.current, prev);
+    setHistory(historyRef.current);
+    setItems(next);
+  }, []);
+
+  /** 되돌리기·다시하기 */
+  const step = useCallback((kind: 'undo' | 'redo') => {
+    const out = (kind === 'undo' ? undo : redo)(historyRef.current, itemsRef.current);
+    if (!out) return;
+    itemsRef.current = out.value;
+    historyRef.current = out.history;
+    setHistory(out.history);
+    setItems(out.value);
+  }, []);
+
+  // 단축키: 가구 도구를 쓰는 중이고 입력 칸에 글을 쓰고 있지 않을 때
+  const furnitureActive = slots.active === 'furniture';
+  useEffect(() => {
+    if (!furnitureActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (isTypingTarget(e.target as HTMLElement | null)) return;
+      // R: 고른 가구를 오른쪽으로 15°, Shift+R: 왼쪽으로 (한글 입력 상태에서도 되게 code로 본다)
+      if (e.code === 'KeyR' && !e.ctrlKey && !e.metaKey && !e.altKey && selectedRef.current) {
+        e.preventDefault();
+        const item = itemsRef.current.find((i) => i.id === selectedRef.current);
+        if (item) rotateToRef.current(item.id, item.rotationDeg + (e.shiftKey ? -ROTATE_STEP : ROTATE_STEP));
+        return;
+      }
+      const kind = historyShortcut(e);
+      if (!kind) return;
+      e.preventDefault();
+      step(kind);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [furnitureActive, step]);
+
+  const obstacles = useMemo(() => fixtureObstacles(fixtures), [fixtures]);
+  const violations = useMemo(() => checkLayout(items, floorPolygon, openings, obstacles), [items, floorPolygon, openings, obstacles]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
   const warnIds = useMemo(() => warningIds(violations), [violations]);
+  // 끄는 동안의 검사: 끄는 가구만 지금 자리로 바꿔 다시 검사한다
+  const liveViolations = useMemo(() => {
+    if (!live) return null;
+    const moved = items.map((i) => (i.id === live.id ? { ...i, ...live.pose } : i));
+    return checkLayout(moved, floorPolygon, openings, obstacles);
+  }, [live, items, floorPolygon, openings, obstacles]);
+  const shownBadIds = useMemo(() => (liveViolations ? violatingIds(liveViolations) : badIds), [liveViolations, badIds]);
+  const shownWarnIds = useMemo(() => (liveViolations ? warningIds(liveViolations) : warnIds), [liveViolations, warnIds]);
+  const liveMessages = live && liveViolations ? liveViolations.filter((v) => v.itemId === live.id || v.otherId === live.id) : null;
   const errorCount = violations.filter((v) => v.severity === 'error').length;
   const hasDoor = openings.some((o) => o.type === 'door');
   const currentSaved = useMemo(() => toSavedItems(items), [items]);
   const dirty = !sameSavedItems(currentSaved, savedItems);
+  const unsaved = dirty && Boolean(onSave) && !sharedFrom;
+  useEffect(() => {
+    onUnsavedChange?.(unsaved);
+  }, [unsaved, onUnsavedChange]);
+  // 가구 층이 바뀌거나 사라지면(다른 배치로 바꿈) 알림을 거둔다
+  useEffect(() => () => onUnsavedChange?.(false), [onUnsavedChange]);
   const saveState = savePhase === 'saving' ? 'saving' : !dirty ? 'saved' : savePhase === 'error' ? 'error' : 'dirty';
   const full = items.length >= MAX_LAYOUT_ITEMS;
+  const credits = useMemo(() => modelCredits(catalog), [catalog]);
 
-  // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다)
+  // 가구 음영용 조명 (스플랫에는 영향을 주지 않는다).
+  // 실사 모델(PBR 재질)도 이 두 빛만으로 맞췄다: 실내 환경 맵을 더하면 흰 가구가 하얗게 날아가 스플랫 방보다 튄다
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -184,6 +328,10 @@ export default function FurnitureLayer({
     };
   }, [engineRef]);
 
+  // 가구 밑의 부드러운 그림자 그림 (가구마다 함께 쓴다)
+  const shadowTexture = useMemo(() => makeShadowTexture(), []);
+  useEffect(() => () => shadowTexture.dispose(), [shadowTexture]);
+
   // 가구 3D 모델 불러오기: 놓인 가구가 쓰는 모델을 한 번씩만 받아 틀로 만들어 둔다.
   // 받는 동안과 받지 못했을 때는 상자로 보인다
   useEffect(() => {
@@ -191,7 +339,7 @@ export default function FurnitureLayer({
       const url = item.modelUrl;
       if (!url || modelCache.has(url)) continue;
       modelCache.set(url, null);
-      new GLTFLoader().load(
+      new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).load(
         url,
         (gltf) => {
           const template = makeModelTemplate(gltf.scene);
@@ -244,6 +392,7 @@ export default function FurnitureLayer({
         color: bad ? VIOLATION_EDGE_COLOR : warn ? WARNING_EDGE_COLOR : item.id === selectedId ? SELECTED_EDGE_COLOR : EDGE_COLOR,
       });
       const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
+      edges.userData.edges = true;
       // 모델이 있으면 외곽선은 고른 가구와 문제 있는 가구에만
       edges.visible = !template || bad || warn || item.id === selectedId;
       mesh.add(edges);
@@ -252,6 +401,15 @@ export default function FurnitureLayer({
         const model = instantiateModel(template, item.w, item.h, item.d);
         model.position.y = -item.h / 2;
         mesh.add(model);
+        // 바닥에 닿은 느낌이 나도록 밑에 그림자를 깐다 (바닥보다 살짝 위, 가구와 함께 돈다)
+        const shadowGeometry = new THREE.PlaneGeometry(...shadowSize(item.w, item.d));
+        const shadowMaterial = new THREE.MeshBasicMaterial({ map: shadowTexture, color: 0x000000, transparent: true, opacity: SHADOW_OPACITY, depthWrite: false });
+        const shadow = new THREE.Mesh(shadowGeometry, shadowMaterial);
+        shadow.rotation.x = -Math.PI / 2;
+        shadow.position.y = -item.h / 2 + SHADOW_LIFT;
+        shadow.renderOrder = -1;
+        mesh.add(shadow);
+        disposables.push(shadowGeometry, shadowMaterial);
       }
       group.add(mesh);
       disposables.push(geometry, material, edgeGeometry, edgeMaterial);
@@ -263,7 +421,19 @@ export default function FurnitureLayer({
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion]);
+  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion, shadowTexture]);
+
+  // 끄는 동안: 메시를 다시 만들지 않고 끄는 가구의 테두리 색만 바꾼다 (문제 빨강, 경고 노랑, 괜찮으면 고른 색)
+  useEffect(() => {
+    if (!live) return;
+    const mesh = groupRef.current?.children.find((m) => m.userData.id === live.id);
+    const edges = mesh?.children.find((c) => c.userData.edges) as THREE.LineSegments | undefined;
+    if (!edges) return;
+    const material = edges.material as THREE.LineBasicMaterial;
+    const color = shownBadIds.has(live.id) ? VIOLATION_EDGE_COLOR : shownWarnIds.has(live.id) ? WARNING_EDGE_COLOR : SELECTED_EDGE_COLOR;
+    material.color.setHex(color);
+    edges.visible = true;
+  }, [live, shownBadIds, shownWarnIds]);
 
   // 바닥 평면 드래그
   useEffect(() => {
@@ -297,32 +467,55 @@ export default function FurnitureLayer({
         pointerId: e.pointerId,
         offset: [item.x - floor[0], item.z - floor[1]], // 잡은 위치를 유지
         current: item,
+        // Shift를 누르고 끌면 그 자리에서 돌린다 (처음 각도에서 끈 만큼)
+        rotate: e.shiftKey ? { startPointer: rotationTowards(floor[0] - item.x, floor[1] - item.z), startDeg: item.rotationDeg } : null,
       };
       setSelectedId(item.id);
+    };
+
+    // 화면 갱신마다 한 번만 검사 상태를 바꾼다
+    let frame = 0;
+    const showLive = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        if (drag) setLive({ id: drag.id, pose: { x: drag.current.x, z: drag.current.z, w: drag.current.w, d: drag.current.d, rotationDeg: drag.current.rotationDeg } });
+      });
     };
 
     const onMove = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.pointerId) return;
       const floor = floorPointAt(e);
       if (!floor) return;
-      drag.current = placeOnFloor(
-        { ...drag.current, x: floor[0] + drag.offset[0], z: floor[1] + drag.offset[1] },
-        floorPolygon,
-      );
+      if (drag.rotate) {
+        const pointer = rotationTowards(floor[0] - drag.current.x, floor[1] - drag.current.z);
+        const deg = snapRotation(drag.rotate.startDeg + angleDelta(pointer, drag.rotate.startPointer));
+        drag.current = placeOnFloor({ ...drag.current, rotationDeg: deg }, floorPolygon);
+      } else {
+        drag.current = placeOnFloor(
+          { ...drag.current, x: floor[0] + drag.offset[0], z: floor[1] + drag.offset[1] },
+          floorPolygon,
+        );
+      }
       // 끄는 동안에는 메시만 옮기고, 손을 뗄 때 상태에 반영한다
       const mesh = groupRef.current?.children.find((m) => m.userData.id === drag?.id);
       if (mesh) {
         mesh.position.x = drag.current.x;
         mesh.position.z = drag.current.z;
+        mesh.rotation.y = THREE.MathUtils.degToRad(drag.current.rotationDeg);
       }
+      showLive();
     };
 
     const onUp = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.pointerId) return;
       const { id, current } = drag;
       drag = null;
+      if (frame) cancelAnimationFrame(frame);
+      frame = 0;
+      setLive(null);
       if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
-      setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z } : i)));
+      commit((prev) => prev.map((i) => (i.id === id ? { ...i, x: current.x, z: current.z, rotationDeg: current.rotationDeg } : i)));
     };
 
     // capture 단계에 걸어 OrbitControls의 리스너보다 먼저 실행되게 한다
@@ -335,8 +528,31 @@ export default function FurnitureLayer({
       el.removeEventListener('pointermove', onMove);
       el.removeEventListener('pointerup', onUp);
       el.removeEventListener('pointercancel', onUp);
+      if (frame) cancelAnimationFrame(frame);
     };
-  }, [engineRef, floorPolygon]);
+  }, [engineRef, floorPolygon, commit]);
+
+  /** 가구 테두리를 잠깐 깜빡여 어디 있는지 알린다 (메시를 다시 만들지 않고 테두리만 켜고 끈다) */
+  const blink = (id: string) => {
+    let count = 0;
+    const timer = window.setInterval(() => {
+      const mesh = groupRef.current?.children.find((m) => m.userData.id === id);
+      const edges = mesh?.children.find((c) => c.userData.edges) as THREE.LineSegments | undefined;
+      count += 1;
+      if (edges) edges.visible = count % 2 === 1 || count >= 6;
+      if (count >= 6) window.clearInterval(timer);
+    }, 160);
+  };
+
+  /** 가구로 시점 옮기기: 고르고, 평면도를 보고 있었으면 3D로 돌아가 그 가구를 내려다보는 자리로 날아간다 */
+  const focusOn = (item: Pick<Item, 'id' | 'x' | 'z' | 'w' | 'd' | 'h'>) => {
+    const engine = engineRef.current;
+    setSelectedId(item.id);
+    if (!engine) return;
+    if (showPlan) onShowPlan(false);
+    const view = furnitureViewpoint(item, floorPolygon, [engine.camera.position.x, engine.camera.position.z]);
+    void flyTo(engine, view).then(() => blink(item.id));
+  };
 
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
@@ -345,23 +561,47 @@ export default function FurnitureLayer({
     // 되도록 가구의 쓰는 쪽(책상·수납의 앞 등)이 서로 막히지 않는 자리를 고른다
     const others = itemsRef.current;
     const doorZones = openings.flatMap((o) => (o.type === 'door' ? [doorZone(o, floorPolygon)] : [])).filter((zone) => zone !== null);
-    const placed = findFreeSpot(entry, [...others, ...doorZones], floorPolygon, (spot) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, others, floorPolygon));
-    setItems((prev) => [...prev, placeCatalogItem(entry, id, placed)]);
+    // 방에 원래 있는 가구 자리도 피한다
+    const avoid = [...others, ...obstacles, ...doorZones];
+    const prefer = (spot: Footprint) => !blocksAccess({ ...spot, id, category: entry.category, clearance: entry.clearance }, [...others, ...obstacles], floorPolygon);
+    let placed = findFreeSpot(entry, avoid, floorPolygon, prefer);
+    // 3D로 보는 중인데 그 자리가 화면 밖이면(창문을 가까이 보고 있을 때 등) 추가된 줄 모른다 → 화면 가운데 바닥부터 찾는다
+    const engine = engineRef.current;
+    if (engine && !showPlan && !inView(engine, placed.x, entry.h / 2, placed.z)) {
+      const ray = new THREE.Raycaster();
+      ray.setFromCamera(new THREE.Vector2(0, 0), engine.camera);
+      const eye: Point2 = [engine.camera.position.x, engine.camera.position.z];
+      // 화면 가운데 광선이 바닥에 닿는 곳(바닥을 안 보면 2m 앞). 벽 너머면 벽 바로 앞까지 당긴다
+      const ahead = rayFloorPoint(ray.ray.origin, ray.ray.direction) ?? [eye[0] + ray.ray.direction.x * 2, eye[1] + ray.ray.direction.z * 2];
+      const start = floorPolygon ? lastInsideAlong(eye, ahead, floorPolygon) : ahead;
+      if (start) placed = findFreeSpot(entry, avoid, floorPolygon, prefer, start);
+    }
+    const item = placeCatalogItem(entry, id, placed);
+    commit((prev) => [...prev, item]);
     setSelectedId(id);
+    // 그래도 화면 밖이면(방 밖을 보고 있었거나 빈자리가 멀 때) 그 가구로 시점을 옮긴다
+    if (engine && !showPlan && !inView(engine, item.x, item.h / 2, item.z)) focusOn(item);
   };
 
-  const rotate = () => {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.id === selectedId
-          ? { ...i, ...placeOnFloor({ ...i, rotationDeg: (i.rotationDeg + 90) % 360 }, floorPolygon) }
-          : i,
-      ),
-    );
+  /** 고른 가구를 deg로 돌린다 (벽에 붙어 있었으면 다시 붙인다) */
+  const rotateTo = useCallback(
+    (id: string, deg: number) => {
+      commit((prev) => prev.map((i) => (i.id === id ? { ...i, ...placeOnFloor({ ...i, rotationDeg: normalizeRotation(deg) }, floorPolygon) } : i)));
+    },
+    [commit, floorPolygon],
+  );
+  useEffect(() => {
+    rotateToRef.current = rotateTo;
+    selectedRef.current = selectedId;
+  }, [rotateTo, selectedId]);
+  const rotateBy = (delta: number) => {
+    const item = itemsRef.current.find((i) => i.id === selectedId);
+    if (item) rotateTo(item.id, item.rotationDeg + delta);
   };
+  const rotate = () => rotateBy(90);
 
   const remove = () => {
-    setItems((prev) => prev.filter((i) => i.id !== selectedId));
+    commit((prev) => prev.filter((i) => i.id !== selectedId));
     setSelectedId(null);
   };
 
@@ -376,7 +616,8 @@ export default function FurnitureLayer({
   };
 
   /** 다른 배치로 바꾸기 전에, 저장하지 않은 것이 있으면 먼저 저장한다 (잃지 않게) */
-  const saveIfDirty = async (): Promise<boolean> => !dirty || !onSave || (await save());
+  // 남이 공유한 배치는 둘러보기만 했을 수 있으므로 다른 배치로 갈 때 저절로 저장하지 않는다
+  const saveIfDirty = async (): Promise<boolean> => !dirty || !onSave || Boolean(sharedFrom) || (await save());
 
   const selectLayout = async (id: string | null) => {
     if (!onSelectLayout || layoutBusy || id === currentLayoutId) return;
@@ -441,7 +682,7 @@ export default function FurnitureLayer({
     }
     setMine((prev) => prev.filter((f) => f.id !== id));
     // 방에 놓여 있던 그 가구도 함께 치운다
-    setItems((prev) => prev.filter((i) => !(i.kind === 'user' && i.furnitureRef === id)));
+    commit((prev) => prev.filter((i) => !(i.kind === 'user' && i.furnitureRef === id)));
     setMineMessage(null);
   };
 
@@ -469,29 +710,82 @@ export default function FurnitureLayer({
                 items={items}
                 openings={openings}
                 aiOpeningKeys={aiOpeningKeys}
-                badIds={badIds}
-                warnIds={warnIds}
+                fixtures={fixtures}
+                onDrawFixture={onDrawFixture}
+                badIds={shownBadIds}
+                warnIds={shownWarnIds}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
-                onMove={(id, x, z) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+                onMove={(id, x, z) => commit((prev) => prev.map((i) => (i.id === id ? { ...i, x, z } : i)))}
+                onRotate={rotateTo}
+                onPreview={(id, pose) => setLive(id && pose ? { id, pose } : null)}
               />
             </div>
           </div>
         )}
 
-        {/* 3D ↔ 평면도 */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={showPlan}
-          aria-label="평면도로 보기"
-          className="absolute top-3 left-3 flex rounded-xl bg-surface p-1 text-[13px] shadow-float"
-          onClick={() => onShowPlan(!showPlan)}
-          data-testid="plan-toggle"
-        >
-          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'font-medium text-sub' : 'bg-ink font-semibold text-white'}`}>3D</span>
-          <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'bg-ink font-semibold text-white' : 'font-medium text-sub'}`}>평면도</span>
-        </button>
+        <div className="absolute top-3 left-3 flex items-start gap-2">
+          {/* 3D ↔ 평면도 */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={showPlan}
+            aria-label="평면도로 보기"
+            className="flex rounded-xl bg-surface p-1 text-[13px] shadow-float"
+            onClick={() => onShowPlan(!showPlan)}
+            data-testid="plan-toggle"
+          >
+            <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'font-medium text-sub' : 'bg-ink font-semibold text-white'}`}>3D</span>
+            <span className={`flex h-9 items-center rounded-[9px] px-4 ${showPlan ? 'bg-ink font-semibold text-white' : 'font-medium text-sub'}`}>평면도</span>
+          </button>
+          {/* 되돌리기·다시하기 (가구 도구에서만) */}
+          {furnitureActive && (
+            <div className="flex rounded-xl bg-surface p-1 shadow-float" data-testid="layout-history">
+              <button
+                type="button"
+                className="flex h-9 w-10 items-center justify-center rounded-[9px] text-ink hover:bg-soft disabled:text-mute disabled:hover:bg-transparent"
+                disabled={history.past.length === 0}
+                onClick={() => step('undo')}
+                aria-label="되돌리기"
+                title="되돌리기 (Ctrl+Z)"
+                data-testid="layout-undo"
+                data-steps={history.past.length}
+              >
+                <Icon name="undo" />
+              </button>
+              <button
+                type="button"
+                className="flex h-9 w-10 items-center justify-center rounded-[9px] text-ink hover:bg-soft disabled:text-mute disabled:hover:bg-transparent"
+                disabled={history.future.length === 0}
+                onClick={() => step('redo')}
+                aria-label="다시하기"
+                title="다시하기 (Ctrl+Shift+Z)"
+                data-testid="layout-redo"
+                data-steps={history.future.length}
+              >
+                <Icon name="redo" />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* 끄거나 돌리는 동안: 그 자리에서의 검사 결과를 바로 */}
+        {liveMessages && (
+          <div
+            className={`pointer-events-none absolute top-16 left-1/2 flex max-w-[calc(100%-1.5rem)] -translate-x-1/2 flex-col items-center gap-1 rounded-xl px-3.5 py-2 text-[13px] font-medium shadow-float ${
+              liveMessages.some((v) => v.severity === 'error') ? 'bg-danger-soft text-danger' : liveMessages.length ? 'bg-warn-soft text-warn' : 'bg-ok-soft text-ok'
+            }`}
+            role="status"
+            data-testid="live-check"
+            data-state={liveMessages.some((v) => v.severity === 'error') ? 'error' : liveMessages.length ? 'warning' : 'ok'}
+          >
+            {liveMessages.length === 0 ? (
+              <span>여기는 괜찮습니다{live ? ` · ${Math.round(live.pose.rotationDeg)}°` : ''}</span>
+            ) : (
+              [...new Set(liveMessages.map((v) => v.message))].slice(0, 3).map((message) => <span key={message}>{message}</span>)
+            )}
+          </div>
+        )}
 
         {/* 고른 가구: 이름·치수, 회전, 삭제 */}
         {selected && (
@@ -500,7 +794,7 @@ export default function FurnitureLayer({
             data-testid="selection-bar"
             data-id={selected.id}
           >
-            <FurnitureGlyph furnitureRef={selected.furnitureRef} category={selected.category} size={34} />
+            <FurnitureThumb furnitureRef={selected.furnitureRef} category={selected.category} src={catalogThumbnail({ id: selected.furnitureRef, kind: selected.kind })} size={34} />
             <span className="flex min-w-0 flex-col">
               <span className="truncate font-bold">{selected.name}</span>
               <span className="font-mono text-[11px] text-mute" title={`위치 x ${selected.x.toFixed(2)}, z ${selected.z.toFixed(2)} · ${selected.rotationDeg}°`}>
@@ -508,9 +802,49 @@ export default function FurnitureLayer({
               </span>
             </span>
             <span className="h-7 w-px bg-line" aria-hidden="true" />
-            <button className="btn btn-soft h-11 px-3.5 text-[13px]" onClick={rotate}>
+            <button className="btn btn-soft h-11 px-3 text-[13px]" onClick={() => focusOn(selected)} title="이 가구가 잘 보이는 자리로 시점 옮기기" aria-label="가구로 이동" data-testid="selection-focus">
+              <Icon name="focus" />
+              <span className="max-sm:hidden">가구로 이동</span>
+            </button>
+            {/* 회전: 15°씩, 각도 입력, 90° (평면도의 손잡이나 3D에서 Shift+끌기로는 자유롭게) */}
+            <div className="flex items-center rounded-xl bg-soft" data-testid="selection-rotation" data-deg={selected.rotationDeg}>
+              <button className="flex h-11 w-9 items-center justify-center rounded-l-xl text-ink-2 hover:bg-chip" onClick={() => rotateBy(-ROTATE_STEP)} aria-label={`왼쪽으로 ${ROTATE_STEP}° 돌리기`} title={`왼쪽으로 ${ROTATE_STEP}° (Shift+R)`} data-testid="rotate-left">
+                <Icon name="undo" />
+              </button>
+              <label className="flex items-center font-mono text-[13px]">
+                <span className="sr-only">회전 각도</span>
+                <input
+                  className="h-9 w-11 rounded-md bg-surface text-center tabular-nums outline-none focus:ring-2 focus:ring-accent"
+                  inputMode="numeric"
+                  value={angleText ?? String(selected.rotationDeg)}
+                  onFocus={(e) => {
+                    setAngleText(String(selected.rotationDeg));
+                    e.currentTarget.select();
+                  }}
+                  onChange={(e) => setAngleText(e.target.value)}
+                  onBlur={() => {
+                    const deg = angleText === null ? null : parseRotationInput(angleText);
+                    if (deg !== null && deg !== selected.rotationDeg) rotateTo(selected.id, deg);
+                    setAngleText(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                    if (e.key === 'Escape') {
+                      setAngleText(null);
+                      requestAnimationFrame(() => (e.target as HTMLInputElement).blur());
+                    }
+                  }}
+                  data-testid="rotate-input"
+                />
+                <span className="pr-0.5 pl-0.5 text-mute">°</span>
+              </label>
+              <button className="flex h-11 w-9 items-center justify-center rounded-r-xl text-ink-2 hover:bg-chip" onClick={() => rotateBy(ROTATE_STEP)} aria-label={`오른쪽으로 ${ROTATE_STEP}° 돌리기`} title={`오른쪽으로 ${ROTATE_STEP}° (R)`} data-testid="rotate-right">
+                <Icon name="redo" />
+              </button>
+            </div>
+            <button className="btn btn-soft h-11 px-3 text-[13px]" onClick={rotate} aria-label="90° 회전" title="90° 회전">
               <Icon name="rotate" />
-              90° 회전
+              <span className="max-sm:hidden">90°</span>
             </button>
             <button className="btn btn-danger h-11 px-3.5 text-[13px]" onClick={remove}>
               삭제
@@ -557,6 +891,24 @@ export default function FurnitureLayer({
               가구 배치
             </PanelTitle>
 
+            {sharedFrom && (
+              <div className="flex flex-col gap-1 rounded-xl bg-accent-soft px-3.5 py-3 text-[13px]" data-testid="shared-layout-card">
+                <span className="flex items-center gap-1.5 font-semibold text-accent-strong">
+                  <Icon name="share" size={14} />
+                  {sharedFrom.ownerName}님이 공유한 배치
+                </span>
+                <span className="text-body">
+                  &ldquo;{sharedFrom.layoutName}&rdquo; ·{' '}
+                  {onSave ? '가구를 옮겨 보고 "내 배치로 저장"하면 내 배치로 남습니다.' : '로그인하면 내 배치로 저장할 수 있습니다.'}
+                </span>
+              </div>
+            )}
+            {sharedMissing && (
+              <p className="rounded-xl bg-warn-tint px-3.5 py-2.5 text-[13px] text-warn" role="alert" data-testid="shared-layout-missing">
+                공유받은 배치를 볼 수 없습니다. 비공개로 바뀌었거나 지워졌습니다.
+              </p>
+            )}
+
             {(hasChooser || (showSave && saveState !== 'saved')) && (
               <div className="flex flex-col gap-2" data-testid={hasChooser ? 'layout-chooser' : undefined} data-current={hasChooser ? (currentLayoutId ?? '') : undefined} data-count={hasChooser ? layouts.length : undefined}>
                 <div className="flex gap-2">
@@ -572,7 +924,7 @@ export default function FurnitureLayer({
                         onChange={(e) => selectLayout(e.target.value === '' ? null : e.target.value)}
                       >
                         {/* 직접 만든 배치가 아직 없으면 새로 시작할 수 있게 빈 배치를 둔다 */}
-                        {(!hasOwnLayout || currentLayoutId === null) && <option value="">내 배치 (새로 만들기)</option>}
+                        {(!hasOwnLayout || currentLayoutId === null) && <option value="">{sharedFrom ? `${sharedFrom.ownerName}님의 배치 (공유받음)` : '내 배치 (새로 만들기)'}</option>}
                         {layouts.map((l) => (
                           <option key={l.id} value={l.id}>
                             {l.name}
@@ -584,7 +936,20 @@ export default function FurnitureLayer({
                   )}
                   {showSave && saveState !== 'saved' && (
                     <button className="btn btn-primary h-11 px-4 text-[13px]" data-testid="layout-save" disabled={saveState === 'saving'} onClick={() => void save()}>
-                      {saveState === 'error' ? '다시 저장' : '배치 저장'}
+                      {saveState === 'error' ? '다시 저장' : sharedFrom ? '내 배치로 저장' : '배치 저장'}
+                    </button>
+                  )}
+                  {share && currentLayout && (
+                    <button
+                      className={`btn h-11 px-3 text-[13px] ${shareOpen ? 'bg-accent-soft text-accent-strong' : 'btn-soft'}`}
+                      aria-expanded={shareOpen}
+                      aria-label="배치 공유"
+                      onClick={() => setShareOpen((open) => !open)}
+                      data-testid="layout-share"
+                      data-public={currentLayout.isPublic ?? false}
+                    >
+                      <Icon name="share" size={15} />
+                      <span className="max-sm:hidden">공유</span>
                     </button>
                   )}
                   {hasChooser && onDeleteLayout && currentLayout && !confirmLayoutDelete && (
@@ -593,6 +958,17 @@ export default function FurnitureLayer({
                     </button>
                   )}
                 </div>
+                {share && currentLayout && shareOpen && (
+                  <LayoutShareBox
+                    key={currentLayout.id}
+                    roomId={share.roomId}
+                    layoutId={currentLayout.id}
+                    isPublic={currentLayout.isPublic ?? false}
+                    roomPublic={share.roomPublic}
+                    dirty={dirty}
+                    onSetPublic={(next) => share.onSetPublic(currentLayout.id, next)}
+                  />
+                )}
                 {confirmLayoutDelete && currentLayout && (
                   <div className="flex flex-wrap items-center gap-2 rounded-xl bg-warn-soft px-3 py-2.5 text-[13px] text-warn" data-testid="layout-delete-confirm">
                     <span className="mr-auto">&ldquo;{currentLayout.name}&rdquo;을(를) 지울까요?</span>
@@ -632,9 +1008,17 @@ export default function FurnitureLayer({
                     const item = items.find((i) => i.id === r.itemId);
                     return (
                       <li key={r.itemId} className="flex gap-3">
-                        <FurnitureGlyph furnitureRef={item?.furnitureRef ?? ''} category={item?.category ?? ''} />
+                        <FurnitureThumb
+                          furnitureRef={item?.furnitureRef ?? ''}
+                          category={item?.category ?? ''}
+                          src={item ? catalogThumbnail({ id: item.furnitureRef, kind: item.kind }) : null}
+                        />
                         <span className="flex min-w-0 flex-col gap-px">
-                          <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => setSelectedId(r.itemId)}>
+                          <button className="self-start text-left font-bold underline decoration-line-strong decoration-dotted underline-offset-4" onClick={() => {
+                              if (item) focusOn(item);
+                              else setSelectedId(r.itemId);
+                            }}
+                          >
                             {r.name}
                           </button>
                           <span className="text-[13px] text-body">{r.reason}</span>
@@ -682,17 +1066,25 @@ export default function FurnitureLayer({
                   className="flex h-[52px] items-center gap-2.5 rounded-xl border border-line bg-surface px-2 text-left hover:border-line-strong hover:bg-accent-tint disabled:opacity-40"
                   disabled={full}
                   onClick={() => add(entry)}
-                  aria-label={`+ ${entry.nameKo}`}
+                  aria-label={`+ ${catalogLabel(entry)}`}
                   title={dims(entry.w, entry.d, entry.h)}
                 >
-                  <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
+                  <FurnitureThumb furnitureRef={entry.id} category={entry.category} src={catalogThumbnail(entry)} />
                   <span className="flex min-w-0 flex-col">
                     <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
-                    <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
+                    <span className="truncate text-[11px] text-mute">
+                      {entry.styleKo && <span className="text-body">{entry.styleKo} · </span>}
+                      <span className="font-mono">{sizeLabel(entry.w, entry.d)}</span>
+                    </span>
                   </span>
                 </button>
               ))}
             </div>
+            {credits.length > 0 && (
+              <p className="text-[11px] leading-snug text-mute" data-testid="furniture-credit">
+                가구 3D 모델: {credits.join(' · ')}. 웹용으로 압축하고 크기를 맞췄습니다.
+              </p>
+            )}
           </div>
 
           {onCreateFurniture && (
@@ -711,7 +1103,14 @@ export default function FurnitureLayer({
                       >
                         <FurnitureGlyph furnitureRef={entry.id} category={entry.category} />
                         <span className="flex min-w-0 flex-col">
-                          <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                          <span className="flex min-w-0 items-center gap-1">
+                            <span className="truncate text-[13px] font-semibold">{entry.nameKo}</span>
+                            {entry.modelUrl && (
+                              <span className="shrink-0 rounded bg-accent-soft px-1 font-mono text-[10px] font-semibold text-accent-strong" data-testid="user-furniture-3d">
+                                3D
+                              </span>
+                            )}
+                          </span>
                           <span className="font-mono text-[11px] text-mute">{sizeLabel(entry.w, entry.d)}</span>
                         </span>
                       </button>
@@ -774,12 +1173,31 @@ export default function FurnitureLayer({
                     </button>
                   </div>
                 </div>
+              ) : scanOpen && onCreateScanFurniture ? (
+                <ScanFurnitureForm
+                  onCreate={async (glb, value) => {
+                    const result = await onCreateScanFurniture(glb, value);
+                    if (!result.ok) return result;
+                    setMine((prev) => [...prev, result.item]);
+                    setMineMessage(null);
+                    return { ok: true };
+                  }}
+                  onClose={() => setScanOpen(false)}
+                />
               ) : (
                 mine.length < MAX_USER_FURNITURE && (
-                  <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
-                    <Icon name="plus" />
-                    직접 만들기 (이름·치수)
-                  </button>
+                  <div className="flex flex-col gap-2">
+                    <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setMineFormOpen(true)} data-testid="user-furniture-open">
+                      <Icon name="plus" />
+                      직접 만들기 (이름·치수)
+                    </button>
+                    {onCreateScanFurniture && (
+                      <button className="flex h-[42px] items-center justify-center gap-1.5 rounded-xl border border-dashed border-field text-[13px] font-medium text-sub hover:bg-soft" onClick={() => setScanOpen(true)} data-testid="scan-open">
+                        <Icon name="plus" />
+                        3D 스캔 올리기 (GLB)
+                      </button>
+                    )}
+                  </div>
                 )
               )}
               {mineMessage && (
@@ -812,9 +1230,9 @@ export default function FurnitureLayer({
                   const state = stateOf(item.id);
                   const on = item.id === selectedId;
                   return (
-                    <li key={item.id}>
+                    <li key={item.id} className={`flex items-center rounded-[10px] ${on ? 'bg-accent-soft' : 'hover:bg-soft'}`}>
                       <button
-                        className={`flex min-h-10 w-full items-center gap-2.5 rounded-[10px] px-2.5 text-left ${on ? 'bg-accent-soft' : 'hover:bg-soft'}`}
+                        className="flex min-h-10 min-w-0 flex-1 items-center gap-2.5 rounded-[10px] px-2.5 text-left"
                         onClick={() => setSelectedId(on ? null : item.id)}
                         aria-pressed={on}
                         data-id={item.id}
@@ -825,6 +1243,17 @@ export default function FurnitureLayer({
                         {state === 'error' && <span className="text-xs font-medium text-danger">문제</span>}
                         {state === 'warning' && <span className="text-xs font-medium text-warn">경고</span>}
                         {state === 'ok' && on && <span className="text-xs font-medium text-accent-strong">선택됨</span>}
+                      </button>
+                      <button
+                        type="button"
+                        className="mr-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-sub hover:bg-surface hover:text-accent-strong"
+                        onClick={() => focusOn(item)}
+                        aria-label={`${item.name}로 시점 옮기기`}
+                        title="3D에서 이 가구 보기"
+                        data-testid="placed-focus"
+                        data-id={item.id}
+                      >
+                        <Icon name="focus" />
                       </button>
                     </li>
                   );
@@ -898,7 +1327,7 @@ export default function FurnitureLayer({
               </p>
             )}
             {aiOpen && !aiHint ? (
-              <div className="flex flex-col gap-2" data-testid="ai-form">
+              <div ref={aiFormRef} className="flex flex-col gap-2" data-testid="ai-form" data-prefilled={prefillNonce > 0}>
                 <textarea
                   className="field h-[68px] resize-none rounded-[10px] border-accent-line px-3 py-2 text-sm"
                   placeholder="바라는 점이 있으면 적어 주세요 (예: 책상은 창가에). 비워 두어도 됩니다"

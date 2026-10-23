@@ -1,5 +1,5 @@
 // 문·창문 AI로 찾기 실측: Studio 11 집 전체에서 "AI로 찾기"를 눌러 실제 Gemini가 찾은 후보를 정답과 비교하고,
-// 후보를 확인·수정·저장하는 흐름과 권한을 본다. Gemini를 실제로 한 번 부른다 (그림 18장).
+// 후보를 확인·수정·저장하는 흐름과 권한을 본다. Gemini를 실제로 한 번 부른다 (벽마다 정면 그림).
 // AI의 답은 실행마다 조금씩 달라지므로 "몇 개 이상 맞는지"로 본다. 자세한 결과는 출력에 남긴다.
 // 준비: ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/studio11_1m_up.sog
 // 실행: node --env-file=.env.local scripts/dev-data/e2e-openings-detect.mjs
@@ -127,7 +127,7 @@ try {
   check('문·창문 도구에 "AI로 찾기"와 안내(틀릴 수 있으니 확인), 남은 횟수 10', (await page.getByTestId('openings-detect-run').innerText()) === 'AI로 찾기' && (await detectBox.innerText()).includes('꼭 확인하세요') && (await detectBox.getAttribute('data-remaining')) === '10', await detectBox.innerText());
   const started = Date.now();
   await page.getByTestId('openings-detect-run').click();
-  await page.waitForFunction(() => /화면 캡처 중 \(\d+\/18\)/.test(document.querySelector('[data-testid=openings-detect-run]')?.textContent ?? ''), null, { timeout: 15000 });
+  await page.waitForFunction(() => /화면 캡처 중 \(\d+\/\d+\)/.test(document.querySelector('[data-testid=openings-detect-run]')?.textContent ?? ''), null, { timeout: 15000 });
   const capturingText = await page.getByTestId('openings-detect-run').innerText();
   await page.waitForFunction(() => document.querySelector('[data-testid=openings-detect]')?.getAttribute('data-busy') === 'false', null, { timeout: 180000 });
   console.log(`찾기까지 ${Date.now() - started}ms`);
@@ -145,7 +145,7 @@ try {
   const extras = found.filter((o) => !o.matched);
   console.log(rows.map((r) => r.text).join('\n'));
   console.log(`정답에 없는 후보 ${extras.length}개: ${extras.map((o) => `${o.type} 벽 ${o.wallIndex + 1} ${o.from}~${o.to}`).join(', ')}`);
-  check('누르면 "화면 캡처 중 (n/18)", 끝나면 무엇을 넣었는지와 "확인하고 … 저장하세요" 안내', /화면 캡처 중 \(\d+\/18\)/.test(capturingText) && /AI가 문 \d+개, 창문 \d+개를 찾아 넣었습니다/.test(message) && message.includes('저장하세요'), [capturingText, message]);
+  check('누르면 "화면 캡처 중 (n/전체)", 끝나면 무엇을 넣었는지와 "확인하고 … 저장하세요" 안내', /화면 캡처 중 \(\d+\/\d+\)/.test(capturingText) && /AI가 문 \d+개, 창문 \d+개를 찾아 넣었습니다/.test(message) && message.includes('저장하세요'), [capturingText, message]);
   const hits = rows.filter((r) => r.found);
   // AI의 답은 실행마다 달라진다(같은 방에서 온전히 찾는 것이 2~6개, 나머지는 일부만 찾거나 놓친다).
   // 후보를 넣어 주는 기능이므로 "절반 이상의 자리"를 기준으로 삼는다

@@ -119,3 +119,17 @@ export function interiorPoint(polygon: Point2[]): Point2 {
   }
   return best;
 }
+
+/**
+ * from에서 to로 가는 선분 위에서 방 안에 있는 가장 먼 점 (from이 방 밖이면 null).
+ * 화면 가운데 광선이 벽 너머 바닥에 닿았을 때 벽 바로 앞까지 당기는 데 쓴다.
+ */
+export function lastInsideAlong(from: Point2, to: Point2, polygon: Point2[], steps = 40): Point2 | null {
+  if (!pointInPolygon(from, polygon)) return null;
+  for (let i = steps; i >= 0; i -= 1) {
+    const t = i / steps;
+    const p: Point2 = [from[0] + (to[0] - from[0]) * t, from[1] + (to[1] - from[1]) * t];
+    if (pointInPolygon(p, polygon)) return p;
+  }
+  return from;
+}

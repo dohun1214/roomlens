@@ -139,7 +139,7 @@ try {
   // 4) 남은 지울 수 없음
   check('삭제 API: 비로그인 401', (await api(anon, 'DELETE', `/api/rooms/${roomId}`)).status === 401, null);
   check('삭제 API: 다른 사용자 404 (공개 방이어도)', (await api(other, 'DELETE', `/api/rooms/${roomId}`)).status === 404, null);
-  check('남의 삭제 시도 후에도 방과 파일이 그대로', (await roomExists(roomId)) && (await listKeys(`rooms/${roomId}/`)).length === 1, null);
+  check('남의 삭제 시도 후에도 방과 파일이 그대로', (await roomExists(roomId)) && (await listKeys(`rooms/${roomId}/`)).some((key) => /\/scene\.\w+$/.test(key)), null);
 
   // 5) 다시 비공개
   await page.getByTestId('room-visibility-toggle').click();

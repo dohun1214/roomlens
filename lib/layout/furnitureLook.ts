@@ -1,7 +1,7 @@
 // 가구를 화면에 그릴 때의 모양: 위에서 본 작은 그림의 종류와 분류별 색.
 // 3D 상자 색(categoryColor)과 같은 계열의 파스텔이다.
 
-export type GlyphKind = 'bed' | 'bed-wide' | 'desk' | 'chair' | 'wardrobe' | 'hanger' | 'drawer' | 'table' | 'bookcase' | 'box';
+export type GlyphKind = 'bed' | 'bed-wide' | 'desk' | 'chair' | 'wardrobe' | 'hanger' | 'drawer' | 'table' | 'bookcase' | 'sofa' | 'tv' | 'lamp' | 'box';
 
 export type FurnitureTone = {
   /** 작은 그림 뒤의 옅은 바탕 */
@@ -21,6 +21,8 @@ const TONES: Record<string, FurnitureTone> = {
   chair: { tile: '#f9e3ef', ink: '#b5558c', fill: '#f3cfe3', stroke: '#c77fa8', dot: '#d98bb8' },
   storage: { tile: '#e1f2de', ink: '#4e9443', fill: '#cfe8cb', stroke: '#76b06b', dot: '#7dbb72' },
   table: { tile: '#f6efc8', ink: '#94801c', fill: '#f1e7b0', stroke: '#bfa93a', dot: '#cdb94a' },
+  sofa: { tile: '#dcf0f1', ink: '#2f8a92', fill: '#c4e5e8', stroke: '#5fb0b8', dot: '#6dbcc3' },
+  lamp: { tile: '#fbf1d3', ink: '#a8780e', fill: '#f7e4ad', stroke: '#d6aa3c', dot: '#e3b94e' },
   etc: { tile: '#ebe6f8', ink: '#6f58b3', fill: '#dcd3f3', stroke: '#9482cf', dot: '#a493dc' },
 };
 const FALLBACK: FurnitureTone = { tile: '#eef0f4', ink: '#566074', fill: '#e2e6ed', stroke: '#8a94a6', dot: '#9aa4b5' };
@@ -40,12 +42,25 @@ const BY_ID: Record<string, GlyphKind> = {
   drawer: 'drawer',
   'table-2': 'table',
   bookcase: 'bookcase',
+  sofa: 'sofa',
+  'tv-stand': 'tv',
+  nightstand: 'drawer',
+  'coffee-table': 'table',
+  'shoe-cabinet': 'wardrobe',
+  vanity: 'desk',
+  bench: 'bookcase',
+  'floor-lamp': 'lamp',
 };
-const BY_CATEGORY: Record<string, GlyphKind> = { bed: 'bed', desk: 'desk', chair: 'chair', storage: 'drawer', table: 'table' };
+const BY_CATEGORY: Record<string, GlyphKind> = { bed: 'bed', desk: 'desk', chair: 'chair', storage: 'drawer', table: 'table', sofa: 'sofa', lamp: 'lamp' };
+
+/** 같은 종류의 두 번째 모양(id 끝 -b)은 첫 번째와 같은 종류다 */
+export function baseFurnitureId(furnitureRef: string): string {
+  return furnitureRef.endsWith('-b') ? furnitureRef.slice(0, -2) : furnitureRef;
+}
 
 /** 카탈로그 id로, 모르는 id(내 가구 등)면 분류로 그림을 고른다 */
 export function glyphKind(furnitureRef: string, category: string): GlyphKind {
-  return BY_ID[furnitureRef] ?? BY_CATEGORY[category] ?? 'box';
+  return BY_ID[baseFurnitureId(furnitureRef)] ?? BY_CATEGORY[category] ?? 'box';
 }
 
 /** "120×60" (cm) */
