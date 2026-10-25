@@ -30,8 +30,12 @@ export type FixedView = {
 };
 
 export type FixedViewOptions = {
-  /** 그림 한 변 (px, 정사각형) */
+  /** 그림 한 변 (px, 정사각형). pxHeight를 주면 가로 */
   px: number;
+  /** 그림 세로 (px). 없으면 정사각형 */
+  pxHeight?: number;
+  /** 방 스플랫의 편집(옮긴 원래 가구 숨기기)을 켠 채로 찍는다 (빈자리 채우기) */
+  keepEdits?: boolean;
   quality?: number;
   /** 카메라를 옮긴 뒤 스플랫이 그 시점에 맞게 다시 그려지기를 기다리는 시간 */
   settleMs?: number;
@@ -60,11 +64,12 @@ export async function captureFixedViews(engine: CaptureEngine, views: FixedView[
   const images: string[] = [];
   controls.enabled = false;
   for (const child of hidden) child.visible = false;
-  const resumeEdits = pauseRoomEdits(engine.roomGroup);
+  const resumeEdits = options.keepEdits ? () => {} : pauseRoomEdits(engine.roomGroup);
+  const pxHeight = options.pxHeight ?? options.px;
   renderer.setPixelRatio(1);
   // 화면(CSS) 크기는 두고 그리는 크기만 바꾼다
-  renderer.setSize(options.px, options.px, false);
-  camera.aspect = 1;
+  renderer.setSize(options.px, pxHeight, false);
+  camera.aspect = options.px / pxHeight;
   try {
     for (let i = 0; i < views.length; i += 1) {
       const view = views[i];
@@ -84,7 +89,7 @@ export async function captureFixedViews(engine: CaptureEngine, views: FixedView[
       };
       const grab = () => {
         renderer.render(scene, camera);
-        return canvasToJpegBase64(renderer.domElement, options.px, options.quality ?? 0.85);
+        return canvasToJpegBase64(renderer.domElement, Math.max(options.px, pxHeight), options.quality ?? 0.85);
       };
       await settle(Math.max(1, Math.round((options.settleMs ?? 1500) / 150)));
       let image = grab();

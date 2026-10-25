@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { PackedSplats, SplatEdit, type SplatMesh, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, writeSpz } from '@sparkjsdev/spark';
 import type { Point2 } from './floorDrag';
-import { inFootprint, MAX_PIECE_TOP, PIECE_FLOOR_CUT, pieceBox, pieceTop, toPieceFrame } from '@/lib/rooms/fixturePiece';
+import { fillPlanes, inFootprint, MAX_PIECE_TOP, PIECE_FLOOR_CUT, pieceBox, pieceTop, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
 import type { Fixture } from '@/lib/rooms/fixtures';
 
 /** 거의 투명한 스플랫은 조각에 넣지 않는다 */
@@ -76,21 +76,35 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
 /**
  * 옮긴 원래 가구의 원래 자리를 숨기는 편집 (방 스플랫 메시의 edits에 넣는다).
  * 떼어 낸 조각과 같은 곳(줄인 바닥 사각형, 바닥 바로 위 ~ 조각 높이)을 투명하게 한다.
- * @param withFloor 빈자리를 채운 조각이 있으면 바닥 바로 아래(그림자·다리 자국)까지 숨긴다
+ * filled: 빈자리를 채운 조각이 있으면 채운 곳(바닥 구멍의 그림자·다리 자국, 벽의 얼룩)도 숨긴다 (채운 스플랫이 덮는다)
  */
-export function hideFixtureEdit(moved: { fixture: Fixture; withFloor: boolean }[], polygon: Point2[]): SplatEdit | null {
+export function hideFixtureEdit(moved: { fixture: Fixture; filled: boolean }[], polygon: Point2[]): SplatEdit | null {
   if (moved.length === 0) return null;
   const edit = new SplatEdit({ rgbaBlendMode: SplatEditRgbaBlendMode.MULTIPLY });
-  for (const { fixture, withFloor } of moved) {
-    const box = pieceBox(fixture, polygon);
-    const bottom = withFloor ? -0.06 : PIECE_FLOOR_CUT;
-    const top = (fixture.piece?.top ?? fixture.h) + TOP_MARGIN;
+  const addBox = (center: [number, number, number], rotationY: number, half: [number, number, number]) => {
     const sdf = new SplatEditSdf({ type: SplatEditSdfType.BOX, opacity: 0 });
-    sdf.position.set(box.x, (bottom + top) / 2, box.z);
-    sdf.rotation.y = THREE.MathUtils.degToRad(box.rotationDeg);
+    sdf.position.set(...center);
+    sdf.rotation.y = rotationY;
     // 상자 SDF의 크기는 scale(반 길이)로 준다
-    sdf.scale.set(box.w / 2, (top - bottom) / 2, box.d / 2);
+    sdf.scale.set(...half);
     edit.addSdf(sdf);
+  };
+  for (const { fixture, filled } of moved) {
+    const box = pieceBox(fixture, polygon);
+    const top = (fixture.piece?.top ?? fixture.h) + TOP_MARGIN;
+    addBox([box.x, (PIECE_FLOOR_CUT + top) / 2, box.z], THREE.MathUtils.degToRad(box.rotationDeg), [box.w / 2, (top - PIECE_FLOOR_CUT) / 2, box.d / 2]);
+    if (!filled) continue;
+    for (const plane of fillPlanes(fixture, fixture.piece?.top ?? fixture.h, polygon)) {
+      const { u0, u1, v0, v1 } = plane.hole;
+      if (plane.kind === 'floor') {
+        addBox([plane.c[0] + (u0 + u1) / 2, -0.0125, plane.c[2] + (v0 + v1) / 2], 0, [(u1 - u0) / 2, 0.0475, (v1 - v0) / 2]);
+      } else {
+        const n = plane.n ?? [1, 0, 0];
+        const [x, y, z] = planePoint(plane, (u0 + u1) / 2, (v0 + v1) / 2);
+        // 벽 앞 -6cm ~ +14cm (벽 스플랫과 벽에 붙은 얼룩)
+        addBox([x + n[0] * 0.04, y, z + n[2] * 0.04], Math.atan2(n[0], n[2]), [(u1 - u0) / 2, (v1 - v0) / 2, 0.1]);
+      }
+    }
   }
   return edit;
 }

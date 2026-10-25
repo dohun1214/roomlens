@@ -685,9 +685,9 @@ export default function SplatViewer({
     [roomId],
   );
   // 가구 층이 원래 가구를 떼어 내 올렸을 때: 저장된 원래 가구와 (있으면) 고치는 중인 목록에 조각 정보를 넣는다
-  const fixturePrepared = useCallback((fixture: Fixture, pieceUrl: string) => {
+  const fixturePrepared = useCallback((fixture: Fixture, urls: { piece?: string; fill?: string }) => {
     setPieceInfo((prev) => new Map(prev).set(fixture.id, fixture));
-    setPieceUrls((prev) => ({ ...prev, [fixture.id]: { piece: pieceUrl } }));
+    setPieceUrls((prev) => ({ ...prev, [fixture.id]: { ...prev[fixture.id], ...urls } }));
   }, []);
   // "AI로 방 준비하기": 보정을 저장한 뒤 부른다. 문·창문 도구가 먼저 찾고, 끝나면 원래 가구 도구가 이어서 찾는다
   const startPrep = useCallback(() => {
@@ -1253,7 +1253,7 @@ export default function SplatViewer({
           aiSummary={currentLayout?.aiSummary ?? null}
           pieceUrls={pieceUrls}
           onMovedFixtures={changeMovedFixtures}
-          prepare={roomId && canEdit && signedIn && url && roomPolygonKey === savedPolygonKey ? { roomId, sourceUrl: url, onPrepared: fixturePrepared } : undefined}
+          prepare={roomId && canEdit && signedIn && url && roomPolygonKey === savedPolygonKey ? { roomId, sourceUrl: url, onPrepared: fixturePrepared, onAiRemaining: setAiRemaining } : undefined}
         />
       )}
       {calibrated && room && (
