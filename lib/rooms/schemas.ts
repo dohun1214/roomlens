@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MAX_PIECE_BYTES } from './fixturePiece';
 import { MAX_SPLAT_BYTES, SPLAT_FORMATS } from '@/lib/upload/splatFile';
 
 // 방 API의 요청 본문 형식. 화면과 서버가 같은 규칙을 쓴다.
@@ -57,6 +58,23 @@ export const UploadUrlInput = z.object({
   size: z.int().min(1).max(MAX_SPLAT_BYTES, '파일이 100MB를 넘습니다.'),
 });
 export type UploadUrlInput = z.infer<typeof UploadUrlInput>;
+
+/** 원래 가구의 3D 조각(떼어 낸 가구·채운 빈자리)을 올릴 주소를 받을 때 */
+export const FixturePieceStartInput = z.object({
+  fixtureId: z.string().regex(/^x\d{1,4}$/),
+  kind: z.enum(['piece', 'fill']),
+  size: z.int().min(1).max(MAX_PIECE_BYTES, '조각 파일이 너무 큽니다.'),
+});
+export type FixturePieceStartInput = z.infer<typeof FixturePieceStartInput>;
+
+/** 올리기를 끝냈다고 알릴 때: 받은 버전과 (가구 조각이면) 위에 얹힌 물건까지 잰 높이 */
+export const FixturePieceFinishInput = z.object({
+  fixtureId: z.string().regex(/^x\d{1,4}$/),
+  kind: z.enum(['piece', 'fill']),
+  v: z.int().positive(),
+  top: z.number().min(0.05).max(3).optional(),
+});
+export type FixturePieceFinishInput = z.infer<typeof FixturePieceFinishInput>;
 
 /** 업로드를 끝냈다고 알릴 때: 어떤 형식으로 올렸는지 */
 export const CompleteUploadInput = z.object({
