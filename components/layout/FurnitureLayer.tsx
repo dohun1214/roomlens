@@ -25,9 +25,10 @@ import {
 } from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
 import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
-import type { FixturePieceUrls } from '@/lib/rooms/fixturePiece';
+import { fillPlanes, type FixturePieceUrls } from '@/lib/rooms/fixturePiece';
 import { uploadFixturePiece } from '@/lib/rooms/fixturePieceClient';
 import { extractFixturePiece, hideFixtureEdit, loadSourceSplats, setHiddenFixtures } from '@/lib/three/fixturePiece';
+import { buildFillPiece, captureFillPlanes, requestFill } from '@/lib/three/fixtureFill';
 import {
   MAX_LAYOUT_ITEMS,
   movedFixtureIds,
@@ -199,7 +200,14 @@ export default function FurnitureLayer({
   /** 옮길 수 있게 떼어 낸 원래 가구 조각의 읽기 주소 (원래 가구 id → 주소) */
   pieceUrls?: FixturePieceUrls;
   /** 방 주인이면: 아직 떼어 내지 않은 원래 가구를 이 자리에서 떼어 내 올린다 (방 3D 파일 주소) */
-  prepare?: { roomId: string; sourceUrl: string; onPrepared: (fixture: Fixture, pieceUrl: string) => void };
+  prepare?: {
+    roomId: string;
+    sourceUrl: string;
+    /** 떼어 낸 조각이나 채운 빈자리를 올렸을 때 (서버가 적은 원래 가구와 새 읽기 주소) */
+    onPrepared: (fixture: Fixture, urls: { piece?: string; fill?: string }) => void;
+    /** 빈자리 채우기로 AI를 쓴 뒤 남은 횟수 */
+    onAiRemaining?: (remaining: number) => void;
+  };
   /** 이 배치에서 옮긴 원래 가구 id가 바뀔 때 (원래 가구 도구가 원래 자리의 상자를 그리지 않게) */
   onMovedFixtures?: (ids: string[]) => void;
 }) {
@@ -492,12 +500,47 @@ export default function FurnitureLayer({
     if (!splat) return;
     const moved = fixtures.filter((f) => movedIds.has(f.id) && f.piece && pieceUrls[f.id]?.piece);
     const edit = hideFixtureEdit(
-      moved.map((fixture) => ({ fixture, withFloor: false })),
+      moved.map((fixture) => ({ fixture, filled: Boolean(fixture.fill && pieceUrls[fixture.id]?.fill) })),
       floorPolygon,
     );
     setHiddenFixtures(splat, edit);
     return () => setHiddenFixtures(splat, null);
   }, [engineRef, fixtures, movedIds, pieceUrls, floorPolygon]);
+
+  // 옮긴 원래 가구의 빈자리를 채운 조각: 원래 자리(원래 가구 좌표)에 그린다
+  const [fillMeshes] = useState(() => new Map<string, SplatMesh>());
+  useEffect(
+    () => () => {
+      for (const mesh of fillMeshes.values()) {
+        mesh.removeFromParent();
+        mesh.dispose();
+      }
+      fillMeshes.clear();
+    },
+    [fillMeshes],
+  );
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const group = new THREE.Group();
+    for (const f of fixtures) {
+      const url = movedIds.has(f.id) && f.fill ? pieceUrls[f.id]?.fill : undefined;
+      if (!url) continue;
+      let mesh = fillMeshes.get(url);
+      if (!mesh) {
+        mesh = new SplatMesh({ url, editable: false });
+        fillMeshes.set(url, mesh);
+      }
+      mesh.position.set(f.x, 0, f.z);
+      mesh.rotation.set(0, THREE.MathUtils.degToRad(f.rotationDeg), 0);
+      group.add(mesh);
+    }
+    engine.scene.add(group);
+    return () => {
+      for (const mesh of fillMeshes.values()) mesh.removeFromParent();
+      engine.scene.remove(group);
+    };
+  }, [engineRef, fixtures, movedIds, pieceUrls, fillMeshes]);
 
   // 끄는 동안: 메시를 다시 만들지 않고 끄는 가구의 테두리 색만 바꾼다 (문제 빨강, 경고 노랑, 괜찮으면 고른 색)
   useEffect(() => {
@@ -703,6 +746,37 @@ export default function FurnitureLayer({
   );
   const [prepBusy, setPrepBusy] = useState<{ id: string; text: string } | null>(null);
   const [prepMessage, setPrepMessage] = useState<string | null>(null);
+  // 방 주인: 옮긴 원래 가구의 빈자리를 AI로 채운다 (바닥·벽 그림 → AI → 납작한 스플랫 조각을 올린다)
+  const fillFixture = async (f: Fixture) => {
+    const engine = engineRef.current;
+    if (!prepare || prepBusy || !engine || !f.piece) return;
+    setPrepMessage(null);
+    setPrepBusy({ id: f.id, text: '빈자리 찍는 중…' });
+    try {
+      const planes = fillPlanes(f, f.piece.top, floorPolygon);
+      const masked = await captureFillPlanes(engine, planes);
+      setPrepBusy({ id: f.id, text: 'AI가 채우는 중…' });
+      const filled = await requestFill(prepare.roomId, f.id, planes, masked);
+      if (!filled.ok) {
+        setPrepMessage(filled.message);
+        return;
+      }
+      prepare.onAiRemaining?.(filled.remaining);
+      setPrepBusy({ id: f.id, text: '올리는 중…' });
+      const piece = await buildFillPiece(planes, filled.images, f);
+      const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'fill', piece.bytes);
+      if (!uploaded.ok) {
+        setPrepMessage(uploaded.message);
+        return;
+      }
+      prepare.onPrepared(uploaded.fixture, { fill: uploaded.url });
+    } catch (err) {
+      console.error(err);
+      setPrepMessage('빈자리를 채우지 못했습니다. 잠시 후 다시 해 주세요.');
+    } finally {
+      setPrepBusy(null);
+    }
+  };
   const prepareFixture = async (f: Fixture) => {
     const splat = engineRef.current?.splat;
     if (!prepare || prepBusy || !splat) return;
@@ -725,7 +799,7 @@ export default function FurnitureLayer({
         setPrepMessage(uploaded.message);
         return;
       }
-      prepare.onPrepared(uploaded.fixture, uploaded.url);
+      prepare.onPrepared(uploaded.fixture, { piece: uploaded.url });
       moveFixture(uploaded.fixture);
     } catch (err) {
       console.error(err);
@@ -1360,9 +1434,23 @@ export default function FurnitureLayer({
                         </span>
                       </span>
                       {moved ? (
-                        <button className="btn btn-outline h-9 shrink-0 px-3 text-[13px]" onClick={() => returnFixture(f)} data-testid="fixture-return">
-                          제자리로
-                        </button>
+                        <span className="flex shrink-0 gap-1.5">
+                          {prepare && f.piece && (
+                            <button
+                              className="btn btn-soft h-9 px-3 text-[13px] disabled:opacity-40"
+                              disabled={(prepBusy !== null && !busy) || aiRemaining === 0}
+                              onClick={() => fillFixture(f)}
+                              title="옮긴 뒤 비어 보이는 바닥·벽을 AI가 주변에 맞춰 채웁니다 (AI 1회)"
+                              data-testid="fixture-fill"
+                              data-filled={f.fill ? 'true' : 'false'}
+                            >
+                              {busy ? prepBusy.text : f.fill ? '다시 채우기' : '빈자리 AI로 채우기'}
+                            </button>
+                          )}
+                          <button className="btn btn-outline h-9 px-3 text-[13px]" disabled={busy} onClick={() => returnFixture(f)} data-testid="fixture-return">
+                            제자리로
+                          </button>
+                        </span>
                       ) : (
                         <button
                           className="btn btn-soft h-9 shrink-0 px-3 text-[13px] disabled:opacity-40"

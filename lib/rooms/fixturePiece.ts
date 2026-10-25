@@ -129,3 +129,118 @@ export function toPieceFrame(f: Pick<Fixture, 'x' | 'z' | 'rotationDeg'>, x: num
 export function canMoveFixture(f: Fixture): boolean {
   return Boolean(f.piece);
 }
+
+// ---- 빈자리 채우기 ----
+// 옮긴 뒤의 빈자리(안 찍힌 바닥·벽)는 평면이라, 바닥은 위에서·벽은 정면에서 좁은 시야로 찍고
+// 구멍을 칠해 그림 AI에 이어 그리게 한 뒤, 돌려받은 그림의 색으로 구멍 자리에 납작한 스플랫을 깐다.
+
+/** 빈자리 둘레로 더 찍는 너비 (m) */
+export const FILL_MARGIN = 0.03;
+/** 원래 가구에서 이만큼 안의 벽은 함께 채운다 (m) */
+export const FILL_WALL_REACH = 0.25;
+/** 채우는 그림의 크기 (가로 × 세로 px, 16:10) */
+export const FILL_IMAGE = { width: 1280, height: 800 } as const;
+
+/**
+ * 채울 평면 하나. c: 그림 가운데(방 좌표). 바닥은 u = x, v = z (그림 오른쪽 = +x, 아래 = +z),
+ * 벽은 u = 벽을 따라 r 방향, v = 높이 (그림 오른쪽 = r, 위 = +y). n은 벽의 방 안쪽 방향.
+ * Wm × Hm: 그림이 담는 크기 (m). hole: 칠해서 채울 구간 (c 기준 u, v)
+ */
+export type FillPlane = {
+  kind: 'floor' | 'wall';
+  c: [number, number, number];
+  n?: [number, number, number];
+  r?: [number, number, number];
+  Wm: number;
+  Hm: number;
+  hole: { u0: number; u1: number; v0: number; v1: number };
+};
+
+const ASPECT = FILL_IMAGE.width / FILL_IMAGE.height;
+
+/** 원래 가구 사각형의 네 모서리 (방 좌표) */
+function footprintCorners(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>): Point2[] {
+  const [u, v] = fixtureAxes(f.rotationDeg);
+  return [
+    [-1, -1],
+    [1, -1],
+    [1, 1],
+    [-1, 1],
+  ].map(([a, b]) => [f.x + (u[0] * a * f.w) / 2 + (v[0] * b * f.d) / 2, f.z + (u[1] * a * f.w) / 2 + (v[1] * b * f.d) / 2]);
+}
+
+/**
+ * 옮긴 원래 가구의 빈자리를 채울 평면들: 바닥 하나 + 가구에서 FILL_WALL_REACH 안의 벽마다 하나.
+ * @param top 벽에서 채울 높이 (조각 높이)
+ */
+export function fillPlanes(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, top: number, polygon: Point2[]): FillPlane[] {
+  const corners = footprintCorners(f);
+  const xs = corners.map((c) => c[0]);
+  const zs = corners.map((c) => c[1]);
+  const holeW = Math.max(...xs) - Math.min(...xs) + 2 * FILL_MARGIN;
+  const holeD = Math.max(...zs) - Math.min(...zs) + 2 * FILL_MARGIN;
+  // 구멍 둘레가 그림의 대략 40% 이상 보이게 (주변을 보고 이어 그린다)
+  const Hm = Math.max(holeD * 1.7, (holeW * 1.7) / ASPECT);
+  const cx = (Math.max(...xs) + Math.min(...xs)) / 2;
+  const cz = (Math.max(...zs) + Math.min(...zs)) / 2;
+  const planes: FillPlane[] = [{ kind: 'floor', c: [cx, 0, cz], Wm: Hm * ASPECT, Hm, hole: { u0: -holeW / 2, u1: holeW / 2, v0: -holeD / 2, v1: holeD / 2 } }];
+
+  let area = 0;
+  for (let i = 0; i < polygon.length; i += 1) {
+    const [x1, z1] = polygon[i];
+    const [x2, z2] = polygon[(i + 1) % polygon.length];
+    area += x1 * z2 - x2 * z1;
+  }
+  for (let i = 0; i < polygon.length; i += 1) {
+    const [x1, z1] = polygon[i];
+    const [x2, z2] = polygon[(i + 1) % polygon.length];
+    const len = Math.hypot(x2 - x1, z2 - z1);
+    if (len < 1e-6) continue;
+    const tx = (x2 - x1) / len;
+    const tz = (z2 - z1) / len;
+    // 방 안쪽 법선 (다각형이 도는 방향에 맞춘다)
+    const n: Point2 = area > 0 ? [-tz, tx] : [tz, -tx];
+    const dist = Math.min(...corners.map(([x, z]) => (x - x1) * n[0] + (z - z1) * n[1]));
+    const along = corners.map(([x, z]) => (x - x1) * tx + (z - z1) * tz);
+    const a0 = Math.max(0, Math.min(...along) - FILL_MARGIN);
+    const a1 = Math.min(len, Math.max(...along) + FILL_MARGIN);
+    if (dist > FILL_WALL_REACH || dist < -0.1 || a1 - a0 < 0.1) continue;
+    const height = Math.min(MAX_PIECE_TOP, top + 0.3);
+    const Wm = Math.max((a1 - a0) * 1.8, (height + 0.2) * 1.25 * ASPECT);
+    const H = Wm / ASPECT;
+    const mid = (a0 + a1) / 2;
+    const c: [number, number, number] = [x1 + tx * mid, H / 2 - 0.08, z1 + tz * mid];
+    planes.push({
+      kind: 'wall',
+      c,
+      n: [n[0], 0, n[1]],
+      // 정면에서 볼 때 그림 오른쪽 = (-n) × 위
+      r: [n[1], 0, -n[0]],
+      Wm,
+      Hm: H,
+      hole: { u0: -(a1 - a0) / 2, u1: (a1 - a0) / 2, v0: -c[1], v1: height - c[1] },
+    });
+  }
+  return planes;
+}
+
+/** 평면 위의 (u, v) → 그림 픽셀 (FILL_IMAGE 크기) */
+export function planePixel(plane: FillPlane, u: number, v: number): Point2 {
+  const px = (u / plane.Wm + 0.5) * FILL_IMAGE.width;
+  const py = plane.kind === 'floor' ? (v / plane.Hm + 0.5) * FILL_IMAGE.height : (-v / plane.Hm + 0.5) * FILL_IMAGE.height;
+  return [px, py];
+}
+
+/** 그림에서 칠할(채울) 사각형 [x, y, w, h] px */
+export function holeRect(plane: FillPlane): [number, number, number, number] {
+  const a = planePixel(plane, plane.hole.u0, plane.hole.v0);
+  const b = planePixel(plane, plane.hole.u1, plane.hole.v1);
+  return [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1])];
+}
+
+/** 평면 위의 (u, v) → 방 좌표 */
+export function planePoint(plane: FillPlane, u: number, v: number): [number, number, number] {
+  if (plane.kind === 'floor') return [plane.c[0] + u, 0, plane.c[2] + v];
+  const r = plane.r ?? [1, 0, 0];
+  return [plane.c[0] + r[0] * u, plane.c[1] + v, plane.c[2] + r[2] * u];
+}

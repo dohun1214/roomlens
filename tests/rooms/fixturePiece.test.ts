@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fixturePieceKey, inFootprint, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, toPieceFrame } from '@/lib/rooms/fixturePiece';
+import { FILL_IMAGE, FILL_MARGIN, fillPlanes, fixturePieceKey, holeRect, inFootprint, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, planePixel, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
 import { fixtureObstacles, parseFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { movedFixtureIds, placeFixtureItem, restoreItems, toSavedItems } from '@/lib/layout/saved';
 import { remapFixtures, roomRemap } from '@/lib/rooms/recalibrate';
@@ -132,5 +132,43 @@ describe('배치의 옮긴 원래 가구', () => {
     const { items, missing } = restoreItems(saved, [], [], [ready, fixture({ id: 'x2' })], { x1: 'https://piece' });
     expect(items.map((i) => [i.id, i.pieceUrl])).toEqual([['f1', 'https://piece']]);
     expect(missing).toBe(3);
+  });
+});
+
+describe('fillPlanes', () => {
+  it('벽에서 떨어진 가구는 바닥 하나만, 구멍 둘레가 그림에 함께 담긴다', () => {
+    const planes = fillPlanes(fixture(), 0.9, ROOM);
+    expect(planes.map((p) => p.kind)).toEqual(['floor']);
+    const [floor] = planes;
+    expect(floor.hole.u1 - floor.hole.u0).toBeCloseTo(0.8 + 2 * FILL_MARGIN, 6);
+    expect(floor.Wm / floor.Hm).toBeCloseTo(FILL_IMAGE.width / FILL_IMAGE.height, 6);
+    const [x, y, w, h] = holeRect(floor);
+    expect(x).toBeGreaterThan(0);
+    expect(y).toBeGreaterThan(0);
+    expect(x + w).toBeLessThan(FILL_IMAGE.width);
+    expect(y + h).toBeLessThan(FILL_IMAGE.height);
+    // 그림 가운데가 구멍 가운데
+    expect(planePixel(floor, 0, 0)).toEqual([FILL_IMAGE.width / 2, FILL_IMAGE.height / 2]);
+  });
+
+  it('서쪽 벽에 붙은 가구는 그 벽도: 안쪽 방향 +x, 바닥부터 조각 높이 + 30cm까지', () => {
+    const planes = fillPlanes(fixture({ x: -1.65 }), 1.2, ROOM);
+    expect(planes.map((p) => p.kind)).toEqual(['floor', 'wall']);
+    const wall = planes[1];
+    expect(wall.n).toEqual([1, 0, 0]);
+    expect(wall.c[0]).toBeCloseTo(-2, 6);
+    expect(wall.c[1] + wall.hole.v0).toBeCloseTo(0, 6);
+    expect(wall.c[1] + wall.hole.v1).toBeCloseTo(1.5, 6);
+    // 구간 가운데의 벽 위 점은 벽 위에 있고, 그림에서 가운데
+    const [px, py] = planePixel(wall, 0, 0);
+    expect(px).toBeCloseTo(FILL_IMAGE.width / 2, 6);
+    expect(py).toBeCloseTo(FILL_IMAGE.height / 2, 6);
+    expect(planePoint(wall, 0, 0)[0]).toBeCloseTo(-2, 6);
+    // 그림에서 위로 가면 높이가 올라간다
+    expect(planePixel(wall, 0, 0.5)[1]).toBeLessThan(py);
+  });
+
+  it('모서리 가구는 벽 둘', () => {
+    expect(fillPlanes(fixture({ x: 1.65, z: 1.25 }), 0.9, ROOM).filter((p) => p.kind === 'wall')).toHaveLength(2);
   });
 });

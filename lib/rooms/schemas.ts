@@ -76,6 +76,16 @@ export const FixturePieceFinishInput = z.object({
 });
 export type FixturePieceFinishInput = z.infer<typeof FixturePieceFinishInput>;
 
+/** 빈자리 채우기: 바닥·벽을 찍어 구멍을 칠한 그림 (JPEG base64) */
+export const FixtureFillInput = z.object({
+  fixtureId: z.string().regex(/^x\d{1,4}$/),
+  images: z
+    .array(z.object({ kind: z.enum(['floor', 'wall']), data: z.string().min(100).max(1_500_000, '그림이 너무 큽니다.') }))
+    .min(1)
+    .max(5, '한 번에 그림 5장까지 채울 수 있습니다.'),
+});
+export type FixtureFillInput = z.infer<typeof FixtureFillInput>;
+
 /** 업로드를 끝냈다고 알릴 때: 어떤 형식으로 올렸는지 */
 export const CompleteUploadInput = z.object({
   splatFormat: z.enum(SPLAT_FORMATS),

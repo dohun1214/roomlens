@@ -1,7 +1,8 @@
 // 원래 가구 옮기기 실측: 방 주인이 "옮기기"를 누르면 방 3D 파일에서 원래 가구를 떼어 내 R2에 올리고(조각), 배치의 가구로 놓는다.
 // 원래 자리는 방 스플랫에서 숨기고, 조각을 끌고 돌릴 수 있고, 저장·다시 열기·제자리로가 되는지,
 // 원래 가구 도구로 저장해도 조각 정보가 남는지, 다른 사람은 떼어 낸 원래 가구만 옮길 수 있는지, AI 추천이 옮긴 자리를 지키는지 본다.
-// 방은 CC BY 샘플(침실, ethan3111)과 그 방의 보정·원래 가구 값으로 만든다. AI 추천에서 Gemini를 한 번 부른다.
+// 옮긴 뒤 빈자리를 AI로 채우는 것도 본다 (방 주인).
+// 방은 CC BY 샘플(침실, ethan3111)과 그 방의 보정·원래 가구 값으로 만든다. Gemini를 두 번 부른다 (빈자리 채우기, AI 추천).
 // 준비: 개발 서버(APP_URL), ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/superspl/bedroom_up.sog
 // 실행: node --env-file=.env.local scripts/dev-data/e2e-fixture-move.mjs
 import { createRequire } from 'node:module';
@@ -208,7 +209,39 @@ try {
   await owner.waitForTimeout(800);
   check('되돌리기로 다시 옮긴 자리', (await itemsOf(owner)).some((i) => i.kind === 'fixture' && near(i.x, after.x, 0.001)), null);
 
-  // 7) 다른 사람: 떼어 낸 의자는 옮길 수 있고, 수납장(TV장)은 방 주인이 준비해야 한다
+  // 7) 빈자리 AI로 채우기 (방 주인, AI 1회): 바닥·창가 벽을 찍어 AI가 채운 그림으로 납작한 스플랫 조각을 올린다
+  // 원래 가구 도구의 "3D에서 보기"로 의자의 원래 자리를 본 뒤 가구 도구로 돌아온다
+  const lookAtHole = async (page) => {
+    await page.getByTestId('fixtures-toggle').click();
+    await page.getByRole('button', { name: /^의자 · .* 3D에서 보기$/ }).click();
+    await page.waitForTimeout(1200);
+    await page.getByTestId('tool-furniture').click();
+  };
+  await lookAtHole(owner);
+  await shot(owner, 'fixture-move-4-hole.png');
+  const remainingBefore = Number(await owner.getByTestId('ai-suggest').getAttribute('data-remaining'));
+  const fillStart = Date.now();
+  await row(owner, 'x2').getByTestId('fixture-fill').click();
+  await owner.locator('[data-testid=fixture-fill][data-filled=true]').waitFor({ timeout: 240000 });
+  const fillMs = Date.now() - fillStart;
+  await owner.waitForTimeout(3000);
+  const db3 = await fixturesInDb();
+  const fillV = db3.find((f) => f.id === 'x2')?.fill?.v;
+  const fillKey = fillV ? `rooms/${roomId}/fixtures/x2-fill-${fillV}.spz` : '';
+  const fillSize = fillKey ? await headSize(fillKey) : null;
+  scene = await sceneState(owner);
+  const remainingAfter = Number(await owner.getByTestId('ai-suggest').getAttribute('data-remaining'));
+  const { data: fillCalls } = await admin.from('ai_calls').select('kind, status').eq('room_id', roomId).eq('kind', 'fill');
+  check('빈자리 채우기: DB에 채운 조각 버전, R2에 조각 파일(10KB 넘음), AI 1회', fillV > 0 && fillSize > 10000 && remainingAfter === remainingBefore - 1 && fillCalls?.length === 1 && fillCalls[0].status === 'done', { fillV, fillSize, remainingBefore, remainingAfter, fillMs, fillCalls });
+  check('빈자리 채우기: 바닥 구멍·창가 벽도 숨기고(상자 3개), 채운 조각을 원래 자리에 그림(조각 2개)', scene.sdfs === 3 && scene.pieces === 2, scene);
+  await lookAtHole(owner);
+  await shot(owner, 'fixture-move-5-filled.png');
+  await openRoom(owner, roomId);
+  await owner.waitForTimeout(3000);
+  scene = await sceneState(owner);
+  check('다시 열어도 채운 빈자리가 보임', scene.sdfs === 3 && scene.pieces === 2 && (await row(owner, 'x2').getByTestId('fixture-fill').getAttribute('data-filled')) === 'true', scene);
+
+  // 8) 다른 사람: 떼어 낸 의자는 옮길 수 있고, 수납장(TV장)은 방 주인이 준비해야 한다
   const visitor = await newPage();
   await signUp(visitor, emails.visitor);
   await openRoom(visitor, roomId);
@@ -217,7 +250,7 @@ try {
   await row(visitor, 'x2').getByTestId('fixture-move-button').click();
   await visitor.waitForTimeout(2000);
   const vItems = await itemsOf(visitor);
-  check('다른 사람: 바로 원래 자리에 놓임 (떼어 내기 없이)', vItems.some((i) => i.kind === 'fixture' && near(i.x, -2.452)) && (await sceneState(visitor)).pieces === 1, vItems);
+  check('다른 사람: 바로 원래 자리에 놓이고, 조각과 방 주인이 채운 빈자리가 보임 (떼어 내기 없이)', vItems.some((i) => i.kind === 'fixture' && near(i.x, -2.452)) && (await sceneState(visitor)).pieces === 2, vItems);
   // 의자를 옮긴 채로 침대를 하나 놓고 AI 추천: 결과에 옮긴 의자가 그 자리 그대로 들어 있고, 침대는 의자와 겹치지 않는다
   await visitor.getByTestId('furniture-panel').getByRole('button', { name: /^\+ 싱글 침대/ }).first().click();
   await visitor.getByTestId('ai-open').click();
@@ -230,7 +263,7 @@ try {
   const aiErrors = await visitor.getByTestId('layout-violations').getAttribute('data-errors');
   check('AI 추천: 옮긴 의자는 원래 자리 그대로 결과에 남고, 문제 없음', aiChair && near(aiChair.x, -2.452) && aiItems.length === 2 && aiErrors === '0', { aiItems: aiItems.map((i) => [i.kind, i.name, i.x, i.z]), aiErrors });
 
-  // 8) API 막기: 다른 사람은 조각을 올릴 수 없다
+  // 9) API 막기: 다른 사람은 조각을 올릴 수 없다
   const denied = await api(visitor, 'POST', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'piece', size: 1000 });
   const bad = await api(owner, 'PATCH', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'piece', v: Date.now(), top: 1 });
   check('API: 남의 방은 404, 올리지 않고 끝냈다고 하면 409', denied.status === 404 && bad.status === 409, [denied.status, bad.status]);
