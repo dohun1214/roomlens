@@ -145,7 +145,7 @@ export default function RoomUploadForm() {
               setError(null);
             }}
             disabled={busy}
-            placeholder="예: 학교 앞 원룸"
+            placeholder="예: 우리 집 거실"
             data-testid="room-title"
           />
         </label>

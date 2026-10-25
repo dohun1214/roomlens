@@ -61,12 +61,12 @@ export default async function Home() {
     <main className="mx-auto flex w-full max-w-[1160px] flex-1 flex-col gap-12 px-4 pt-2 pb-16 sm:gap-14 sm:px-6">
       <section className="flex flex-wrap items-center gap-8 rounded-[28px] bg-surface p-6 shadow-card sm:gap-10 sm:p-10" data-testid="home-hero">
         <div className="flex min-w-0 flex-[1_1_380px] flex-col gap-5">
-          <span className="self-start rounded-full bg-accent-soft px-3 py-1 text-[13px] font-semibold text-accent-strong">자취방 3D 복원 · 가구 배치 시뮬레이션</span>
+          <span className="self-start rounded-full bg-accent-soft px-3 py-1 text-[13px] font-semibold text-accent-strong">방·집 3D 복원 · 가구 배치 시뮬레이션</span>
           <h1 className="text-[28px] leading-[1.25] font-bold tracking-[-0.025em] text-balance sm:text-[44px] sm:leading-[1.22]">
             찍은 방을 3D로 둘러보고, <span className="text-accent">실제 치수</span>의 가구를 놓아 봅니다
           </h1>
           <p className="max-w-[30em] text-[15px] text-pretty text-sub sm:text-[17px]">
-            이사 갈 방은 가 보지 않고, 지금 사는 방은 가구를 옮기지 않고 미리 배치해 봅니다. 침대와 책상이 들어가는지, 문 앞과 통로를 막지 않는지
+            이사 갈 방은 가 보지 않고, 지금 사는 방은 가구를 옮기지 않고 미리 배치해 봅니다. 원룸부터 집 전체까지, 침대와 책상이 들어가는지, 문 앞과 통로를 막지 않는지
             확인하고 AI 추천도 받을 수 있습니다.
           </p>
           <div className="flex flex-wrap items-center gap-3">
