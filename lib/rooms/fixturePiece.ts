@@ -244,3 +244,17 @@ export function planePoint(plane: FillPlane, u: number, v: number): [number, num
   const r = plane.r ?? [1, 0, 0];
   return [plane.c[0] + r[0] * u, plane.c[1] + v, plane.c[2] + r[2] * u];
 }
+
+/**
+ * 원래 가구 조각을 만들 수 있는지. 방을 볼 수 있는 로그인한 사람은 누구나 원하는 원래 가구를 처음 떼어 내거나 처음 채울 수 있고
+ * (만든 조각은 그 방을 보는 모두가 함께 쓴다), 이미 만든 것을 다시 만드는 것은 방 주인만 한다.
+ * - ok: 만들 수 있음
+ * - need-piece: 빈자리를 채우려면 먼저 떼어 내야 함
+ * - taken: 이미 있어서 방 주인만 다시 만들 수 있음
+ */
+export function pieceAccess(f: Pick<Fixture, 'piece' | 'fill'>, kind: PieceKind, isOwner: boolean): 'ok' | 'need-piece' | 'taken' {
+  if (kind === 'fill' && !f.piece) return 'need-piece';
+  if (isOwner) return 'ok';
+  const existing = kind === 'piece' ? f.piece : f.fill;
+  return existing ? 'taken' : 'ok';
+}

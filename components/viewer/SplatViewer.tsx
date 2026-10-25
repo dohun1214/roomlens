@@ -1253,7 +1253,7 @@ export default function SplatViewer({
           aiSummary={currentLayout?.aiSummary ?? null}
           pieceUrls={pieceUrls}
           onMovedFixtures={changeMovedFixtures}
-          prepare={roomId && canEdit && signedIn && url && roomPolygonKey === savedPolygonKey ? { roomId, sourceUrl: url, onPrepared: fixturePrepared, onAiRemaining: setAiRemaining } : undefined}
+          prepare={roomId && signedIn && url && roomPolygonKey === savedPolygonKey ? { roomId, sourceUrl: url, isOwner: canEdit, onPrepared: fixturePrepared, onAiRemaining: setAiRemaining } : undefined}
         />
       )}
       {calibrated && room && (
