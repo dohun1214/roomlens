@@ -4,6 +4,8 @@
 //   rotationDeg: 가구 배치와 같은 규칙의 회전. 방의 첫 번째 벽 방향에 맞춘다 (보정된 방은 벽이 가로·세로라 0° 또는 90°)
 //   h         : 높이 (m)
 //   remove    : "치울 가구" → 배치 검사·AI 추천에서 없는 것으로 본다
+//   piece     : 옮길 수 있게 떼어 낸 3D 조각 { v: 만든 시각(파일 이름), top: 위에 얹힌 물건까지 잰 높이 } (lib/rooms/fixturePiece)
+//   fill      : 옮긴 뒤 빈자리를 AI로 채운 조각 { v }
 // 새 가구는 이 자리를 피해서 놓고, 겹치면 배치 검사가 알려 준다.
 // 방 주인이 브라우저에서 바로 저장하므로, 읽을 때 반드시 검증한다.
 import { z } from 'zod';
@@ -39,7 +41,23 @@ export const LABEL_HEIGHTS: Record<FixtureLabel, number> = {
   가구: DEFAULT_FIXTURE_HEIGHT,
 };
 
-export type Fixture = { id: string; label: string; x: number; z: number; w: number; d: number; rotationDeg: number; h: number; remove: boolean };
+/** 떼어 낸 조각의 버전(만든 시각, ms)과 위에 얹힌 물건까지 포함한 높이(m) */
+export type FixturePieceInfo = { v: number; top: number };
+export type FixtureFillInfo = { v: number };
+
+export type Fixture = {
+  id: string;
+  label: string;
+  x: number;
+  z: number;
+  w: number;
+  d: number;
+  rotationDeg: number;
+  h: number;
+  remove: boolean;
+  piece?: FixturePieceInfo;
+  fill?: FixtureFillInfo;
+};
 
 /** 배치 검사·솔버에 넘기는 모양: 가구처럼 겹침·통로를 막는다 */
 export type FixtureObstacle = Footprint & { id: string; name: string; h: number };
@@ -56,6 +74,8 @@ const FixtureSchema = z.object({
   rotationDeg: z.number().min(0).max(360),
   h: z.number().min(0.05).max(MAX_FIXTURE_HEIGHT),
   remove: z.boolean(),
+  piece: z.object({ v: z.number().int().positive(), top: z.number().min(0.05).max(MAX_FIXTURE_HEIGHT) }).optional(),
+  fill: z.object({ v: z.number().int().positive() }).optional(),
 });
 
 const round2 = (v: number) => Math.round(v * 100) / 100 + 0;
@@ -150,10 +170,13 @@ export function updateFixture(fixtures: Fixture[], id: string, change: Partial<P
   });
 }
 
-/** 배치 검사·솔버·빈자리 찾기가 피할 원래 가구 ("치울 가구"는 뺀다) */
-export function fixtureObstacles(fixtures: Fixture[]): FixtureObstacle[] {
+/**
+ * 배치 검사·솔버·빈자리 찾기가 피할 원래 가구 ("치울 가구"는 뺀다)
+ * @param moved 이 배치에서 다른 자리로 옮긴 원래 가구 id. 원래 자리는 비어 있는 것으로 본다 (옮긴 자리는 배치의 가구로 검사한다)
+ */
+export function fixtureObstacles(fixtures: Fixture[], moved: ReadonlySet<string> = new Set()): FixtureObstacle[] {
   return fixtures
-    .filter((f) => !f.remove)
+    .filter((f) => !f.remove && !moved.has(f.id))
     .map((f) => ({ id: `fixture:${f.id}`, name: `원래 있던 ${f.label}`, x: f.x, z: f.z, w: f.w, d: f.d, rotationDeg: f.rotationDeg, h: f.h }));
 }
 
