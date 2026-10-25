@@ -199,10 +199,12 @@ export default function FurnitureLayer({
   aiPrefill?: { text: string; nonce: number } | null;
   /** 옮길 수 있게 떼어 낸 원래 가구 조각의 읽기 주소 (원래 가구 id → 주소) */
   pieceUrls?: FixturePieceUrls;
-  /** 방 주인이면: 아직 떼어 내지 않은 원래 가구를 이 자리에서 떼어 내 올린다 (방 3D 파일 주소) */
+  /** 로그인했으면: 아직 떼어 내지 않은 원래 가구를 원할 때 이 자리에서 떼어 내 올린다 (방 3D 파일 주소) */
   prepare?: {
     roomId: string;
     sourceUrl: string;
+    /** 방 주인이면 이미 떼어 냈거나 채운 것도 다시 할 수 있다 (다른 사람은 처음 한 번만) */
+    isOwner: boolean;
     /** 떼어 낸 조각이나 채운 빈자리를 올렸을 때 (서버가 적은 원래 가구와 새 읽기 주소) */
     onPrepared: (fixture: Fixture, urls: { piece?: string; fill?: string }) => void;
     /** 빈자리 채우기로 AI를 쓴 뒤 남은 횟수 */
@@ -1430,12 +1432,12 @@ export default function FurnitureLayer({
                         <span className="truncate text-[13px] font-semibold">{f.label}</span>
                         <span className="truncate text-[11px] text-mute">
                           <span className="font-mono">{sizeLabel(f.w, f.d)}</span>
-                          {moved ? ' · 옮김' : state === 'locked' ? ' · 방 주인이 준비하면 옮길 수 있음' : ''}
+                          {moved ? ' · 옮김' : state === 'locked' ? (loginHint ? ' · 로그인하면 떼어 내 옮길 수 있음' : ' · 지금은 떼어 낼 수 없음') : ''}
                         </span>
                       </span>
                       {moved ? (
                         <span className="flex shrink-0 gap-1.5">
-                          {prepare && f.piece && (
+                          {prepare && f.piece && (prepare.isOwner || !f.fill) && (
                             <button
                               className="btn btn-soft h-9 px-3 text-[13px] disabled:opacity-40"
                               disabled={(prepBusy !== null && !busy) || aiRemaining === 0}
