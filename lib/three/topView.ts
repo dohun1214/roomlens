@@ -3,7 +3,7 @@
 // 그림 크기를 기기와 상관없이 맞추려고 캡처하는 동안만 그리는 크기를 정사각형으로 바꾼다 (화면 모양은 그대로).
 // 브라우저 전용 (canvas).
 import { Vector2 } from 'three';
-import { BLANK_BASE64, canvasToJpegBase64, wait, type CaptureEngine } from './capture';
+import { BLANK_BASE64, canvasToJpegBase64, pauseRoomEdits, wait, type CaptureEngine } from './capture';
 import { tileAxes, type TopTile } from '@/lib/ai/fixturesDetect';
 
 export type TopViewOptions = {
@@ -60,6 +60,7 @@ export async function captureFixedViews(engine: CaptureEngine, views: FixedView[
   const images: string[] = [];
   controls.enabled = false;
   for (const child of hidden) child.visible = false;
+  const resumeEdits = pauseRoomEdits(engine.roomGroup);
   renderer.setPixelRatio(1);
   // 화면(CSS) 크기는 두고 그리는 크기만 바꾼다
   renderer.setSize(options.px, options.px, false);
@@ -95,6 +96,7 @@ export async function captureFixedViews(engine: CaptureEngine, views: FixedView[
       options.onProgress?.(i + 1, views.length);
     }
   } finally {
+    resumeEdits();
     for (const child of hidden) child.visible = true;
     renderer.setPixelRatio(saved.pixelRatio);
     renderer.setSize(saved.size.x, saved.size.y, false);

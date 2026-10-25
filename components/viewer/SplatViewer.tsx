@@ -37,6 +37,7 @@ import { startPoseForRoom, type SavedCalibration } from '@/lib/rooms/calibration
 import { saveRoomCalibration } from '@/lib/rooms/calibrationClient';
 import { sameOpenings, type Opening } from '@/lib/rooms/openings';
 import { sameFixtures, type Fixture } from '@/lib/rooms/fixtures';
+import type { FixturePieceUrls } from '@/lib/rooms/fixturePiece';
 import { createClient } from '@/lib/supabase/client';
 import { loadingBarValue, loadingLabel, progressFromBytes, type LoadProgress } from '@/lib/viewer/loadProgress';
 import { resolveViewerQuality } from '@/lib/viewer/quality';
@@ -100,12 +101,15 @@ type Props = {
   sharedMissing?: boolean;
   /** 방 대표 사진 주소 (없으면 방 주인이 처음 열 때 지금 화면으로 만든다) */
   thumbnail?: string | null;
+  /** 옮길 수 있게 떼어 낸 원래 가구 조각의 읽기 주소 */
+  initialPieceUrls?: FixturePieceUrls;
 };
 
 const NO_OPENINGS: Opening[] = [];
 const NO_FIXTURES: Fixture[] = [];
 const NO_LAYOUTS: MyLayout[] = [];
 const NO_KEYS: string[] = [];
+const NO_PIECE_URLS: FixturePieceUrls = {};
 
 export default function SplatViewer({
   url,
@@ -128,6 +132,7 @@ export default function SplatViewer({
   sharedLayout = null,
   sharedMissing = false,
   thumbnail = null,
+  initialPieceUrls = NO_PIECE_URLS,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const engineRef = useRef<Engine | null>(null);
@@ -156,6 +161,16 @@ export default function SplatViewer({
   // 방에 원래 있는 가구도 방 좌표로 저장하므로 문·창문처럼 평면도와 함께 기억하고, 보정을 새로 저장하면 비운다
   const [fixtures, setFixtures] = useState({ key: savedPolygonKey, items: initialFixtures });
   const [liveFixtures, setLiveFixtures] = useState<{ key: string | null; items: Fixture[] } | null>(null);
+  // 원래 가구의 떼어 낸 조각 주소, 그리고 서버가 적어 둔 조각 정보 (원래 가구 도구가 저장할 때 잃지 않게 다시 붙인다)
+  const [pieceUrls, setPieceUrls] = useState<FixturePieceUrls>(initialPieceUrls);
+  // 지금 배치에서 옮긴 원래 가구 (원래 가구 도구가 원래 자리의 상자를 그리지 않게)
+  const [movedFixtures, setMovedFixtures] = useState<string[]>(NO_KEYS);
+  const changeMovedFixtures = useCallback((ids: string[]) => setMovedFixtures((prev) => (prev.join() === ids.join() ? prev : ids)), []);
+  const [pieceInfo, setPieceInfo] = useState(() => new Map(initialFixtures.filter((f) => f.piece).map((f) => [f.id, f])));
+  const pieceInfoRef = useRef(pieceInfo);
+  useEffect(() => {
+    pieceInfoRef.current = pieceInfo;
+  }, [pieceInfo]);
   // 평면도에서 원래 가구 사각형을 그리는 중이면 그린 결과를 받을 곳
   const [planDraw, setPlanDraw] = useState<{ onDraw: (a: Point2, b: Point2) => void } | null>(null);
   // 고른 도구 (아직 고르지 않았으면 보정된 방은 가구, 아니면 크기 보정)
@@ -613,7 +628,11 @@ export default function SplatViewer({
   const savedOpenings = roomPolygonKey === openings.key ? openings.items : NO_OPENINGS;
   const shownOpenings = liveOpenings && liveOpenings.key === roomPolygonKey ? liveOpenings.items : savedOpenings;
   const savedFixtures = roomPolygonKey === fixtures.key ? fixtures.items : NO_FIXTURES;
-  const shownFixtures = liveFixtures && liveFixtures.key === roomPolygonKey ? liveFixtures.items : savedFixtures;
+  // 가구 층에는 떼어 낸 조각 정보를 붙여 넘긴다 (원래 가구 도구의 목록에는 조각 정보가 없을 수 있다)
+  const shownFixtures = useMemo(
+    () => withPieces(liveFixtures && liveFixtures.key === roomPolygonKey ? liveFixtures.items : savedFixtures, pieceInfo),
+    [liveFixtures, roomPolygonKey, savedFixtures, pieceInfo],
+  );
 
   // 방 주인이 보정을 저장한다 (transform·floor_polygon은 방 주인이 직접 바꿀 수 있는 컬럼)
   const saveCalibration = useCallback(
@@ -652,10 +671,12 @@ export default function SplatViewer({
     [roomId],
   );
 
-  // 방 주인이 원래 가구를 저장한다 (지금 저장돼 있는 평면도 기준)
+  // 방 주인이 원래 가구를 저장한다 (지금 저장돼 있는 평면도 기준).
+  // 떼어 낸 조각 정보는 서버가 적으므로, 같은 자리·크기의 원래 가구에는 알고 있는 조각 정보를 다시 붙인다
   const saveFixtures = useCallback(
-    async (items: Fixture[]) => {
+    async (edited: Fixture[]) => {
       if (!roomId) return false;
+      const items = withPieces(edited, pieceInfoRef.current);
       const { data, error } = await createClient().from('rooms').update({ fixtures: items }).eq('id', roomId).select('id').maybeSingle();
       if (error || data === null) return false;
       setFixtures({ key: savedPolygonKeyRef.current, items });
@@ -663,6 +684,11 @@ export default function SplatViewer({
     },
     [roomId],
   );
+  // 가구 층이 원래 가구를 떼어 내 올렸을 때: 저장된 원래 가구와 (있으면) 고치는 중인 목록에 조각 정보를 넣는다
+  const fixturePrepared = useCallback((fixture: Fixture, pieceUrl: string) => {
+    setPieceInfo((prev) => new Map(prev).set(fixture.id, fixture));
+    setPieceUrls((prev) => ({ ...prev, [fixture.id]: { piece: pieceUrl } }));
+  }, []);
   // "AI로 방 준비하기": 보정을 저장한 뒤 부른다. 문·창문 도구가 먼저 찾고, 끝나면 원래 가구 도구가 이어서 찾는다
   const startPrep = useCallback(() => {
     setPrep({ step: 'openings', token: String(Date.now()) });
@@ -1225,6 +1251,9 @@ export default function SplatViewer({
           aiBlocked={aiBlocked}
           aiResult={aiResult && aiResult.layoutId === layoutId ? aiResult : null}
           aiSummary={currentLayout?.aiSummary ?? null}
+          pieceUrls={pieceUrls}
+          onMovedFixtures={changeMovedFixtures}
+          prepare={roomId && canEdit && signedIn && url && roomPolygonKey === savedPolygonKey ? { roomId, sourceUrl: url, onPrepared: fixturePrepared } : undefined}
         />
       )}
       {calibrated && room && (
@@ -1260,6 +1289,7 @@ export default function SplatViewer({
           detect={roomId && canEdit && signedIn ? { roomId, remaining: aiRemaining, onRemaining: setAiRemaining } : undefined}
           auto={fixturesAuto}
           shown={markers.fixtures}
+          movedIds={movedFixtures}
         />
       )}
       {/* 방 분석: 리포트는 방을 볼 수 있으면 누구나, 분석은 방 주인만 */}
@@ -1380,4 +1410,18 @@ function writeMarkers(markers: Markers) {
   } catch {
     // 저장할 수 없는 브라우저(사생활 보호 모드 등)에서는 이번에만 적용된다
   }
+}
+
+/**
+ * 원래 가구 목록에 알고 있는 조각 정보(서버가 적은 것)를 붙인다. 자리·크기·회전이 같은 원래 가구에만 붙인다
+ * (지우고 같은 id로 새로 넣은 원래 가구에는 붙이지 않는다)
+ */
+function withPieces(items: Fixture[], known: Map<string, Fixture>): Fixture[] {
+  if (known.size === 0) return items;
+  return items.map((f) => {
+    const k = known.get(f.id);
+    const same = k && k.x === f.x && k.z === f.z && k.w === f.w && k.d === f.d && k.rotationDeg === f.rotationDeg;
+    if (!same || !k.piece) return f;
+    return { ...f, piece: k.piece, ...(k.fill ? { fill: k.fill } : {}) };
+  });
 }

@@ -40,6 +40,8 @@ const AI_MESSAGE = 'AI가 원래 가구';
  * AI가 위에서 내려다본 그림에서 찾은 후보를 받아 확인한다.
  * 좌표는 방 좌표(바닥 y=0, m)이고 보정 후에는 월드 좌표와 같다.
  */
+const NO_MOVED: string[] = [];
+
 export default function FixturesTool({
   slots,
   engineRef,
@@ -54,6 +56,7 @@ export default function FixturesTool({
   detect,
   auto,
   shown = true,
+  movedIds = NO_MOVED,
 }: {
   slots: Slots;
   engineRef: RefObject<Engine | null>;
@@ -78,6 +81,8 @@ export default function FixturesTool({
   auto?: AutoDetect;
   /** 3D에 원래 가구 상자를 보일지 (사용자가 끌 수 있다). 이 도구를 쓰는 중에는 꺼 두었어도 보인다 */
   shown?: boolean;
+  /** 지금 배치에서 옮긴 원래 가구 id */
+  movedIds?: string[];
 }) {
   const [fixtures, setFixtures] = useState<Fixture[]>(initial);
   const [saved, setSaved] = useState<Fixture[]>(initial);
@@ -152,6 +157,8 @@ export default function FixturesTool({
     const disposables: { dispose: () => void }[] = [];
     const overlay = { depthTest: false, transparent: true };
     for (const f of fixtures) {
+      // 지금 배치에서 옮긴 원래 가구는 원래 자리에 상자를 그리지 않는다 (원래 가구 도구를 쓰는 동안은 그린다)
+      if (!open && movedIds.includes(f.id)) continue;
       const color = f.id === selectedId && open ? SELECTED_COLOR : f.remove ? REMOVE_COLOR : FIXTURE_COLOR;
       const box = new THREE.BoxGeometry(f.w, f.h, f.d);
       const fillMaterial = new THREE.MeshBasicMaterial({ color, opacity: f.remove ? 0.08 : 0.16, depthWrite: false, ...overlay });
@@ -183,7 +190,7 @@ export default function FixturesTool({
       engine.scene.remove(group);
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, fixtures, selectedId, open, firstPoint, activeMode, shown]);
+  }, [engineRef, fixtures, selectedId, open, firstPoint, activeMode, shown, movedIds]);
 
   // 3D 화면에서 가구 윗면의 마주 보는 두 모서리 찍기
   useEffect(() => {
