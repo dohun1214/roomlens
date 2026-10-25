@@ -111,3 +111,11 @@ export function layoutUserPrompt(roomSummary: string, problems: string[] = []): 
   if (problems.length === 0) return roomSummary;
   return [roomSummary, '', '이전 시도의 문제 (이 가구들은 요청한 자리에 놓지 못했다):', ...problems.map((p) => `- ${p}`)].join('\n');
 }
+
+/** 옮긴 원래 가구의 빈자리 채우기: 자홍색으로 칠한 구멍만 주변에 맞춰 이어 그리게 한다 (그림 모델은 영어 지시를 더 잘 따른다) */
+export const FILL_PROMPTS = {
+  floor:
+    'This is a straight top-down view of the floor of a room. The solid magenta rectangle is a hole left after a piece of furniture was removed. Fill ONLY the magenta area with floor that continues seamlessly from the surrounding floor: same material, pattern and direction, color and lighting, and continue any light or shadow shapes that cross into it. Do not add any objects, furniture, legs or marks. Keep every pixel outside the magenta area unchanged and keep the exact same framing and size.',
+  wall:
+    'This is a straight frontal view of an interior wall. The solid magenta rectangle is a hole left after a piece of furniture standing against the wall was removed. Fill ONLY the magenta area with wall that continues seamlessly from the surroundings: same paint or wallpaper, any baseboard or outlet lines continuing across, and the same lighting. Do not add any objects, furniture, shadows of furniture or decorations. Keep every pixel outside the magenta area unchanged and keep the exact same framing and size.',
+} as const;

@@ -6,6 +6,8 @@ import { z } from 'zod';
 // 구조화 출력은 `responseMimeType` + `responseJsonSchema` 조합이 동작한다 (scripts/check-gemini.ts 로 확인).
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL ?? 'gemini-3.8-flash';
+/** 그림을 고쳐 그리는 모델 (옮긴 원래 가구의 빈자리 채우기) */
+export const GEMINI_IMAGE_MODEL = process.env.GEMINI_IMAGE_MODEL ?? 'gemini-nano-banana-2.1';
 
 /** NO_KEY: 키 없음, UPSTREAM: Gemini가 실패하거나 시간 초과, BAD_OUTPUT: 응답이 스키마와 다름 */
 export class AiError extends Error {
@@ -70,4 +72,34 @@ export async function generateJson<T>(
   const parsed = schema.safeParse(json);
   if (!parsed.success) throw new AiError('BAD_OUTPUT', 'Gemini 응답이 정해진 형식과 다릅니다.');
   return { data: parsed.data, ...usage };
+}
+
+/**
+ * 그림 한 장과 지시문을 보내고 고쳐 그린 그림을 받는다.
+ * @returns base64 그림과 형식 (그림이 없으면 BAD_OUTPUT)
+ */
+export async function generateImage(input: { prompt: string; image: { mimeType: string; data: string }; timeoutMs?: number }): Promise<{ data: string; mimeType: string } & AiUsage> {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new AiError('NO_KEY', 'GEMINI_API_KEY가 없습니다.');
+  client ??= new GoogleGenAI({ apiKey });
+  let res;
+  try {
+    res = await client.models.generateContent({
+      model: GEMINI_IMAGE_MODEL,
+      contents: [{ role: 'user', parts: [{ inlineData: input.image }, { text: input.prompt }] }],
+      config: { responseModalities: ['IMAGE'], httpOptions: { timeout: input.timeoutMs ?? 90_000 } },
+    });
+  } catch (err) {
+    const e = err as { status?: number; message?: string };
+    console.error('[gemini] 그림 호출 실패', e.status ?? '', String(e.message ?? err).slice(0, 300));
+    throw new AiError('UPSTREAM', 'Gemini 호출에 실패했습니다.');
+  }
+  const part = res.candidates?.[0]?.content?.parts?.find((p) => p.inlineData?.data);
+  if (!part?.inlineData?.data) throw new AiError('BAD_OUTPUT', 'Gemini가 그림을 돌려주지 않았습니다.');
+  return {
+    data: part.inlineData.data,
+    mimeType: part.inlineData.mimeType ?? 'image/png',
+    inputTokens: res.usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: (res.usageMetadata?.candidatesTokenCount ?? 0) + (res.usageMetadata?.thoughtsTokenCount ?? 0),
+  };
 }
