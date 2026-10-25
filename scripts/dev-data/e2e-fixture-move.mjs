@@ -241,16 +241,25 @@ try {
   scene = await sceneState(owner);
   check('다시 열어도 채운 빈자리가 보임', scene.sdfs === 3 && scene.pieces === 2 && (await row(owner, 'x2').getByTestId('fixture-fill').getAttribute('data-filled')) === 'true', scene);
 
-  // 8) 다른 사람: 떼어 낸 의자는 옮길 수 있고, 수납장(TV장)은 방 주인이 준비해야 한다
+  // 8) 로그인하지 않은 사람: 떼어 낸 의자는 옮겨 볼 수 있고, 떼어 내지 않은 수납장은 잠김(로그인 안내)
+  const guest = await newPage();
+  await openRoom(guest, roomId);
+  const gStates = await guest.locator('[data-testid=fixture-move-list] li').evaluateAll((els) => els.map((el) => [el.getAttribute('data-id'), el.getAttribute('data-state')]));
+  const gHint = await row(guest, 'x3').innerText();
+  check('로그인 안 함: 의자는 옮기기, 수납장은 잠김 + "로그인하면" 안내', JSON.stringify(gStates) === JSON.stringify([['x2', 'ready'], ['x3', 'locked']]) && gHint.includes('로그인하면') && (await row(guest, 'x3').getByTestId('fixture-move-button').isDisabled()), { gStates, gHint });
+  await guest.close();
+
+  // 9) 다른 사람(로그인): 떼어 낸 의자는 바로 옮기고, 수납장은 원할 때 직접 떼어 낸다
   const visitor = await newPage();
   await signUp(visitor, emails.visitor);
   await openRoom(visitor, roomId);
   const vStates = await visitor.locator('[data-testid=fixture-move-list] li').evaluateAll((els) => els.map((el) => [el.getAttribute('data-id'), el.getAttribute('data-state')]));
-  check('다른 사람: 의자는 바로 옮기기, 수납장은 잠김(버튼 꺼짐)', JSON.stringify(vStates) === JSON.stringify([['x2', 'ready'], ['x3', 'locked']]) && (await row(visitor, 'x3').getByTestId('fixture-move-button').isDisabled()), vStates);
+  check('다른 사람: 의자는 바로 옮기기, 수납장은 "옮기기"(직접 떼어 냄)', JSON.stringify(vStates) === JSON.stringify([['x2', 'ready'], ['x3', 'prepare']]) && !(await row(visitor, 'x3').getByTestId('fixture-move-button').isDisabled()), vStates);
   await row(visitor, 'x2').getByTestId('fixture-move-button').click();
   await visitor.waitForTimeout(2000);
   const vItems = await itemsOf(visitor);
   check('다른 사람: 바로 원래 자리에 놓이고, 조각과 방 주인이 채운 빈자리가 보임 (떼어 내기 없이)', vItems.some((i) => i.kind === 'fixture' && near(i.x, -2.452)) && (await sceneState(visitor)).pieces === 2, vItems);
+  check('다른 사람: 이미 채운 빈자리는 "다시 채우기"가 없음 (방 주인만)', (await row(visitor, 'x2').getByTestId('fixture-fill').count()) === 0);
   // 의자를 옮긴 채로 침대를 하나 놓고 AI 추천: 결과에 옮긴 의자가 그 자리 그대로 들어 있고, 침대는 의자와 겹치지 않는다
   await visitor.getByTestId('furniture-panel').getByRole('button', { name: /^\+ 싱글 침대/ }).first().click();
   await visitor.getByTestId('ai-open').click();
@@ -263,10 +272,28 @@ try {
   const aiErrors = await visitor.getByTestId('layout-violations').getAttribute('data-errors');
   check('AI 추천: 옮긴 의자는 원래 자리 그대로 결과에 남고, 문제 없음', aiChair && near(aiChair.x, -2.452) && aiItems.length === 2 && aiErrors === '0', { aiItems: aiItems.map((i) => [i.kind, i.name, i.x, i.z]), aiErrors });
 
-  // 9) API 막기: 다른 사람은 조각을 올릴 수 없다
-  const denied = await api(visitor, 'POST', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'piece', size: 1000 });
-  const bad = await api(owner, 'PATCH', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'piece', v: Date.now(), top: 1 });
-  check('API: 남의 방은 404, 올리지 않고 끝냈다고 하면 409', denied.status === 404 && bad.status === 409, [denied.status, bad.status]);
+  // 다른 사람이 수납장 "옮기기" → 그 자리에서 떼어 내 방에 저장된다
+  await row(visitor, 'x3').getByTestId('fixture-move-button').click();
+  await visitor.locator('[data-testid=fixture-move-list] li[data-id=x3][data-state=moved]').waitFor({ timeout: 240000 });
+  const cabinet = (await fixturesInDb()).find((f) => f.id === 'x3');
+  const cabinetSize = cabinet?.piece ? await headSize(`rooms/${roomId}/fixtures/x3-piece-${cabinet.piece.v}.spz`) : null;
+  check('다른 사람: 수납장을 원할 때 떼어 냄 (방에 조각 저장, R2에 파일)', Boolean(cabinet?.piece) && cabinetSize > 1000, { piece: cabinet?.piece, cabinetSize });
+  check('다른 사람: 떼어 낸 수납장은 빈자리 채우기 버튼이 보임 (아직 안 채움)', (await row(visitor, 'x3').getByTestId('fixture-fill').getAttribute('data-filled')) === 'false');
+  await visitor.waitForTimeout(1500);
+  await shot(visitor, 'fixture-move-6-visitor.png');
+  // 방 주인이 다시 열면 다른 사람이 떼어 낸 수납장도 바로 옮길 수 있다
+  await openRoom(owner, roomId);
+  const oStates = await owner.locator('[data-testid=fixture-move-list] li').evaluateAll((els) => els.map((el) => el.getAttribute('data-state')));
+  check('방 주인: 다른 사람이 떼어 낸 수납장이 "ready"로 보임', oStates[1] === 'ready', oStates);
+
+  // 10) API 막기: 다른 사람은 이미 있는 조각·채운 빈자리를 바꿀 수 없고, 비공개 방은 없는 방
+  const again = await api(visitor, 'POST', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'piece', size: 1000 });
+  const refill = await api(visitor, 'POST', `/api/rooms/${roomId}/fixture-fill`, { fixtureId: 'x2', images: [{ kind: 'floor', data: 'A'.repeat(200) }] });
+  const bad = await api(owner, 'PATCH', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'fill', v: Date.now() });
+  check('API: 다른 사람은 다시 떼어 내기·다시 채우기 409, 올리지 않고 끝냈다고 하면 409', again.status === 409 && refill.status === 409 && bad.status === 409, [again.status, again.json?.error?.code, refill.status, refill.json?.error?.code, bad.status, bad.json?.error?.code]);
+  await admin.from('rooms').update({ is_public: false }).eq('id', roomId);
+  const hidden = await api(visitor, 'POST', `/api/rooms/${roomId}/fixture-pieces`, { fixtureId: 'x3', kind: 'fill', size: 1000 });
+  check('API: 비공개 방은 다른 사람에게 404', hidden.status === 404, hidden.status);
   check('화면 오류 없음', pageErrors.length === 0, pageErrors);
 } catch (err) {
   check('예외 없이 끝까지 실행', false, String(err).slice(0, 400));
