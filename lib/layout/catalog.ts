@@ -97,9 +97,9 @@ export function catalogLabel(item: Pick<CatalogItem, 'nameKo' | 'styleKo'>): str
   return item.styleKo ? `${item.nameKo} · ${item.styleKo}` : item.nameKo;
 }
 
-/** 카탈로그 목록에 보여줄 모델 사진 (scripts/dev-data/render-furniture-thumbs.mjs). 내 가구는 없다 */
-export function catalogThumbnail(item: Pick<CatalogItem, 'id' | 'kind'>): string | null {
-  return item.kind === 'user' ? null : `/furniture/${item.id}.webp`;
+/** 카탈로그 목록에 보여줄 모델 사진 (scripts/dev-data/render-furniture-thumbs.mjs). 내 가구·옮긴 원래 가구는 없다 */
+export function catalogThumbnail(item: { id: string; kind?: 'catalog' | 'user' | 'fixture' }): string | null {
+  return item.kind === 'user' || item.kind === 'fixture' ? null : `/furniture/${item.id}.webp`;
 }
 
 /** 카탈로그 가구 모델들의 출처 (겹치지 않게, 처음 나온 순서대로). 화면에 출처를 밝힐 때 쓴다 */

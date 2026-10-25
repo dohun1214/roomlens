@@ -22,6 +22,9 @@ export const LayoutIntent = z.object({
 });
 export type LayoutIntent = z.infer<typeof LayoutIntent>;
 
+/** 추천 요청에 넣을 수 있는 가구 수 (옮긴 원래 가구 포함) */
+const MAX_SUGGEST_INPUT = 50;
+
 /** 배치 추천 요청: 지금 놓인 가구(어떤 가구인지만. 치수는 서버가 DB에서 읽는다)와 사용자의 요청 글 */
 export const LayoutSuggestInput = z.object({
   items: z
@@ -29,11 +32,16 @@ export const LayoutSuggestInput = z.object({
       z.object({
         id: z.string().min(1).max(40),
         furnitureRef: z.string().min(1).max(64),
-        kind: z.enum(['catalog', 'user']),
+        kind: z.enum(['catalog', 'user', 'fixture']),
+        // 옮긴 원래 가구(kind fixture)는 지금 자리에 둔 채로 추천한다 (그 자리를 피함)
+        x: z.number().min(-1000).max(1000).optional(),
+        z: z.number().min(-1000).max(1000).optional(),
+        rotationDeg: z.number().min(-3600).max(3600).optional(),
       }),
     )
     .min(1, '가구를 먼저 놓아 주세요.')
-    .max(20, '한 번에 20개까지 추천받을 수 있습니다.'),
+    .max(MAX_SUGGEST_INPUT, '가구가 너무 많습니다.')
+    .refine((items) => items.filter((item) => item.kind !== 'fixture').length <= 20, '한 번에 20개까지 추천받을 수 있습니다.'),
   request: z.string().max(1000, '요청은 1000자까지 적을 수 있습니다.').default(''),
 });
 export type LayoutSuggestInput = z.infer<typeof LayoutSuggestInput>;

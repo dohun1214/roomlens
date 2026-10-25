@@ -40,7 +40,7 @@ export async function requestLayoutSuggestion(roomId: string, items: SavedItem[]
     res = await fetch(`/api/rooms/${roomId}/layout-suggest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: items.map(({ id, furnitureRef, kind }) => ({ id, furnitureRef, kind })), request }),
+      body: JSON.stringify({ items: items.map(({ id, furnitureRef, kind, x, z, rotationDeg }) => (kind === 'fixture' ? { id, furnitureRef, kind, x, z, rotationDeg } : { id, furnitureRef, kind })), request }),
     });
   } catch {
     return { ok: false, code: 'NETWORK', message: '서버에 연결하지 못했습니다. 인터넷 연결을 확인해 주세요.' };

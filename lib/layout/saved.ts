@@ -1,8 +1,10 @@
 // 배치를 저장하는 형식. layouts.items = [{ id, furnitureRef, kind, x, z, rotationDeg }]
-// 치수·이름은 저장하지 않고 furnitureRef로 카탈로그(또는 내 가구)에서 다시 찾는다.
+// 치수·이름은 저장하지 않고 furnitureRef로 카탈로그(또는 내 가구, 방의 원래 가구)에서 다시 찾는다.
+// kind 'fixture'는 방에 원래 있던 가구를 이 배치에서 옮긴 것: furnitureRef = rooms.fixtures의 id
 // 브라우저에서 본인 권한으로 바로 저장하므로, 읽을 때 반드시 검증한다.
 import { z } from 'zod';
 import type { Footprint } from '@/lib/three/floorDrag';
+import type { Fixture } from '@/lib/rooms/fixtures';
 import { categoryColor, type CatalogItem } from './catalog';
 
 /** DB의 layouts_items_check 와 같은 값 */
@@ -12,9 +14,9 @@ const coordinate = z.number().min(-1000).max(1000);
 
 export const SavedItemSchema = z.object({
   id: z.string().min(1).max(40),
-  /** kind가 catalog면 furniture_catalog.id, user면 user_furniture.id */
+  /** kind가 catalog면 furniture_catalog.id, user면 user_furniture.id, fixture면 방의 원래 가구 id */
   furnitureRef: z.string().min(1).max(64),
-  kind: z.enum(['catalog', 'user']),
+  kind: z.enum(['catalog', 'user', 'fixture']),
   x: coordinate,
   z: coordinate,
   rotationDeg: z.number().min(-3600).max(3600),
@@ -35,7 +37,39 @@ export type PlacedItem = Footprint & {
   color: number;
   /** 3D 모델(GLB) 주소. 없으면 상자로 그린다 */
   modelUrl?: string;
+  /** 원래 가구를 옮긴 것이면 떼어 낸 3D 조각(스플랫) 주소 */
+  pieceUrl?: string;
 };
+
+/** 원래 가구의 이름 → 배치 검사에 쓰는 가구 종류 (쓰는 쪽 검사는 하지 않는다: 원래 가구는 앞을 모른다) */
+const FIXTURE_CATEGORY: Record<string, string> = { 침대: 'bed', 소파: 'sofa', 책상: 'desk', 식탁: 'table', 테이블: 'table', 의자: 'chair', 옷장: 'storage', 수납장: 'storage', 책장: 'storage', 냉장고: 'storage', 세탁기: 'storage', TV장: 'storage' };
+/** 옮긴 원래 가구의 상자 색 (조각을 받는 동안·받지 못했을 때) */
+export const FIXTURE_ITEM_COLOR = 0x9a9488;
+
+/** 방의 원래 가구를 배치의 가구로 놓는다. 높이는 위에 얹힌 물건까지 잰 조각 높이 */
+export function placeFixtureItem(f: Fixture, id: string, at: Pick<Footprint, 'x' | 'z' | 'rotationDeg'>, pieceUrl?: string): PlacedItem {
+  return {
+    id,
+    kind: 'fixture',
+    furnitureRef: f.id,
+    name: f.label,
+    w: f.w,
+    d: f.d,
+    h: f.piece?.top ?? f.h,
+    category: FIXTURE_CATEGORY[f.label] ?? 'fixture',
+    clearance: 0,
+    color: FIXTURE_ITEM_COLOR,
+    x: at.x,
+    z: at.z,
+    rotationDeg: at.rotationDeg,
+    ...(pieceUrl ? { pieceUrl } : {}),
+  };
+}
+
+/** 이 배치에서 옮긴 원래 가구 id 모음 */
+export function movedFixtureIds(items: Pick<SavedItem, 'kind' | 'furnitureRef'>[]): Set<string> {
+  return new Set(items.filter((i) => i.kind === 'fixture').map((i) => i.furnitureRef));
+}
 
 // + 0 은 -0 을 0 으로 바꾼다
 const round3 = (v: number) => Math.round(v * 1000) / 1000 + 0;
@@ -94,17 +128,32 @@ export function placeCatalogItem(entry: CatalogItem, id: string, at: Pick<Footpr
 /**
  * 저장된 배치를 화면의 가구로 되살린다.
  * 카탈로그나 내 가구에서 찾을 수 없는 가구는 건너뛰고 그 수를 missing으로 알려준다.
+ * 옮긴 원래 가구는 방에 그 원래 가구가 있고 조각이 있을 때만 되살린다 (같은 원래 가구가 두 번이면 처음 것만).
  */
 export function restoreItems(
   saved: SavedItem[],
   catalog: CatalogItem[],
   userFurniture: CatalogItem[] = [],
+  fixtures: Fixture[] = [],
+  pieceUrls: Record<string, string> = {},
 ): { items: PlacedItem[]; missing: number } {
   const byId = new Map(catalog.map((entry) => [entry.id, entry]));
   const mineById = new Map(userFurniture.map((entry) => [entry.id, entry]));
+  const fixtureById = new Map(fixtures.map((f) => [f.id, f]));
   const items: PlacedItem[] = [];
+  const movedSeen = new Set<string>();
   let missing = 0;
   for (const s of saved) {
+    if (s.kind === 'fixture') {
+      const f = fixtureById.get(s.furnitureRef);
+      if (!f?.piece || movedSeen.has(f.id)) {
+        missing += 1;
+        continue;
+      }
+      movedSeen.add(f.id);
+      items.push(placeFixtureItem(f, s.id, s, pieceUrls[f.id]));
+      continue;
+    }
     const entry = s.kind === 'catalog' ? byId.get(s.furnitureRef) : mineById.get(s.furnitureRef);
     if (!entry) {
       missing += 1;

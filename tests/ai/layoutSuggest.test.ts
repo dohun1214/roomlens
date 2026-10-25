@@ -81,6 +81,9 @@ describe('요청 형식', () => {
     expect(LayoutSuggestInput.safeParse({ items: [] }).success).toBe(false);
     const many = Array.from({ length: 21 }, (_, i) => ({ id: `f${i}`, furnitureRef: 'desk', kind: 'catalog' }));
     expect(LayoutSuggestInput.safeParse({ items: many }).success).toBe(false);
+    // 옮긴 원래 가구는 20개에 세지 않는다 (지금 자리에 둔 채로 추천)
+    const withFixture = [...many.slice(0, 20), { id: 'f99', furnitureRef: 'x1', kind: 'fixture', x: 1, z: 0, rotationDeg: 0 }];
+    expect(LayoutSuggestInput.safeParse({ items: withFixture }).success).toBe(true);
   });
 
   it('요청 글은 없어도 된다. 모르는 kind는 거부한다', () => {
