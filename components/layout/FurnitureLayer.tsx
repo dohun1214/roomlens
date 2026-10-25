@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import * as THREE from 'three';
+import { SplatMesh, type PackedSplats } from '@sparkjsdev/spark';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 import { catalogLabel, catalogThumbnail, DEFAULT_CATALOG, modelCredits, type CatalogItem } from '@/lib/layout/catalog';
@@ -24,10 +25,15 @@ import {
 } from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
 import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
+import type { FixturePieceUrls } from '@/lib/rooms/fixturePiece';
+import { uploadFixturePiece } from '@/lib/rooms/fixturePieceClient';
+import { extractFixturePiece, hideFixtureEdit, loadSourceSplats, setHiddenFixtures } from '@/lib/three/fixturePiece';
 import {
   MAX_LAYOUT_ITEMS,
+  movedFixtureIds,
   nextItemNumber,
   placeCatalogItem,
+  placeFixtureItem,
   restoreItems,
   sameSavedItems,
   toSavedItems,
@@ -65,6 +71,7 @@ const NO_FIXTURES: Fixture[] = [];
 const NO_FURNITURE: CatalogItem[] = [];
 const NO_LAYOUTS: LayoutChoice[] = [];
 const NO_KEYS: string[] = [];
+const NO_PIECES: FixturePieceUrls = {};
 
 /** 배치를 고르는 칸에 보여줄 것 */
 export type LayoutChoice = { id: string; name: string; createdBy: 'user' | 'ai'; isPublic?: boolean };
@@ -125,6 +132,9 @@ export default function FurnitureLayer({
   share,
   onUnsavedChange,
   aiPrefill = null,
+  pieceUrls = NO_PIECES,
+  prepare,
+  onMovedFixtures,
 }: {
   /** 패널과 3D 화면 위에 그려 넣을 자리 */
   slots: Slots;
@@ -186,8 +196,22 @@ export default function FurnitureLayer({
   onUnsavedChange?: (unsaved: boolean) => void;
   /** 방 분석에서 넘어온 AI 추천 요청 글. nonce가 바뀔 때마다 요청 칸을 열고 글을 넣는다 */
   aiPrefill?: { text: string; nonce: number } | null;
+  /** 옮길 수 있게 떼어 낸 원래 가구 조각의 읽기 주소 (원래 가구 id → 주소) */
+  pieceUrls?: FixturePieceUrls;
+  /** 방 주인이면: 아직 떼어 내지 않은 원래 가구를 이 자리에서 떼어 내 올린다 (방 3D 파일 주소) */
+  prepare?: { roomId: string; sourceUrl: string; onPrepared: (fixture: Fixture, pieceUrl: string) => void };
+  /** 이 배치에서 옮긴 원래 가구 id가 바뀔 때 (원래 가구 도구가 원래 자리의 상자를 그리지 않게) */
+  onMovedFixtures?: (ids: string[]) => void;
 }) {
-  const [restored] = useState(() => restoreItems(initialItems ?? [], catalog, [...userFurniture, ...borrowedFurniture]));
+  const [restored] = useState(() =>
+    restoreItems(
+      initialItems ?? [],
+      catalog,
+      [...userFurniture, ...borrowedFurniture],
+      fixtures,
+      Object.fromEntries(Object.entries(pieceUrls).flatMap(([id, urls]) => (urls.piece ? [[id, urls.piece]] : []))),
+    ),
+  );
   const [mine, setMine] = useState<CatalogItem[]>(userFurniture);
   const [mineFormOpen, setMineFormOpen] = useState(false);
   const [mineForm, setMineForm] = useState<UserFurnitureForm>(EMPTY_MINE_FORM);
@@ -287,7 +311,14 @@ export default function FurnitureLayer({
     return () => window.removeEventListener('keydown', onKey);
   }, [furnitureActive, step]);
 
-  const obstacles = useMemo(() => fixtureObstacles(fixtures), [fixtures]);
+  // 이 배치에서 옮긴 원래 가구: 원래 자리는 비고, 옮긴 자리는 배치의 가구로 검사한다
+  const movedKey = useMemo(() => [...movedFixtureIds(items)].sort().join(','), [items]);
+  const movedIds = useMemo(() => new Set(movedKey ? movedKey.split(',') : []), [movedKey]);
+  const obstacles = useMemo(() => fixtureObstacles(fixtures, movedIds), [fixtures, movedIds]);
+  useEffect(() => {
+    onMovedFixtures?.(movedKey ? movedKey.split(',') : []);
+  }, [movedKey, onMovedFixtures]);
+  useEffect(() => () => onMovedFixtures?.([]), [onMovedFixtures]);
   const violations = useMemo(() => checkLayout(items, floorPolygon, openings, obstacles), [items, floorPolygon, openings, obstacles]);
   const badIds = useMemo(() => violatingIds(violations), [violations]);
   const warnIds = useMemo(() => warningIds(violations), [violations]);
@@ -360,6 +391,20 @@ export default function FurnitureLayer({
     [modelCache],
   );
 
+  // 옮긴 원래 가구의 3D 조각 (주소 → 스플랫 메시). 가구 상자를 다시 만들 때마다 새 상자에 옮겨 단다
+  const [pieceMeshes] = useState(() => new Map<string, SplatMesh>());
+  useEffect(
+    () => () => {
+      for (const mesh of pieceMeshes.values()) {
+        mesh.removeFromParent();
+        mesh.dispose();
+      }
+      // 개발 모드에서는 효과를 한 번 걷었다가 다시 붙이므로, 버린 메시를 다시 쓰지 않게 비운다
+      pieceMeshes.clear();
+    },
+    [pieceMeshes],
+  );
+
   // 가구 메시 만들기
   useEffect(() => {
     const engine = engineRef.current;
@@ -371,9 +416,17 @@ export default function FurnitureLayer({
       const bad = badIds.has(item.id);
       const warn = warnIds.has(item.id);
       const template = item.modelUrl ? modelCache.get(item.modelUrl) : null;
+      // 옮긴 원래 가구: 떼어 낸 스캔 조각을 그린다 (방 화면의 원래 자리는 숨긴다)
+      const pieceUrl = item.kind === 'fixture' ? pieceUrls[item.furnitureRef]?.piece : undefined;
+      let piece = pieceUrl ? pieceMeshes.get(pieceUrl) : undefined;
+      if (pieceUrl && !piece) {
+        piece = new SplatMesh({ url: pieceUrl, editable: false });
+        pieceMeshes.set(pieceUrl, piece);
+      }
+      const visual = Boolean(template || piece);
       const geometry = new THREE.BoxGeometry(item.w, item.h, item.d);
-      // 3D 모델이 있으면 상자는 잡기·표시용이다: 평소에는 보이지 않고, 문제·경고일 때만 반투명하게 덧씌운다
-      const material = template
+      // 3D 모델·스캔 조각이 있으면 상자는 잡기·표시용이다: 평소에는 보이지 않고, 문제·경고일 때만 반투명하게 덧씌운다
+      const material = visual
         ? new THREE.MeshLambertMaterial({
             color: bad ? VIOLATION_EDGE_COLOR : WARNING_EDGE_COLOR,
             transparent: true,
@@ -394,13 +447,21 @@ export default function FurnitureLayer({
       const edges = new THREE.LineSegments(edgeGeometry, edgeMaterial);
       edges.userData.edges = true;
       // 모델이 있으면 외곽선은 고른 가구와 문제 있는 가구에만
-      edges.visible = !template || bad || warn || item.id === selectedId;
+      edges.visible = !visual || bad || warn || item.id === selectedId;
       mesh.add(edges);
+      if (piece) {
+        // 조각은 원래 가구 가운데·바닥이 원점이다 (상자 중심은 높이의 절반 위)
+        piece.position.set(0, -item.h / 2, 0);
+        piece.rotation.set(0, 0, 0);
+        mesh.add(piece);
+      }
       if (template) {
         // 상자의 중심이 원점이므로 모델(바닥 가운데가 원점)은 높이의 절반만큼 내린다
         const model = instantiateModel(template, item.w, item.h, item.d);
         model.position.y = -item.h / 2;
         mesh.add(model);
+      }
+      if (visual) {
         // 바닥에 닿은 느낌이 나도록 밑에 그림자를 깐다 (바닥보다 살짝 위, 가구와 함께 돈다)
         const shadowGeometry = new THREE.PlaneGeometry(...shadowSize(item.w, item.d));
         const shadowMaterial = new THREE.MeshBasicMaterial({ map: shadowTexture, color: 0x000000, transparent: true, opacity: SHADOW_OPACITY, depthWrite: false });
@@ -417,11 +478,26 @@ export default function FurnitureLayer({
     engine.scene.add(group);
     groupRef.current = group;
     return () => {
+      // 조각은 다음에 다시 쓰므로 떼어 내기만 한다
+      for (const mesh of pieceMeshes.values()) mesh.removeFromParent();
       engine.scene.remove(group);
       groupRef.current = null;
       disposables.forEach((d) => d.dispose());
     };
-  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion, shadowTexture]);
+  }, [engineRef, items, selectedId, badIds, warnIds, modelCache, modelVersion, shadowTexture, pieceUrls, pieceMeshes]);
+
+  // 옮긴 원래 가구의 원래 자리는 방 스플랫에서 숨긴다 (조각이 있는 것만)
+  useEffect(() => {
+    const splat = engineRef.current?.splat;
+    if (!splat) return;
+    const moved = fixtures.filter((f) => movedIds.has(f.id) && f.piece && pieceUrls[f.id]?.piece);
+    const edit = hideFixtureEdit(
+      moved.map((fixture) => ({ fixture, withFloor: false })),
+      floorPolygon,
+    );
+    setHiddenFixtures(splat, edit);
+    return () => setHiddenFixtures(splat, null);
+  }, [engineRef, fixtures, movedIds, pieceUrls, floorPolygon]);
 
   // 끄는 동안: 메시를 다시 만들지 않고 끄는 가구의 테두리 색만 바꾼다 (문제 빨강, 경고 노랑, 괜찮으면 고른 색)
   useEffect(() => {
@@ -605,6 +681,60 @@ export default function FurnitureLayer({
     setSelectedId(null);
   };
 
+  // 원래 가구 옮기기: 처음에는 원래 자리에 놓고 고른 상태로 둔다 (끌어서 옮긴다). 지우면 제자리로 돌아간다
+  const moveFixture = (f: Fixture) => {
+    if (itemsRef.current.length >= MAX_LAYOUT_ITEMS || itemsRef.current.some((i) => i.kind === 'fixture' && i.furnitureRef === f.id)) return;
+    const id = `f${nextItemNumber(itemsRef.current)}`;
+    commit((prev) => [...prev, placeFixtureItem(f, id, { x: f.x, z: f.z, rotationDeg: f.rotationDeg })]);
+    setSelectedId(id);
+  };
+  const returnFixture = (f: Fixture) => {
+    commit((prev) => prev.filter((i) => !(i.kind === 'fixture' && i.furnitureRef === f.id)));
+    setSelectedId(null);
+  };
+  // 방 주인: 아직 떼어 내지 않은 원래 가구는 방 3D 파일을 LOD 없이 한 번 더 읽어 떼어 낸 뒤 올리고 옮긴다
+  const sourceRef = useRef<PackedSplats | null>(null);
+  useEffect(
+    () => () => {
+      sourceRef.current?.dispose();
+      sourceRef.current = null;
+    },
+    [],
+  );
+  const [prepBusy, setPrepBusy] = useState<{ id: string; text: string } | null>(null);
+  const [prepMessage, setPrepMessage] = useState<string | null>(null);
+  const prepareFixture = async (f: Fixture) => {
+    const splat = engineRef.current?.splat;
+    if (!prepare || prepBusy || !splat) return;
+    setPrepMessage(null);
+    setPrepBusy({ id: f.id, text: '방 파일 읽는 중…' });
+    try {
+      if (!sourceRef.current) {
+        sourceRef.current = await loadSourceSplats(prepare.sourceUrl, (fraction) => setPrepBusy({ id: f.id, text: `방 파일 읽는 중 ${Math.round(fraction * 100)}%` }));
+      }
+      setPrepBusy({ id: f.id, text: '떼어 내는 중…' });
+      splat.updateWorldMatrix(true, false);
+      const piece = await extractFixturePiece(sourceRef.current, splat.matrixWorld, f, floorPolygon);
+      if (!piece) {
+        setPrepMessage(`${f.label} 자리에서 3D 조각을 찾지 못했습니다. 원래 가구 상자가 맞는지 확인해 주세요.`);
+        return;
+      }
+      setPrepBusy({ id: f.id, text: '올리는 중…' });
+      const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'piece', piece.bytes, piece.top);
+      if (!uploaded.ok) {
+        setPrepMessage(uploaded.message);
+        return;
+      }
+      prepare.onPrepared(uploaded.fixture, uploaded.url);
+      moveFixture(uploaded.fixture);
+    } catch (err) {
+      console.error(err);
+      setPrepMessage('원래 가구를 떼어 내지 못했습니다. 잠시 후 다시 해 주세요.');
+    } finally {
+      setPrepBusy(null);
+    }
+  };
+
   const save = async (): Promise<boolean> => {
     if (!onSave || savePhase === 'saving') return false;
     const snapshot = currentSaved;
@@ -687,11 +817,14 @@ export default function FurnitureLayer({
   };
 
   const selected = items.find((i) => i.id === selectedId) ?? null;
+  // 옮길 수 있는 원래 가구 목록 ("치울 가구"는 없는 것으로 보므로 뺀다)
+  const movable = fixtures.filter((f) => !f.remove);
+  const placeCount = items.filter((i) => i.kind !== 'fixture').length;
   const currentLayout = layouts.find((l) => l.id === currentLayoutId) ?? null;
   const hasOwnLayout = layouts.some((l) => l.createdBy === 'user');
   const aiHint =
     aiBlocked ??
-    (items.length === 0 ? '가구를 먼저 놓으면 AI가 다시 배치해 줍니다.' : items.length > MAX_SUGGEST_ITEMS ? `가구가 ${MAX_SUGGEST_ITEMS}개를 넘으면 추천받을 수 없습니다.` : aiRemaining === 0 ? '오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.' : null);
+    (placeCount === 0 ? '가구를 먼저 놓으면 AI가 다시 배치해 줍니다.' : placeCount > MAX_SUGGEST_ITEMS ? `가구가 ${MAX_SUGGEST_ITEMS}개를 넘으면 추천받을 수 없습니다.` : aiRemaining === 0 ? '오늘 쓸 수 있는 AI 횟수를 모두 썼습니다. 내일 다시 해 주세요.' : null);
 
   const dims = (w: number, d: number, h: number) => `${Math.round(w * 100)} × ${Math.round(d * 100)} × ${Math.round(h * 100)} cm`;
   const stateOf = (id: string) => (badIds.has(id) ? 'error' : warnIds.has(id) ? 'warning' : 'ok');
@@ -710,7 +843,7 @@ export default function FurnitureLayer({
                 items={items}
                 openings={openings}
                 aiOpeningKeys={aiOpeningKeys}
-                fixtures={fixtures}
+                fixtures={movedIds.size > 0 ? fixtures.filter((f) => !movedIds.has(f.id)) : fixtures}
                 onDrawFixture={onDrawFixture}
                 badIds={shownBadIds}
                 warnIds={shownWarnIds}
@@ -846,8 +979,8 @@ export default function FurnitureLayer({
               <Icon name="rotate" />
               <span className="max-sm:hidden">90°</span>
             </button>
-            <button className="btn btn-danger h-11 px-3.5 text-[13px]" onClick={remove}>
-              삭제
+            <button className="btn btn-danger h-11 px-3.5 text-[13px]" onClick={remove} data-testid="selection-remove">
+              {selected.kind === 'fixture' ? '제자리로' : '삭제'}
             </button>
           </div>
         )}
@@ -1205,6 +1338,52 @@ export default function FurnitureLayer({
                   {mineMessage}
                 </p>
               )}
+            </div>
+          )}
+
+          {movable.length > 0 && (
+            <div className="flex flex-col gap-2.5" data-testid="fixture-move">
+              <SectionTitle>방에 원래 있던 가구</SectionTitle>
+              <ul className="flex flex-col gap-1.5" data-testid="fixture-move-list">
+                {movable.map((f) => {
+                  const moved = movedIds.has(f.id);
+                  const ready = Boolean(f.piece && pieceUrls[f.id]?.piece);
+                  const busy = prepBusy?.id === f.id;
+                  const state = moved ? 'moved' : ready ? 'ready' : prepare ? 'prepare' : 'locked';
+                  return (
+                    <li key={f.id} className="flex items-center gap-2.5 rounded-xl border border-line bg-surface py-1.5 pr-1.5 pl-2.5" data-id={f.id} data-state={state}>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-[13px] font-semibold">{f.label}</span>
+                        <span className="truncate text-[11px] text-mute">
+                          <span className="font-mono">{sizeLabel(f.w, f.d)}</span>
+                          {moved ? ' · 옮김' : state === 'locked' ? ' · 방 주인이 준비하면 옮길 수 있음' : ''}
+                        </span>
+                      </span>
+                      {moved ? (
+                        <button className="btn btn-outline h-9 shrink-0 px-3 text-[13px]" onClick={() => returnFixture(f)} data-testid="fixture-return">
+                          제자리로
+                        </button>
+                      ) : (
+                        <button
+                          className="btn btn-soft h-9 shrink-0 px-3 text-[13px] disabled:opacity-40"
+                          disabled={state === 'locked' || full || (prepBusy !== null && !busy)}
+                          onClick={() => (ready ? moveFixture(f) : prepareFixture(f))}
+                          title={ready ? '원래 가구를 떼어 내 끌어서 옮깁니다' : '방 3D에서 이 가구를 떼어 낸 뒤 옮깁니다 (한 번만)'}
+                          data-testid="fixture-move-button"
+                        >
+                          {busy ? prepBusy.text : '옮기기'}
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              {prepMessage && (
+                <p className="rounded-[10px] bg-warn-tint px-3 py-2 text-[13px] text-warn" data-testid="fixture-move-message">
+                  {prepMessage}
+                </p>
+              )}
+              {movedIds.size > 0 && <p className="text-xs text-sub">옮긴 가구는 끌거나 돌릴 수 있고, &ldquo;제자리로&rdquo;를 누르면 원래 자리로 돌아갑니다.</p>}
             </div>
           )}
 

@@ -56,6 +56,24 @@ export function canvasToJpegBase64(source: HTMLCanvasElement | ImageBitmap, long
  * 가상 가구·문·창문 표시·격자 같은 것은 숨기고 방(스플랫)만 남긴다.
  * @param settleMs 카메라를 옮긴 뒤 스플랫이 그 시점에 맞게 다시 그려지기를 기다리는 시간
  */
+/**
+ * 방 스플랫에 걸린 편집(배치에서 옮긴 원래 가구의 원래 자리 숨기기)을 잠시 끈다. 되돌리는 함수를 돌려준다.
+ * 캡처(방 분석·문창문·원래 가구 찾기·대표 사진)는 스캔한 방 그대로를 본다.
+ */
+export function pauseRoomEdits(roomGroup: THREE.Object3D): () => void {
+  const paused: { editable: boolean }[] = [];
+  roomGroup.traverse((node) => {
+    const mesh = node as THREE.Object3D & { editable?: unknown };
+    if (mesh.editable === true) {
+      mesh.editable = false;
+      paused.push(mesh as { editable: boolean });
+    }
+  });
+  return () => {
+    for (const mesh of paused) mesh.editable = true;
+  };
+}
+
 export async function captureViews(
   engine: CaptureEngine,
   views: CaptureView[],
@@ -67,6 +85,7 @@ export async function captureViews(
   const images: string[] = [];
   controls.enabled = false;
   for (const child of hidden) child.visible = false;
+  const resumeEdits = pauseRoomEdits(engine.roomGroup);
   try {
     for (let i = 0; i < views.length; i += 1) {
       camera.position.set(...views[i].position);
@@ -97,6 +116,7 @@ export async function captureViews(
       options.onProgress?.(i + 1, views.length);
     }
   } finally {
+    resumeEdits();
     for (const child of hidden) child.visible = true;
     camera.position.copy(saved.position);
     controls.target.copy(saved.target);
@@ -145,11 +165,14 @@ export async function captureThumbnail(
   const context = canvas.getContext('2d');
   if (!context) return null;
   for (const child of hidden) child.visible = false;
+  const resumeEdits = pauseRoomEdits(engine.roomGroup);
   try {
-    // 그린 직후 같은 흐름에서 읽어야 내용이 남아 있다
+    // 편집을 끈 것이 반영되도록 한 번 더 그린다. 그린 직후 같은 흐름에서 읽어야 내용이 남아 있다
+    renderer.render(scene, camera);
     renderer.render(scene, camera);
     context.drawImage(source, crop.x, crop.y, crop.w, crop.h, 0, 0, size.width, size.height);
   } finally {
+    resumeEdits();
     for (const child of hidden) child.visible = true;
     renderer.render(scene, camera);
   }

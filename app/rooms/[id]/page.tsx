@@ -10,6 +10,7 @@ import RoomShareButton from '@/components/rooms/RoomShareButton';
 import RoomInfoEditor from '@/components/rooms/RoomInfoEditor';
 import SplatViewer from '@/components/viewer/SplatViewerClient';
 import { presignGet } from '@/lib/r2';
+import { fixturePieceKey, type FixturePieceUrls } from '@/lib/rooms/fixturePiece';
 import { fromCatalogRow } from '@/lib/layout/catalog';
 import { parseReport } from '@/lib/ai/analysis';
 import { remainingToday } from '@/lib/ai/usage';
@@ -115,6 +116,21 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
     ? await Promise.all(catalogRows.map(async (row) => fromCatalogRow(row, row.model_key ? await presignGet(row.model_key) : null)))
     : undefined;
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
+  const fixtures = parseFixtures(room.fixtures, calibration?.floorPolygon ?? null);
+  // 옮길 수 있게 떼어 낸 원래 가구 조각과 채운 빈자리 조각의 읽기 주소 (방을 볼 수 있으면 누구나 옮겨 볼 수 있다)
+  const pieceUrls: FixturePieceUrls = Object.fromEntries(
+    await Promise.all(
+      fixtures
+        .filter((f) => f.piece)
+        .map(async (f) => [
+          f.id,
+          {
+            piece: await presignGet(fixturePieceKey(room.id, f.id, 'piece', f.piece!.v)),
+            ...(f.fill ? { fill: await presignGet(fixturePieceKey(room.id, f.id, 'fill', f.fill.v)) } : {}),
+          },
+        ] as const),
+    ),
+  );
 
   const ownerName = owner?.nickname ?? '알 수 없음';
   const myName = isOwner ? ownerName : (me?.nickname ?? user?.email ?? '내 정보');
@@ -177,7 +193,8 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
             initialReport={report && reportRow ? { id: reportRow.id, model: reportRow.model, createdAt: reportRow.created_at, report } : null}
             userFurniture={myFurniture}
             initialOpenings={parseOpenings(room.openings, calibration?.floorPolygon ?? null)}
-            initialFixtures={parseFixtures(room.fixtures, calibration?.floorPolygon ?? null)}
+            initialFixtures={fixtures}
+            initialPieceUrls={pieceUrls}
             credit={room.credit}
             ownerId={room.owner_id}
             viewer={user ? { id: user.id, name: myName } : null}

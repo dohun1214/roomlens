@@ -40,6 +40,18 @@ const listKeys = async (prefix) =>
 const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'] });
 const newPage = async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  // 운영 외 주소(개발 서버의 다른 포트)에서도 R2를 쓰도록 CORS 머리말을 붙인다
+  await context.route(/r2\.cloudflarestorage\.com/, async (route) => {
+    const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, HEAD, PUT, OPTIONS', 'access-control-expose-headers': '*' };
+    if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
+    try {
+      const response = await route.fetch();
+      await route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+    } catch {
+      // 창을 닫는 중이면 받던 것을 버린다
+      await route.abort().catch(() => {});
+    }
+  });
   const page = await context.newPage();
   page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));
   return page;

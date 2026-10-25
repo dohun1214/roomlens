@@ -62,13 +62,23 @@ export function remapLayoutItems(items: SavedItem[], remap: RoomRemap): SavedIte
   });
 }
 
-/** 원래 가구: 3D 스캔 속의 물건이라 크기도 배율만큼 바뀐다 */
+/** 배율이 이만큼 넘게 바뀌면 떼어 낸 조각(원래 가구 좌표로 저장)을 버린다 */
+const PIECE_SCALE_TOLERANCE = 0.002;
+
+/**
+ * 원래 가구: 3D 스캔 속의 물건이라 크기도 배율만큼 바뀐다.
+ * 떼어 낸 조각·채운 빈자리는 원래 가구 가운데·회전 기준 좌표라 옮기고 돌려도 그대로 맞지만, 배율이 바뀌면 다시 만들어야 하므로 지운다.
+ */
 export function remapFixtures(fixtures: Fixture[], remap: RoomRemap): Fixture[] {
   if (remap.identity) return fixtures;
+  const keepPieces = Math.abs(remap.scale - 1) <= PIECE_SCALE_TOLERANCE;
   return fixtures.map((f) => {
     const [x, z] = remap.point(f.x, f.z);
+    const { piece, fill, ...rest } = f;
     return {
-      ...f,
+      ...rest,
+      ...(keepPieces && piece ? { piece } : {}),
+      ...(keepPieces && fill ? { fill } : {}),
       x: round3(x),
       z: round3(z),
       w: round2(f.w * remap.scale),

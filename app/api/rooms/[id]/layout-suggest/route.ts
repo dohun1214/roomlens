@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { AiError, GEMINI_MODEL, generateJson } from '@/lib/ai/gemini';
-import { aiLayoutName, composeAiSummary, suggestLayout, type GenerateIntent } from '@/lib/ai/layoutSuggest';
+import { aiLayoutName, composeAiSummary, MAX_SUGGEST_ITEMS, suggestLayout, type GenerateIntent } from '@/lib/ai/layoutSuggest';
 import { DAILY_AI_LIMIT } from '@/lib/ai/limits';
 import { LAYOUT_SYSTEM_PROMPT } from '@/lib/ai/prompts';
 import { LayoutIntent, LayoutSuggestInput } from '@/lib/ai/schemas';
@@ -8,6 +8,7 @@ import { finishAiCall, startAiCall } from '@/lib/ai/usage';
 import { apiError, badRequest, notFound, readJson, unauthenticated } from '@/lib/api/http';
 import { fromCatalogRow, type CatalogItem } from '@/lib/layout/catalog';
 import { MAX_AI_LAYOUTS } from '@/lib/layout/store';
+import type { SavedItem } from '@/lib/layout/saved';
 import type { SolverItem } from '@/lib/layout/solver';
 import { fromUserFurnitureRow } from '@/lib/layout/userFurniture';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
@@ -45,12 +46,33 @@ export async function POST(request: Request, { params }: Context) {
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
   if (!calibration) return apiError(400, 'NOT_CALIBRATED', '방의 크기·바닥 보정을 먼저 저장해 주세요.');
   const openings = parseOpenings(room.openings, calibration.floorPolygon);
-  // 방에 원래 있던 가구 (치울 가구는 빼고). 새 가구는 이 자리를 피한다
-  const fixtures = fixtureObstacles(parseFixtures(room.fixtures, calibration.floorPolygon));
+  // 방에 원래 있던 가구 (치울 가구는 빼고). 새 가구는 이 자리를 피한다.
+  // 이 배치에서 옮긴 원래 가구는 원래 자리 대신 옮긴 자리를 피하고, 결과 배치에도 그 자리 그대로 넣는다
+  const roomFixtures = parseFixtures(room.fixtures, calibration.floorPolygon);
+  const movedInput = input.items.filter((item) => item.kind === 'fixture');
+  const moved: SavedItem[] = [];
+  for (const item of movedInput) {
+    const f = roomFixtures.find((fx) => fx.id === item.furnitureRef);
+    if (!f?.piece || item.x === undefined || item.z === undefined || item.rotationDeg === undefined || moved.some((m) => m.furnitureRef === f.id)) {
+      return badRequest('옮긴 원래 가구 정보가 맞지 않습니다. 화면을 새로 고친 뒤 다시 해 주세요.');
+    }
+    moved.push({ id: item.id, furnitureRef: f.id, kind: 'fixture', x: item.x, z: item.z, rotationDeg: Math.round(item.rotationDeg) % 360 });
+  }
+  const movedIds = new Set(moved.map((m) => m.furnitureRef));
+  const fixtures = [
+    ...fixtureObstacles(roomFixtures, movedIds),
+    ...moved.map((m) => {
+      const f = roomFixtures.find((fx) => fx.id === m.furnitureRef)!;
+      return { id: `fixture:${f.id}`, name: `원래 있던 ${f.label}`, x: m.x, z: m.z, w: f.w, d: f.d, rotationDeg: m.rotationDeg, h: f.piece?.top ?? f.h };
+    }),
+  ];
+  const toPlace = input.items.filter((item) => item.kind !== 'fixture');
+  if (toPlace.length === 0) return badRequest('가구를 먼저 놓아 주세요.');
+  if (toPlace.length > MAX_SUGGEST_ITEMS) return badRequest(`한 번에 ${MAX_SUGGEST_ITEMS}개까지 추천받을 수 있습니다.`);
 
   // 가구의 이름·치수는 브라우저가 보낸 값을 믿지 않고 DB에서 다시 읽는다 (내 가구는 RLS로 본인 것만 보인다)
-  const catalogIds = [...new Set(input.items.filter((item) => item.kind === 'catalog').map((item) => item.furnitureRef))];
-  const userIds = [...new Set(input.items.filter((item) => item.kind === 'user').map((item) => item.furnitureRef))];
+  const catalogIds = [...new Set(toPlace.filter((item) => item.kind === 'catalog').map((item) => item.furnitureRef))];
+  const userIds = [...new Set(toPlace.filter((item) => item.kind === 'user').map((item) => item.furnitureRef))];
   const [catalogRows, userRows] = await Promise.all([
     catalogIds.length > 0
       ? supabase.from('furniture_catalog').select('id, name_ko, category, width_m, depth_m, height_m, clearance_m').in('id', catalogIds)
@@ -65,7 +87,7 @@ export async function POST(request: Request, { params }: Context) {
   for (const row of userRows.data ?? []) furniture.set(`user:${row.id}`, fromUserFurnitureRow(row));
 
   const items: SolverItem[] = [];
-  for (const item of input.items) {
+  for (const item of toPlace) {
     const entry = furniture.get(`${item.kind}:${item.furnitureRef}`);
     if (!entry) return badRequest('목록에 없는 가구가 들어 있습니다. 화면을 새로 고친 뒤 다시 해 주세요.');
     items.push({ id: item.id, name: entry.nameKo, category: entry.category, w: entry.w, d: entry.d, h: entry.h, clearance: entry.clearance });
@@ -101,14 +123,17 @@ export async function POST(request: Request, { params }: Context) {
 
   // AI 배치는 본인 권한(RLS)으로 저장한다: 볼 수 있는 방에 내 배치를 만드는 것과 같다
   const refs = new Map(input.items.map((item) => [item.id, item]));
-  const savedItems = suggestion.placed.map((p) => ({
-    id: p.id,
-    furnitureRef: refs.get(p.id)?.furnitureRef ?? '',
-    kind: refs.get(p.id)?.kind ?? 'catalog',
-    x: p.x,
-    z: p.z,
-    rotationDeg: Math.round(p.rotationDeg) % 360,
-  }));
+  const savedItems: SavedItem[] = [
+    ...suggestion.placed.map((p) => ({
+      id: p.id,
+      furnitureRef: refs.get(p.id)?.furnitureRef ?? '',
+      kind: refs.get(p.id)?.kind ?? 'catalog',
+      x: p.x,
+      z: p.z,
+      rotationDeg: Math.round(p.rotationDeg) % 360,
+    })),
+    ...moved,
+  ];
   const aiSummary = composeAiSummary(suggestion.summary, suggestion.placed);
   const { data: layout, error: insertError } = await supabase
     .from('layouts')
