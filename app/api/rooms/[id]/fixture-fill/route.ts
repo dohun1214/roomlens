@@ -5,6 +5,7 @@ import { FILL_PROMPTS } from '@/lib/ai/prompts';
 import { finishAiCall, startAiCall } from '@/lib/ai/usage';
 import { apiError, badRequest, notFound, readJson, unauthenticated } from '@/lib/api/http';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
+import { pieceAccess } from '@/lib/rooms/fixturePiece';
 import { parseFixtures } from '@/lib/rooms/fixtures';
 import { firstIssueMessage, FixtureFillInput, RoomId } from '@/lib/rooms/schemas';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
@@ -17,7 +18,8 @@ export const maxDuration = 120;
 /**
  * 옮긴 원래 가구의 빈자리 채우기: 바닥(위에서)·벽(정면)을 찍어 구멍을 자홍색으로 칠한 그림을 받아,
  * Gemini 그림 모델이 구멍만 주변에 맞춰 이어 그린 그림을 돌려준다. 그림으로 스플랫을 까는 것은 브라우저가 한다.
- * 방 주인만, 원래 가구를 떼어 낸 뒤에. 그림 여러 장을 합쳐 AI 1회로 센다.
+ * 로그인한 사람 누구나(볼 수 있는 방), 원래 가구를 떼어 낸 뒤에. 방 주인이 아니면 아직 채우지 않았을 때만.
+ * 그림 여러 장을 합쳐 부른 사람의 AI 1회로 센다.
  */
 export async function POST(request: Request, { params }: Context) {
   const user = await getCurrentUser();
@@ -31,12 +33,15 @@ export async function POST(request: Request, { params }: Context) {
   const supabase = await createClient();
   const { data: room, error } = await supabase.from('rooms').select('id, owner_id, status, transform, floor_polygon, fixtures').eq('id', id.data).maybeSingle();
   if (error) return apiError(500, 'DB_ERROR', '방 정보를 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.');
-  if (!room || room.owner_id !== user.id || room.status !== 'ready') return notFound();
+  // RLS가 남의 비공개 방을 가린다
+  if (!room || room.status !== 'ready') return notFound();
   const calibration = parseSavedCalibration(room.transform, room.floor_polygon);
   if (!calibration) return apiError(400, 'NOT_CALIBRATED', '방의 크기·바닥 보정을 먼저 저장해 주세요.');
   const fixture = parseFixtures(room.fixtures, calibration.floorPolygon).find((f) => f.id === fixtureId);
   if (!fixture) return apiError(404, 'NO_FIXTURE', '원래 가구를 찾을 수 없습니다.');
-  if (!fixture.piece) return apiError(409, 'NO_PIECE', '원래 가구를 먼저 옮길 수 있게 준비해 주세요.');
+  const access = pieceAccess(fixture, 'fill', room.owner_id === user.id);
+  if (access === 'need-piece') return apiError(409, 'NO_PIECE', '원래 가구를 먼저 떼어 내 주세요.');
+  if (access === 'taken') return apiError(409, 'ALREADY_FILLED', '다른 사람이 이미 빈자리를 채웠습니다. 새로 고침해 주세요.');
 
   const call = await startAiCall(user.id, room.id, 'fill', GEMINI_IMAGE_MODEL);
   if (!call.ok) {
