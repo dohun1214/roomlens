@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { FILL_IMAGE, FILL_MARGIN, fillPlanes, fixturePieceKey, holeRect, inFootprint, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, planePixel, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
+import { FILL_IMAGE, FILL_MARGIN, fillPlanes, fixturePieceKey, holeRect, pieceAccess, inFootprint, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, planePixel, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
 import { fixtureObstacles, parseFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { movedFixtureIds, placeFixtureItem, restoreItems, toSavedItems } from '@/lib/layout/saved';
 import { remapFixtures, roomRemap } from '@/lib/rooms/recalibrate';
@@ -170,5 +170,17 @@ describe('fillPlanes', () => {
 
   it('모서리 가구는 벽 둘', () => {
     expect(fillPlanes(fixture({ x: 1.65, z: 1.25 }), 0.9, ROOM).filter((p) => p.kind === 'wall')).toHaveLength(2);
+  });
+});
+
+describe('pieceAccess', () => {
+  it('누구나 처음은 만들고, 다시 만드는 것은 방 주인만, 채우기는 떼어 낸 뒤에', () => {
+    expect(pieceAccess({}, 'piece', false)).toBe('ok');
+    expect(pieceAccess({ piece: { v: 1, top: 1 } }, 'piece', false)).toBe('taken');
+    expect(pieceAccess({ piece: { v: 1, top: 1 } }, 'piece', true)).toBe('ok');
+    expect(pieceAccess({}, 'fill', true)).toBe('need-piece');
+    expect(pieceAccess({ piece: { v: 1, top: 1 } }, 'fill', false)).toBe('ok');
+    expect(pieceAccess({ piece: { v: 1, top: 1 }, fill: { v: 2 } }, 'fill', false)).toBe('taken');
+    expect(pieceAccess({ piece: { v: 1, top: 1 }, fill: { v: 2 } }, 'fill', true)).toBe('ok');
   });
 });
