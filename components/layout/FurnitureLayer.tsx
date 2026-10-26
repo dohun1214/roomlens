@@ -25,7 +25,7 @@ import {
 } from '@/lib/layout/userFurniture';
 import type { Opening } from '@/lib/rooms/openings';
 import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
-import { fillPlanes, type FixturePieceUrls } from '@/lib/rooms/fixturePiece';
+import { fillPlanes, hiddenBox, type FixturePieceUrls } from '@/lib/rooms/fixturePiece';
 import { uploadFixturePiece } from '@/lib/rooms/fixturePieceClient';
 import { extractFixturePiece, hideFixtureEdit, loadSourceSplats, setHiddenFixtures } from '@/lib/three/fixturePiece';
 import { buildFillPiece, captureFillPlanes, requestFill } from '@/lib/three/fixtureFill';
@@ -755,7 +755,7 @@ export default function FurnitureLayer({
     setPrepMessage(null);
     setPrepBusy({ id: f.id, text: '빈자리 찍는 중…' });
     try {
-      const planes = fillPlanes(f, f.piece.top, floorPolygon);
+      const planes = fillPlanes(hiddenBox(f, floorPolygon), f.piece.top, floorPolygon);
       const masked = await captureFillPlanes(engine, planes);
       setPrepBusy({ id: f.id, text: 'AI가 채우는 중…' });
       const filled = await requestFill(prepare.roomId, f.id, planes, masked);
@@ -765,7 +765,7 @@ export default function FurnitureLayer({
       }
       prepare.onAiRemaining?.(filled.remaining);
       setPrepBusy({ id: f.id, text: '올리는 중…' });
-      const piece = await buildFillPiece(planes, filled.images, f);
+      const piece = await buildFillPiece(planes, filled.images, masked, f, floorPolygon);
       const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'fill', piece.bytes);
       if (!uploaded.ok) {
         setPrepMessage(uploaded.message);
@@ -790,13 +790,13 @@ export default function FurnitureLayer({
       }
       setPrepBusy({ id: f.id, text: '떼어 내는 중…' });
       splat.updateWorldMatrix(true, false);
-      const piece = await extractFixturePiece(sourceRef.current, splat.matrixWorld, f, floorPolygon);
+      const piece = await extractFixturePiece(sourceRef.current, splat.matrixWorld, f, floorPolygon, fixtures);
       if (!piece) {
         setPrepMessage(`${f.label} 자리에서 3D 조각을 찾지 못했습니다. 원래 가구 상자가 맞는지 확인해 주세요.`);
         return;
       }
       setPrepBusy({ id: f.id, text: '올리는 중…' });
-      const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'piece', piece.bytes, piece.top);
+      const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'piece', piece.bytes, piece.top, piece.box ?? undefined);
       if (!uploaded.ok) {
         setPrepMessage(uploaded.message);
         return;
