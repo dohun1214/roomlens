@@ -41,8 +41,16 @@ export const LABEL_HEIGHTS: Record<FixtureLabel, number> = {
   가구: DEFAULT_FIXTURE_HEIGHT,
 };
 
-/** 떼어 낸 조각의 버전(만든 시각, ms)과 위에 얹힌 물건까지 포함한 높이(m) */
-export type FixturePieceInfo = { v: number; top: number };
+/**
+ * 원래 가구 좌표(가운데 원점, 회전 0°)의 사각형: 가운데가 가로(cu)·깊이(cv) 방향으로 옮겨 간 만큼과 크기 (m).
+ * 다시 보정해도(배율이 같으면) 원래 가구와 함께 움직이도록 원래 가구 기준으로 적는다
+ */
+export type PieceBox = { cu: number; cv: number; w: number; d: number };
+/**
+ * 떼어 낸 조각의 버전(만든 시각, ms)과 위에 얹힌 물건까지 포함한 높이(m).
+ * box: 실제로 떼어 낸 스플랫이 차지한 바닥 사각형 (원래 자리를 이만큼 숨긴다. 예전 조각에는 없다)
+ */
+export type FixturePieceInfo = { v: number; top: number; box?: PieceBox };
 export type FixtureFillInfo = { v: number };
 
 export type Fixture = {
@@ -74,7 +82,13 @@ const FixtureSchema = z.object({
   rotationDeg: z.number().min(0).max(360),
   h: z.number().min(0.05).max(MAX_FIXTURE_HEIGHT),
   remove: z.boolean(),
-  piece: z.object({ v: z.number().int().positive(), top: z.number().min(0.05).max(MAX_FIXTURE_HEIGHT) }).optional(),
+  piece: z
+    .object({
+      v: z.number().int().positive(),
+      top: z.number().min(0.05).max(MAX_FIXTURE_HEIGHT),
+      box: z.object({ cu: z.number().min(-1).max(1), cv: z.number().min(-1).max(1), w: z.number().min(0.05).max(MAX_FIXTURE_SIZE + 1), d: z.number().min(0.05).max(MAX_FIXTURE_SIZE + 1) }).optional(),
+    })
+    .optional(),
   fill: z.object({ v: z.number().int().positive() }).optional(),
 });
 

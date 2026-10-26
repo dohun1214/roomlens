@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { apiError, badRequest, notFound, readJson, unauthenticated } from '@/lib/api/http';
 import { deleteObject, headObject, presignGet, presignPut, readObjectHead, URL_TTL_SECONDS } from '@/lib/r2';
 import { parseSavedCalibration } from '@/lib/rooms/calibration';
-import { fixturePieceKey, MAX_PIECE_BYTES, pieceAccess } from '@/lib/rooms/fixturePiece';
+import { fixturePieceKey, MAX_PIECE_BYTES, PIECE_GROW, pieceAccess } from '@/lib/rooms/fixturePiece';
 import { parseFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { firstIssueMessage, FixturePieceFinishInput, FixturePieceStartInput, RoomId } from '@/lib/rooms/schemas';
 import { createAdminClient } from '@/lib/supabase/admin';
@@ -74,7 +74,7 @@ export async function PATCH(request: Request, { params }: Context) {
   if (!id.success) return notFound();
   const parsed = FixturePieceFinishInput.safeParse(await readJson(request));
   if (!parsed.success) return badRequest(firstIssueMessage(parsed.error));
-  const { fixtureId, kind, v, top } = parsed.data;
+  const { fixtureId, kind, v, top, box } = parsed.data;
   if (kind === 'piece' && top === undefined) return badRequest('조각의 높이가 없습니다.');
   const age = Date.now() - v;
   if (!(age >= 0 && age <= MAX_AGE_MS)) return badRequest('올릴 주소가 만료되었습니다. 다시 해 주세요.');
@@ -83,6 +83,9 @@ export async function PATCH(request: Request, { params }: Context) {
   if ('error' in found) return found.error;
   const fixture = found.fixtures.find((f) => f.id === fixtureId);
   if (!fixture) return apiError(404, 'NO_FIXTURE', '원래 가구를 찾을 수 없습니다.');
+  // 떼어 낸 사각형은 원래 가구를 넓혀 고른 곳 안이어야 한다
+  const reach = PIECE_GROW + 0.02;
+  if (box && (Math.abs(box.cu) + box.w / 2 > fixture.w / 2 + reach || Math.abs(box.cv) + box.d / 2 > fixture.d / 2 + reach)) return badRequest('조각의 자리가 원래 가구와 맞지 않습니다.');
   const key = fixturePieceKey(found.room.id, fixtureId, kind, v);
   const access = pieceAccess(fixture, kind, found.isOwner);
   if (access !== 'ok') {
@@ -100,7 +103,7 @@ export async function PATCH(request: Request, { params }: Context) {
 
   const old = kind === 'piece' ? fixture.piece?.v : fixture.fill?.v;
   const next: Fixture[] = found.fixtures.map((f) =>
-    f.id !== fixtureId ? f : kind === 'piece' ? { ...f, piece: { v, top: Math.round((top ?? f.h) * 100) / 100 } } : { ...f, fill: { v } },
+    f.id !== fixtureId ? f : kind === 'piece' ? { ...f, piece: { v, top: Math.round((top ?? f.h) * 100) / 100, ...(box ? { box } : {}) } } : { ...f, fill: { v } },
   );
   // 읽은 뒤로 방이 바뀌지 않았을 때만 적는다 (updated_at은 바뀔 때마다 트리거가 새로 적는다)
   const { data: written, error } = await createAdminClient()
