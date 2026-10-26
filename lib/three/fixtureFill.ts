@@ -4,7 +4,9 @@ import * as THREE from 'three';
 import { PackedSplats, writeSpz } from '@sparkjsdev/spark';
 import type { CaptureEngine } from './capture';
 import { captureFixedViews, type FixedView } from './topView';
-import { FILL_IMAGE, holeRect, planePixel, planePoint, toPieceFrame, type FillPlane } from '@/lib/rooms/fixturePiece';
+import { blendFill } from '@/lib/rooms/fillBlend';
+import { FILL_IMAGE, holeRect, planePixel, planePoint, planeSurfaceAt, toPieceFrame, type FillPlane } from '@/lib/rooms/fixturePiece';
+import type { Point2 } from './floorDrag';
 import type { Fixture } from '@/lib/rooms/fixtures';
 
 /** 평면에서 카메라까지 (m). 멀리서 좁은 시야로 찍어 원근을 거의 없앤다 */
@@ -63,21 +65,35 @@ export async function captureFillPlanes(engine: CaptureEngine, planes: FillPlane
   return out;
 }
 
+/** base64 그림 → FILL_IMAGE 크기의 RGBA 픽셀 */
+async function pixelsOf(mimeType: string, base64: string): Promise<Uint8ClampedArray> {
+  const bitmap = await toBitmap(mimeType, base64);
+  const { context } = canvasOf(bitmap);
+  bitmap.close();
+  return context.getImageData(0, 0, FILL_IMAGE.width, FILL_IMAGE.height).data;
+}
+
 /**
  * AI가 채운 그림들로 구멍 자리에 납작한 스플랫을 깔아 SPZ로 묶는다. 좌표는 원래 가구 좌표(가운데 원점, 회전 0°).
- * @param images planes와 같은 순서의 그림
+ * 채운 부분은 둘레의 원래 그림과 밝기·색이 이어지게 고치고(blendFill), 구멍 둘레에 더 까는 부분은 원래 그림 색을 쓴다.
+ * @param images planes와 같은 순서의 AI 그림
+ * @param originals planes와 같은 순서의 칠한 그림 (captureFillPlanes, 구멍 밖은 찍은 그대로)
  */
-export async function buildFillPiece(planes: FillPlane[], images: { mimeType: string; data: string }[], f: Fixture): Promise<{ bytes: Uint8Array; count: number }> {
+export async function buildFillPiece(
+  planes: FillPlane[],
+  images: { mimeType: string; data: string }[],
+  originals: string[],
+  f: Fixture,
+  polygon: Point2[],
+): Promise<{ bytes: Uint8Array; count: number }> {
   const out = new PackedSplats();
   const frame = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), (-f.rotationDeg * Math.PI) / 180);
   const color = new THREE.Color();
   const center = new THREE.Vector3();
   for (let i = 0; i < planes.length; i += 1) {
     const plane = planes[i];
-    const bitmap = await toBitmap(images[i].mimeType, images[i].data);
-    const { context } = canvasOf(bitmap);
-    bitmap.close();
-    const pixels = context.getImageData(0, 0, FILL_IMAGE.width, FILL_IMAGE.height).data;
+    const [ai, original] = await Promise.all([pixelsOf(images[i].mimeType, images[i].data), pixelsOf('image/jpeg', originals[i])]);
+    const pixels = blendFill(ai, original, FILL_IMAGE.width, FILL_IMAGE.height, holeRect(plane), (px, py) => planeSurfaceAt(plane, px, py, polygon));
     const n = new THREE.Vector3(...(plane.n ?? [0, 1, 0]));
     const roomQuaternion = plane.kind === 'floor' ? new THREE.Quaternion() : new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(1, 0, 0), n);
     const quaternion = roomQuaternion.clone().premultiply(frame);
@@ -88,6 +104,8 @@ export async function buildFillPiece(planes: FillPlane[], images: { mimeType: st
     for (let u = u0 - SPREAD; u <= u1 + SPREAD; u += STEP) {
       for (let v = v0 - (plane.kind === 'floor' ? SPREAD : 0); v <= v1 + SPREAD; v += STEP) {
         const [px, py] = planePixel(plane, u, v);
+        // 방 밖·벽 끝 너머에는 깔지 않는다 (그림에는 옆 벽·빈 곳이 찍혀 있다)
+        if (!planeSurfaceAt(plane, px, py, polygon, 0)) continue;
         const k = (Math.min(FILL_IMAGE.height - 1, Math.max(0, Math.round(py))) * FILL_IMAGE.width + Math.min(FILL_IMAGE.width - 1, Math.max(0, Math.round(px)))) * 4;
         color.setRGB(pixels[k] / 255, pixels[k + 1] / 255, pixels[k + 2] / 255);
         const [x, y, z] = planePoint(plane, u, v);

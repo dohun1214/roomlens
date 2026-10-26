@@ -1,6 +1,6 @@
 // 원래 가구의 3D 조각을 올린다 (브라우저): 올릴 주소 받기 → R2에 바로 올리기 → 끝났다고 알리기.
 import type { PieceKind } from './fixturePiece';
-import type { Fixture } from './fixtures';
+import type { Fixture, PieceBox } from './fixtures';
 
 export type PieceUpload = { ok: true; fixture: Fixture; url: string } | { ok: false; message: string };
 
@@ -11,7 +11,7 @@ async function errorMessage(res: Response): Promise<string> {
   return body?.error?.message ?? FALLBACK;
 }
 
-export async function uploadFixturePiece(roomId: string, fixtureId: string, kind: PieceKind, bytes: Uint8Array, top?: number): Promise<PieceUpload> {
+export async function uploadFixturePiece(roomId: string, fixtureId: string, kind: PieceKind, bytes: Uint8Array, top?: number, box?: PieceBox): Promise<PieceUpload> {
   const api = `/api/rooms/${roomId}/fixture-pieces`;
   try {
     const start = await fetch(api, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixtureId, kind, size: bytes.byteLength }) });
@@ -19,7 +19,7 @@ export async function uploadFixturePiece(roomId: string, fixtureId: string, kind
     const { url, headers, v } = (await start.json()) as { url: string; headers: Record<string, string>; v: number };
     const put = await fetch(url, { method: 'PUT', headers, body: new Blob([bytes as BlobPart]) });
     if (!put.ok) return { ok: false, message: FALLBACK };
-    const finish = await fetch(api, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixtureId, kind, v, ...(top !== undefined ? { top } : {}) }) });
+    const finish = await fetch(api, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fixtureId, kind, v, ...(top !== undefined ? { top } : {}), ...(box ? { box } : {}) }) });
     if (!finish.ok) return { ok: false, message: await errorMessage(finish) };
     const body = (await finish.json()) as { fixture: Fixture; url: string };
     return { ok: true, fixture: body.fixture, url: body.url };

@@ -73,6 +73,8 @@ export const FixturePieceFinishInput = z.object({
   kind: z.enum(['piece', 'fill']),
   v: z.int().positive(),
   top: z.number().min(0.05).max(3).optional(),
+  /** 떼어 낸 스플랫이 차지한 바닥 사각형 (원래 가구 좌표) */
+  box: z.object({ cu: z.number().min(-1).max(1), cv: z.number().min(-1).max(1), w: z.number().min(0.05).max(11), d: z.number().min(0.05).max(11) }).optional(),
 });
 export type FixturePieceFinishInput = z.infer<typeof FixturePieceFinishInput>;
 
