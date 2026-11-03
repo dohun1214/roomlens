@@ -16,6 +16,7 @@ import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { checkSplatFile, SPLAT_CONTENT_TYPE, SPLAT_HEAD_BYTES, splatKeyFor } from '../../lib/upload/splatFile.ts';
 import { dataDir, moveCamera, toScreen } from './e2e-common.mjs';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
@@ -35,7 +36,7 @@ const s3 = new S3Client({
   credentials: { accessKeyId: process.env.R2_ACCESS_KEY_ID, secretAccessKey: process.env.R2_SECRET_ACCESS_KEY },
 });
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ ...browserOpts, headless: true, args: gpuArgs });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 const errors = [];
 page.on('pageerror', (e) => errors.push(String(e).slice(0, 200)));

@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient } from '@supabase/supabase-js';
+import { browserOpts } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -21,7 +22,7 @@ const check = (name, ok, detail) => checks.push({ name, ok: Boolean(ok), detail 
 const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SECRET_KEY, {
   auth: { persistSession: false },
 });
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const browser = await chromium.launch({ ...browserOpts, headless: true });
 const page = await browser.newPage({ viewport: { width: 1100, height: 800 } });
 const errors = [];
 page.on('console', (m) => m.type() === 'error' && errors.push(m.text().slice(0, 200)));

@@ -11,6 +11,7 @@ import path from 'node:path';
 import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { dataDir } from './e2e-common.mjs';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
@@ -51,7 +52,7 @@ const headSize = async (key) => {
 };
 const readHead = async (key) => Buffer.from(await (await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key, Range: 'bytes=0-1' }))).Body.transformToByteArray());
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ ...browserOpts, headless: true, args: gpuArgs });
 const pageErrors = [];
 const newPage = async () => {
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });

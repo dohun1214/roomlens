@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -42,9 +43,9 @@ const listKeys = async (prefix) =>
 const roomExists = async (id) => ((await admin.from('rooms').select('id').eq('id', id)).data ?? []).length === 1;
 
 const browser = await chromium.launch({
-  channel: 'chrome',
+  ...browserOpts,
   headless: true,
-  args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'],
+  args: gpuArgs,
 });
 const newPage = async () => (await browser.newContext({ viewport: { width: 1100, height: 800 } })).newPage();
 const page = await newPage(); // 방 주인

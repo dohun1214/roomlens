@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
+import { browserOpts } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -37,7 +38,7 @@ const s3 = new S3Client({
 const listKeys = async (prefix) =>
   (await s3.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET, Prefix: prefix }))).Contents?.map((o) => o.Key) ?? [];
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true });
+const browser = await chromium.launch({ ...browserOpts, headless: true });
 const newPage = async () => (await browser.newContext({ viewport: { width: 1000, height: 900 } })).newPage();
 const page = await newPage(); // 방 주인
 const anon = await newPage(); // 로그인하지 않은 사람
