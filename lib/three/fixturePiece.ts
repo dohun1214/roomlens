@@ -5,6 +5,7 @@ import { PackedSplats, SplatEdit, type SplatMesh, SplatEditRgbaBlendMode, SplatE
 import type { Point2 } from './floorDrag';
 import { cleanPieceMask, fillPlanes, hiddenBox, inFootprint, keptBox, MAX_PIECE_TOP, PIECE_FLOOR_CUT, pickBox, pieceTop, planePoint, toPieceFrame, wallSides, type PieceSplat } from '@/lib/rooms/fixturePiece';
 import type { Fixture, PieceBox } from '@/lib/rooms/fixtures';
+import type { SegmentHook, SegmentOutcome } from './fixtureSegment';
 
 /** 거의 투명한 스플랫은 조각에 넣지 않는다 */
 const MIN_OPACITY = 0.02;
@@ -24,23 +25,24 @@ export async function loadSourceSplats(url: string, onProgress?: (fraction: numb
 }
 
 /** 개발 서버 실측용: window.__roomlensPieceDump가 배열이면 고른 스플랫(x,y,z,크기,불투명도,r,g,b)과 다듬기 결과를 넣는다 */
-type PieceDump = { id: string; h: number; box: ReturnType<typeof pickBox>; walls: ReturnType<typeof wallSides>; data: Float32Array; keep: Uint8Array }[];
+type PieceDump = { id: string; h: number; box: ReturnType<typeof pickBox>; walls: ReturnType<typeof wallSides>; data: Float32Array; keep: Uint8Array; geomKeep: Uint8Array; aiKeep: Uint8Array | null; segment: string }[];
 const pieceDump = (): PieceDump | null => {
   if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return null;
   const dump = (window as unknown as { __roomlensPieceDump?: unknown }).__roomlensPieceDump;
   return Array.isArray(dump) ? (dump as PieceDump) : null;
 };
 
-export type ExtractedPiece = { bytes: Uint8Array; count: number; top: number; box: PieceBox | null };
+export type ExtractedPiece = { bytes: Uint8Array; count: number; top: number; box: PieceBox | null; segment: SegmentOutcome['status'] | 'off' };
 
 /**
  * 원래 가구 하나를 떼어 낸다: 바닥 사각형(조금 넓히고 벽에서 조금 떨어지게 줄인 것) 안, 바닥 바로 위부터
  * 위에 얹힌 물건까지의 스플랫을 원래 가구 좌표(가운데 원점, 바닥 y=0, 회전 0°)로 옮겨 SPZ로 묶는다.
  * @param toRoom 파일 좌표 → 방 좌표 (방 화면의 스플랫 메시의 matrixWorld)
  * @param others 방의 다른 원래 가구 (그 자리의 스플랫은 고르지 않는다)
+ * @param segment AI 분할 (다듬기로 남긴 것을 여러 시점에서 찍어 가구 윤곽 밖의 옆 물건을 뺀다). 없거나 실패하면 다듬기만 쓴다
  * @returns 고를 스플랫이 없으면 null
  */
-export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Matrix4, f: Fixture, polygon: Point2[], others: Fixture[] = []): Promise<ExtractedPiece | null> {
+export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Matrix4, f: Fixture, polygon: Point2[], others: Fixture[] = [], segment?: SegmentHook): Promise<ExtractedPiece | null> {
   const box = pickBox(f, polygon);
   // 넓혀 고른 곳이 다른 원래 가구 자리에 걸치면 그 가구 것은 가져오지 않는다 (이 가구 자리와 겹치는 곳은 이 가구 것으로 본다)
   const near = others.filter((o) => o.id !== f.id && Math.hypot(o.x - f.x, o.z - f.z) < (o.w + o.d + f.w + f.d) / 2 + 0.3);
@@ -62,11 +64,34 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
   });
   if (picked.length === 0) return null;
   // 옆 물건·떠다니는 조각·흐린 배경을 뺀 뒤 높이를 잰다
-  const keep = cleanPieceMask(found, box, walls, f.h);
+  let keep = cleanPieceMask(found, box, walls, f.h);
+  const geomKeep = keep;
+  let segmentStatus: ExtractedPiece['segment'] = 'off';
+  let aiKeep: Uint8Array | undefined;
+  if (segment) {
+    const first: number[] = [];
+    for (let k = 0; k < found.length; k += 1) if (keep[k]) first.push(found[k].y);
+    if (first.length > 0) {
+      const firstTop = pieceTop(first, f.h);
+      const candidate = new Uint8Array(found.length);
+      const points = new Float32Array(found.length * 3);
+      for (let k = 0; k < found.length; k += 1) {
+        points.set([found[k].x, found[k].y, found[k].z], k * 3);
+        if (keep[k] && found[k].y <= firstTop + TOP_MARGIN) candidate[k] = 1;
+      }
+      const outcome = await segment({ source, picked, points, candidate, toRoom, box, top: firstTop });
+      segmentStatus = outcome.status;
+      if (outcome.status === 'ok') {
+        aiKeep = outcome.keep;
+        // AI가 옆 물건으로 본 것을 빼고 다시 다듬는다 (나머지에서 떠다니는 조각·따로 선 물건을 다시 가른다)
+        keep = cleanPieceMask(found, box, walls, f.h, aiKeep);
+      }
+    }
+  }
   if (dump) {
     const data = new Float32Array(found.length * 8);
     found.forEach((s, k) => data.set([s.x, s.y, s.z, s.scale, s.opacity, colors[k * 3], colors[k * 3 + 1], colors[k * 3 + 2]], k * 8));
-    dump.push({ id: f.id, h: f.h, box, walls, data, keep });
+    dump.push({ id: f.id, h: f.h, box, walls, data, keep, geomKeep, aiKeep: aiKeep ?? null, segment: segmentStatus });
   }
   const heights: number[] = [];
   for (let k = 0; k < found.length; k += 1) if (keep[k]) heights.push(found[k].y);
@@ -99,7 +124,7 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
   const { fileBytes } = await writeSpz(out);
   const count = out.numSplats;
   out.dispose();
-  return { bytes: fileBytes, count, top, box: keptBox(f, footprint, box, walls) };
+  return { bytes: fileBytes, count, top, box: keptBox(f, footprint, box, walls), segment: segmentStatus };
 }
 
 /**
