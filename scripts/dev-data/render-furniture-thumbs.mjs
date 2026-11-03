@@ -29,6 +29,7 @@ const PAGE = `<!doctype html><html><body style="margin:0;background:transparent"
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { browserOpts } from './browser-launch.mjs';
 const renderer = new THREE.WebGLRenderer({ canvas: document.getElementById('c'), antialias: true, alpha: true, preserveDrawingBuffer: true });
 renderer.setClearColor(0x000000, 0);
 const loader = new GLTFLoader().setMeshoptDecoder(MeshoptDecoder);
@@ -77,7 +78,7 @@ const server = http
 await new Promise((resolve) => server.once('listening', resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 
-const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : { channel: 'chrome', headless: true });
+const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : { ...browserOpts, headless: true });
 try {
   const page = await browser.newPage({ viewport: { width: SIZE * 2, height: SIZE * 2 } });
   await page.goto(base);

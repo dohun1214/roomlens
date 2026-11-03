@@ -4,6 +4,7 @@
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -19,9 +20,9 @@ const checks = [];
 const check = (name, ok, detail) => checks.push({ name, ok: Boolean(ok), detail });
 
 const browser = await chromium.launch({
-  channel: 'chrome',
+  ...browserOpts,
   headless: true,
-  args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'],
+  args: gpuArgs,
 });
 
 /** 장면을 열고 LOD가 자리 잡은 뒤의 "그리는 수"와 배율을 읽는다 */

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { dataDir } from './e2e-common.mjs';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
@@ -34,7 +35,7 @@ const s3 = new S3Client({
 const listKeys = async (prefix) =>
   (await s3.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET, Prefix: prefix }))).Contents?.map((o) => o.Key) ?? [];
 
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'] });
+const browser = await chromium.launch({ ...browserOpts, headless: true, args: gpuArgs });
 const newPage = async (viewport = { width: 1280, height: 800 }) => {
   const context = await browser.newContext({ viewport });
   // R2의 CORS는 정해진 주소만 허락한다. 다른 포트의 개발 서버로 열 때를 위해 허락 머리말을 붙인다

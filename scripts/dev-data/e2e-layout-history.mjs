@@ -9,6 +9,7 @@ import path from 'node:path';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
 import { dataDir } from './e2e-common.mjs';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const require = createRequire(path.join(dataDir, '_e2e', 'package.json'));
 const { chromium } = require('playwright-core');
@@ -40,9 +41,9 @@ const listKeys = async (prefix) =>
   (await s3.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET, Prefix: prefix }))).Contents?.map((o) => o.Key) ?? [];
 
 const browser = await chromium.launch({
-  channel: 'chrome',
+  ...browserOpts,
   headless: true,
-  args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'],
+  args: gpuArgs,
 });
 const newPage = async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });

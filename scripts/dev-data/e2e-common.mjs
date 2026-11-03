@@ -12,6 +12,7 @@ import { createRequire } from 'node:module';
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -50,9 +51,9 @@ export function loadTruth(scene, cornerY) {
 
 export async function openViewer(scene) {
   const browser = await chromium.launch({
-    channel: 'chrome',
+    ...browserOpts,
     headless: true,
-    args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'],
+    args: gpuArgs,
   });
   const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
   page.on('pageerror', (e) => console.log('[pageerror]', String(e).slice(0, 300)));

@@ -8,6 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DeleteObjectsCommand, ListObjectsV2Command, S3Client } from '@aws-sdk/client-s3';
 import { createClient } from '@supabase/supabase-js';
+import { browserOpts, gpuArgs } from './browser-launch.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const dataDir = process.env.ROOMLENS_DATA ?? path.resolve(here, '../../../roomlens-data');
@@ -36,9 +37,9 @@ const listKeys = async (prefix) =>
   (await s3.send(new ListObjectsV2Command({ Bucket: process.env.R2_BUCKET, Prefix: prefix }))).Contents?.map((o) => o.Key) ?? [];
 
 const browser = await chromium.launch({
-  channel: 'chrome',
+  ...browserOpts,
   headless: true,
-  args: ['--use-angle=d3d11', '--enable-gpu', '--ignore-gpu-blocklist'],
+  args: gpuArgs,
 });
 const page = await browser.newPage({ viewport: { width: 1100, height: 900 } });
 const errors = [];
