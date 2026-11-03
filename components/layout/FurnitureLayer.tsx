@@ -756,7 +756,7 @@ export default function FurnitureLayer({
     setPrepBusy({ id: f.id, text: '빈자리 찍는 중…' });
     try {
       const planes = fillPlanes(hiddenBox(f, floorPolygon), f.piece.top, floorPolygon);
-      const masked = await captureFillPlanes(engine, planes);
+      const { masked, clean } = await captureFillPlanes(engine, planes);
       setPrepBusy({ id: f.id, text: 'AI가 채우는 중…' });
       const filled = await requestFill(prepare.roomId, f.id, planes, masked);
       if (!filled.ok) {
@@ -765,7 +765,7 @@ export default function FurnitureLayer({
       }
       prepare.onAiRemaining?.(filled.remaining);
       setPrepBusy({ id: f.id, text: '올리는 중…' });
-      const piece = await buildFillPiece(planes, filled.images, masked, f, floorPolygon);
+      const piece = await buildFillPiece(planes, filled.images, clean, f, floorPolygon);
       const uploaded = await uploadFixturePiece(prepare.roomId, f.id, 'fill', piece.bytes);
       if (!uploaded.ok) {
         setPrepMessage(uploaded.message);

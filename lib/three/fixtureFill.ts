@@ -48,21 +48,22 @@ function canvasOf(bitmap: ImageBitmap): { canvas: HTMLCanvasElement; context: Ca
 }
 
 /**
- * 평면마다 그림을 찍고 구멍을 칠해 JPEG base64로 돌려준다.
+ * 평면마다 그림을 찍고 구멍을 칠해 JPEG base64로 돌려준다 (masked: AI에 보낼 것, clean: 칠하기 전 찍은 그대로).
+ * 칠한 그림은 JPEG로 저장할 때 자홍색이 구멍 밖 몇 px로 번지므로, 구멍 둘레 색은 clean에서 가져온다.
  * 방 스플랫의 편집(옮긴 원래 가구 숨기기)은 켠 채로 찍고, 가상 가구·조각·표시는 숨긴다.
  */
-export async function captureFillPlanes(engine: CaptureEngine, planes: FillPlane[]): Promise<string[]> {
+export async function captureFillPlanes(engine: CaptureEngine, planes: FillPlane[]): Promise<{ masked: string[]; clean: string[] }> {
   const shots = await captureFixedViews(engine, planes.map(planeView), { px: FILL_IMAGE.width, pxHeight: FILL_IMAGE.height, keepEdits: true, quality: 0.92, settleMs: 1500 });
-  const out: string[] = [];
+  const masked: string[] = [];
   for (let i = 0; i < shots.length; i += 1) {
     const bitmap = await toBitmap('image/jpeg', shots[i]);
     const { canvas, context } = canvasOf(bitmap);
     bitmap.close();
     context.fillStyle = MASK_COLOR;
     context.fillRect(...holeRect(planes[i]));
-    out.push(canvas.toDataURL('image/jpeg', 0.9).replace(/^data:image\/jpeg;base64,/, ''));
+    masked.push(canvas.toDataURL('image/jpeg', 0.9).replace(/^data:image\/jpeg;base64,/, ''));
   }
-  return out;
+  return { masked, clean: shots };
 }
 
 /** base64 그림 → FILL_IMAGE 크기의 RGBA 픽셀 */
@@ -77,7 +78,7 @@ async function pixelsOf(mimeType: string, base64: string): Promise<Uint8ClampedA
  * AI가 채운 그림들로 구멍 자리에 납작한 스플랫을 깔아 SPZ로 묶는다. 좌표는 원래 가구 좌표(가운데 원점, 회전 0°).
  * 채운 부분은 둘레의 원래 그림과 밝기·색이 이어지게 고치고(blendFill), 구멍 둘레에 더 까는 부분은 원래 그림 색을 쓴다.
  * @param images planes와 같은 순서의 AI 그림
- * @param originals planes와 같은 순서의 칠한 그림 (captureFillPlanes, 구멍 밖은 찍은 그대로)
+ * @param originals planes와 같은 순서의 칠하기 전 그림 (captureFillPlanes의 clean)
  */
 export async function buildFillPiece(
   planes: FillPlane[],

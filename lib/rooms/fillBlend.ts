@@ -11,12 +11,20 @@ const BLEED = 4;
 /** 반복 횟수와 과완화 계수 */
 const ITERATIONS = 600;
 const OMEGA = 1.9;
+/**
+ * 둘레 차이 중 튀는 칸은 기준에서 뺀다: 밝기 차이가 사분위 범위(최소 MIN_SPREAD)의 OUTLIER_K배 밖이면 버리고 OUTLIER_PASSES번 되풀이.
+ * 구멍 옆에 남은 가구 잔상·흐린 곳을 AI가 다르게 다시 그리면 그 칸만 차이가 크게 나서, 그대로 퍼뜨리면 구멍에 어두운 얼룩이 생긴다.
+ * 전체가 고르게 다르거나(노출 차이) 두 쪽으로 나뉘어 다른 것(햇빛 경계)은 범위 안이라 그대로 맞춘다.
+ */
+const OUTLIER_K = 1.5;
+const OUTLIER_PASSES = 2;
+const MIN_SPREAD = 16;
 
 export type Rect = [number, number, number, number];
 
 /**
  * @param ai 그림 AI가 채운 그림 (RGBA, width × height)
- * @param original 칠하기 전 찍은 그림 (같은 크기, 구멍 자리는 칠해져 있어도 된다)
+ * @param original 칠하기 전 찍은 그림 (같은 크기). 칠한 그림을 넘기면 구멍 밖으로 번진 자홍색이 그대로 남는다
  * @param hole 채운 구멍 [x, y, w, h] px
  * @param valid 이 픽셀에 실제 평면이 있는지 (방 밖·벽 끝 너머·바닥 아래는 false → 그쪽 둘레는 쓰지 않는다)
  * @returns 구멍 안은 AI 그림 + 퍼뜨린 차이, 밖은 원래 그림인 새 RGBA
@@ -79,6 +87,7 @@ export function blendFill(ai: Uint8ClampedArray, original: Uint8ClampedArray, wi
       value[c * 3 + 2] = b / count;
     }
   }
+  dropOutliers(kind, value, cells);
   // 둘레 평균으로 시작해 구멍 칸을 이웃 평균으로 (쓰지 않는 칸 쪽은 경계가 없는 것으로 본다)
   const mean = [0, 0, 0];
   let known = 0;
@@ -159,6 +168,36 @@ export function blendFill(ai: Uint8ClampedArray, original: Uint8ClampedArray, wi
     }
   }
   return out;
+}
+
+/** 둘레(1) 칸 중 밝기 차이가 튀는 칸을 값을 모르는 칸(2)으로 바꾼다 (함께 풀어 이웃 값으로 채워진다) */
+function dropOutliers(kind: Uint8Array, value: Float32Array, cells: number) {
+  for (let pass = 0; pass < OUTLIER_PASSES; pass += 1) {
+    const lum: number[] = [];
+    for (let c = 0; c < cells; c += 1) if (kind[c] === 1) lum.push((value[c * 3] + value[c * 3 + 1] + value[c * 3 + 2]) / 3);
+    if (lum.length < 8) return;
+    lum.sort((a, b) => a - b);
+    const quantile = (q: number) => {
+      const i = q * (lum.length - 1);
+      const lo = Math.floor(i);
+      return lum[lo] + (lum[Math.min(lum.length - 1, lo + 1)] - lum[lo]) * (i - lo);
+    };
+    const q1 = quantile(0.25);
+    const q3 = quantile(0.75);
+    const spread = Math.max(q3 - q1, MIN_SPREAD);
+    const low = q1 - OUTLIER_K * spread;
+    const high = q3 + OUTLIER_K * spread;
+    let dropped = 0;
+    for (let c = 0; c < cells; c += 1) {
+      if (kind[c] !== 1) continue;
+      const l = (value[c * 3] + value[c * 3 + 1] + value[c * 3 + 2]) / 3;
+      if (l < low || l > high) {
+        kind[c] = 2;
+        dropped += 1;
+      }
+    }
+    if (dropped === 0) return;
+  }
 }
 
 function copyHole(out: Uint8ClampedArray, ai: Uint8ClampedArray, width: number, x0: number, y0: number, x1: number, y1: number) {
