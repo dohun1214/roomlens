@@ -28,6 +28,7 @@ import { fixtureObstacles, type Fixture } from '@/lib/rooms/fixtures';
 import { fillPlanes, hiddenBox, type FixturePieceUrls } from '@/lib/rooms/fixturePiece';
 import { uploadFixturePiece } from '@/lib/rooms/fixturePieceClient';
 import { extractFixturePiece, hideFixtureEdit, loadSourceSplats, setHiddenFixtures } from '@/lib/three/fixturePiece';
+import { makeSegmentHook, type SegmentHook } from '@/lib/three/fixtureSegment';
 import { buildFillPiece, captureFillPlanes, requestFill } from '@/lib/three/fixtureFill';
 import {
   MAX_LAYOUT_ITEMS,
@@ -790,7 +791,19 @@ export default function FurnitureLayer({
       }
       setPrepBusy({ id: f.id, text: '떼어 내는 중…' });
       splat.updateWorldMatrix(true, false);
-      const piece = await extractFixturePiece(sourceRef.current, splat.matrixWorld, f, floorPolygon, fixtures);
+      // AI 분할: 고른 곳을 네 방향에서 찍어 이 가구의 윤곽만 남긴다 (옆에 붙은 물건 빼기). 안 되면 AI 없이 떼어 낸다
+      const engine = engineRef.current;
+      const segmentHook = engine ? makeSegmentHook(engine, prepare.roomId, f.id) : undefined;
+      const segment: SegmentHook | undefined = segmentHook
+        ? async (input) => {
+            setPrepBusy({ id: f.id, text: 'AI가 가구 모양을 고르는 중…' });
+            const outcome = await segmentHook(input);
+            if (outcome.remaining !== undefined) prepare.onAiRemaining?.(outcome.remaining);
+            setPrepBusy({ id: f.id, text: '떼어 내는 중…' });
+            return outcome;
+          }
+        : undefined;
+      const piece = await extractFixturePiece(sourceRef.current, splat.matrixWorld, f, floorPolygon, fixtures, segment);
       if (!piece) {
         setPrepMessage(`${f.label} 자리에서 3D 조각을 찾지 못했습니다. 원래 가구 상자가 맞는지 확인해 주세요.`);
         return;
@@ -803,6 +816,8 @@ export default function FurnitureLayer({
       }
       prepare.onPrepared(uploaded.fixture, { piece: uploaded.url });
       moveFixture(uploaded.fixture);
+      if (piece.segment === 'limit') setPrepMessage('오늘 AI 횟수를 모두 써서 AI 없이 떼어 냈습니다. 옆 물건이 조금 딸려 올 수 있습니다.');
+      else if (piece.segment === 'error') setPrepMessage('AI가 가구 모양을 고르지 못해 AI 없이 떼어 냈습니다.');
     } catch (err) {
       console.error(err);
       setPrepMessage('원래 가구를 떼어 내지 못했습니다. 잠시 후 다시 해 주세요.');

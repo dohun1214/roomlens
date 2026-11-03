@@ -227,8 +227,9 @@ export type PieceSplat = { x: number; y: number; z: number; scale: number; opaci
  * @param box 고른 바닥 사각형 (pickBox)
  * @param walls 벽 때문에 줄인 변 (wallSides)
  * @param h 원래 가구 높이 (위에 얹힌 물건 자리를 가린다)
+ * @param allowed 이것이 0인 스플랫은 처음부터 뺀다 (AI 분할이 옆 물건으로 본 것)
  */
-export function cleanPieceMask(splats: ArrayLike<PieceSplat>, box: Footprint, walls?: WallSides, h = Infinity): Uint8Array {
+export function cleanPieceMask(splats: ArrayLike<PieceSplat>, box: Footprint, walls?: WallSides, h = Infinity, allowed?: Uint8Array): Uint8Array {
   const n = splats.length;
   const keep = new Uint8Array(n);
   if (n === 0) return keep;
@@ -259,6 +260,7 @@ export function cleanPieceMask(splats: ArrayLike<PieceSplat>, box: Footprint, wa
   };
   for (let i = 0; i < n; i += 1) {
     const s = splats[i];
+    if (allowed && !allowed[i]) continue;
     if (s.scale > MAX_SPLAT_SCALE || (s.scale > LOOSE_SCALE && s.opacity < LOOSE_OPACITY)) continue;
     if ((s.scale > WALL_BLUR_SCALE || s.opacity < WALL_BLUR_OPACITY) && (wallGap(s) < WALL_BLUR_BAND || s.y < FLOOR_BLUR_BAND)) continue;
     // 가구 높이 위: 벽 쪽 변에 붙은 것, 원래 가구 사각형 밖(넓혀 고른 여유)에 있는 것은 옆 물건 (위에 얹힌 물건은 가구 안쪽에 놓인다)

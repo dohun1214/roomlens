@@ -88,6 +88,13 @@ export const FixtureFillInput = z.object({
 });
 export type FixtureFillInput = z.infer<typeof FixtureFillInput>;
 
+/** 원래 가구 떼어 내기의 AI 분할: 고른 곳만 가구 둘레에서 찍은 그림들 */
+export const FixtureSegmentInput = z.object({
+  fixtureId: z.string().regex(/^x\d{1,4}$/),
+  images: z.array(z.string().min(100).max(1_000_000, '그림이 너무 큽니다.')).min(2).max(6, '한 번에 그림 6장까지 보낼 수 있습니다.'),
+});
+export type FixtureSegmentInput = z.infer<typeof FixtureSegmentInput>;
+
 /** 업로드를 끝냈다고 알릴 때: 어떤 형식으로 올렸는지 */
 export const CompleteUploadInput = z.object({
   splatFormat: z.enum(SPLAT_FORMATS),
