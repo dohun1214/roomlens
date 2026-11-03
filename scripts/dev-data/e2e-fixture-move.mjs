@@ -2,7 +2,7 @@
 // 원래 자리는 방 스플랫에서 숨기고, 조각을 끌고 돌릴 수 있고, 저장·다시 열기·제자리로가 되는지,
 // 원래 가구 도구로 저장해도 조각 정보가 남는지, 다른 사람은 떼어 낸 원래 가구만 옮길 수 있는지, AI 추천이 옮긴 자리를 지키는지 본다.
 // 옮긴 뒤 빈자리를 AI로 채우는 것도 본다 (방 주인).
-// 방은 CC BY 샘플(침실, ethan3111)과 그 방의 보정·원래 가구 값으로 만든다. Gemini를 두 번 부른다 (빈자리 채우기, AI 추천).
+// 방은 CC BY 샘플(침실, ethan3111)과 그 방의 보정·원래 가구 값으로 만든다. Gemini를 네 번 부른다 (떼어 내기 AI 분할 2번, 빈자리 채우기, AI 추천).
 // 준비: 개발 서버(APP_URL), ../roomlens-data/_e2e 에 playwright-core, ../roomlens-data/samples/superspl/bedroom_up.sog
 // 실행: node --env-file=.env.local scripts/dev-data/e2e-fixture-move.mjs
 import { createRequire } from 'node:module';
@@ -60,8 +60,13 @@ const newPage = async () => {
   await context.route(/r2\.cloudflarestorage\.com/, async (route) => {
     const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, HEAD, PUT, OPTIONS', 'access-control-expose-headers': '*' };
     if (route.request().method() === 'OPTIONS') return route.fulfill({ status: 204, headers: cors });
-    const response = await route.fetch();
-    return route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+    // 큰 3D 파일(35MB)은 기본 30초 안에 못 받을 때가 있다. 넉넉히 기다리고, 실패하면 요청만 끊는다 (스크립트가 죽지 않게)
+    try {
+      const response = await route.fetch({ timeout: 180000 });
+      return route.fulfill({ response, headers: { ...response.headers(), ...cors } });
+    } catch {
+      return route.abort().catch(() => {});
+    }
   });
   const page = await context.newPage();
   page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 300)));
@@ -142,6 +147,8 @@ try {
   const head = key ? await readHead(key) : Buffer.alloc(0);
   check('떼어 내기: DB의 의자에 조각 정보(버전·높이), 수납장은 그대로', chair?.piece?.v > 0 && chair.piece.top >= 1.19 && chair.piece.top <= 1.9 && !db1.find((f) => f.id === 'x3').piece, { piece: chair?.piece, ms: prepMs });
   check('떼어 내기: R2에 조각 파일 (gzip SPZ, 10KB~30MB)', size !== null && size > 10000 && size < 30 * 1024 * 1024 && head[0] === 0x1f && head[1] === 0x8b, size);
+  const { data: segmentCalls } = await admin.from('ai_calls').select('kind, status').eq('room_id', roomId).eq('kind', 'segment');
+  check('떼어 내기: AI 분할 1회 (가구 둘레 4방향 상자, 방 주인 횟수)', segmentCalls?.length === 1 && segmentCalls[0].status === 'done', segmentCalls);
   let items = await itemsOf(owner);
   const moved = items.find((i) => i.kind === 'fixture');
   check('배치에 원래 자리 그대로 놓이고 고른 상태', moved?.furnitureRef === 'x2' && near(moved.x, -2.452) && near(moved.z, -0.956) && moved.h === chair.piece.top && (await owner.getByTestId('selection-bar').getAttribute('data-id')) === moved?.id, moved);
