@@ -23,6 +23,14 @@ export async function loadSourceSplats(url: string, onProgress?: (fraction: numb
   return packed;
 }
 
+/** 개발 서버 실측용: window.__roomlensPieceDump가 배열이면 고른 스플랫(x,y,z,크기,불투명도,r,g,b)과 다듬기 결과를 넣는다 */
+type PieceDump = { id: string; h: number; box: ReturnType<typeof pickBox>; walls: ReturnType<typeof wallSides>; data: Float32Array; keep: Uint8Array }[];
+const pieceDump = (): PieceDump | null => {
+  if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return null;
+  const dump = (window as unknown as { __roomlensPieceDump?: unknown }).__roomlensPieceDump;
+  return Array.isArray(dump) ? (dump as PieceDump) : null;
+};
+
 export type ExtractedPiece = { bytes: Uint8Array; count: number; top: number; box: PieceBox | null };
 
 /**
@@ -42,16 +50,24 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
   const scaleOf = new THREE.Vector3().setFromMatrixScale(toRoom).x;
   const picked: number[] = [];
   const found: PieceSplat[] = [];
-  source.forEachSplat((i, center, scales, _quaternion, opacity) => {
+  const dump = pieceDump();
+  const colors: number[] = [];
+  source.forEachSplat((i, center, scales, _quaternion, opacity, color) => {
     if (opacity < MIN_OPACITY) return;
     p.copy(center).applyMatrix4(toRoom);
     if (p.y < PIECE_FLOOR_CUT || p.y > MAX_PIECE_TOP || !inFootprint(box, p.x, p.z) || otherFixture(p.x, p.z)) return;
     picked.push(i);
     found.push({ x: p.x, y: p.y, z: p.z, scale: Math.max(scales.x, scales.y, scales.z) * scaleOf, opacity });
+    if (dump) colors.push(color.r, color.g, color.b);
   });
   if (picked.length === 0) return null;
   // 옆 물건·떠다니는 조각·흐린 배경을 뺀 뒤 높이를 잰다
   const keep = cleanPieceMask(found, box, walls, f.h);
+  if (dump) {
+    const data = new Float32Array(found.length * 8);
+    found.forEach((s, k) => data.set([s.x, s.y, s.z, s.scale, s.opacity, colors[k * 3], colors[k * 3 + 1], colors[k * 3 + 2]], k * 8));
+    dump.push({ id: f.id, h: f.h, box, walls, data, keep });
+  }
   const heights: number[] = [];
   for (let k = 0; k < found.length; k += 1) if (keep[k]) heights.push(found[k].y);
   if (heights.length === 0) return null;
