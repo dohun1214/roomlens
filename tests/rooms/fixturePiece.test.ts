@@ -402,6 +402,30 @@ describe('따로 선 물건·벽에 달린 것', () => {
     expect(cord.every((p, i) => p.y <= 0.65 || keep[stand.length + i] === 0)).toBe(true);
     expect(Array.from(keep.slice(stand.length + cord.length)).every((k) => k === 1)).toBe(true);
   });
+  it('바닥 근처에서 의자 다리에 닿아 붙은 스탠드(받침·기둥·갓)는 빼고, 의자 다리 넷은 남긴다', () => {
+    const box = { x: 0, z: 0, w: 1.2, d: 1.2, rotationDeg: 0 };
+    const seat = grid(-0.3, 0.3, 0.4, 0.5, -0.3, 0.3);
+    const legs = [-0.28, 0.26].flatMap((x) => [-0.28, 0.26].flatMap((z) => grid(x, x + 0.02, 0.03, 0.38, z, z + 0.02)));
+    // 받침이 의자 다리에 닿아 한 덩어리로 이어진 스탠드 (상자 안쪽이라 사각형 규칙으로는 못 뺀다)
+    const base = grid(0.28, 0.5, 0.03, 0.05, 0.16, 0.38);
+    const pole = grid(0.38, 0.4, 0.07, 1.18, 0.26, 0.28);
+    const shade = grid(0.3, 0.48, 1.2, 1.36, 0.18, 0.36);
+    const lamp = [...base, ...pole, ...shade];
+    const keep = cleanPieceMask([...seat, ...legs, ...lamp], box);
+    const chair = seat.length + legs.length;
+    expect(Array.from(keep.slice(0, chair)).every((k) => k === 1)).toBe(true);
+    expect(Array.from(keep.slice(chair)).filter(Boolean).length).toBeLessThan(lamp.length * 0.15);
+  });
+  it('가구 높이 위에서 원래 가구 사각형 밖(넓혀 고른 여유)에 선 기둥은 빼고, 위에 얹힌 꽃병은 남긴다', () => {
+    const f = fixture({ x: 0, z: 0, w: 0.6, d: 0.5, h: 0.6 });
+    const box = pickBox(f, ROOM);
+    const stand = grid(-0.3, 0.3, 0.05, 0.6, -0.25, 0.25);
+    const post = grid(0.32, 0.34, 0.62, 1.5, 0, 0.02);
+    const vase = grid(-0.05, 0.05, 0.62, 0.9, -0.05, 0.05);
+    const keep = cleanPieceMask([...stand, ...post, ...vase], box, wallSides(f, ROOM), 0.6);
+    expect(post.every((p, i) => p.y <= 0.65 || keep[stand.length + i] === 0)).toBe(true);
+    expect(Array.from(keep.slice(stand.length + post.length)).every((k) => k === 1)).toBe(true);
+  });
 });
 
 

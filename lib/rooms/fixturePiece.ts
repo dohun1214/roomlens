@@ -209,6 +209,10 @@ export const WALL_STACK_BAND = 0.06;
 const STANDS_ON_FLOOR = 0.12;
 /** 바닥까지 내려와도 몸통의 이 비율 넘게 크면 가구의 한 부분(나뉜 소파 등)으로 본다 */
 const BIG_PART = 0.3;
+/** 몸통 덩어리에 닿아 붙은 옆 물건(뒤에 선 스탠드·창틀)을 가를 때: 이 높이 띠(m)에서 바닥에 선 발(다리·받침)을 찾는다 */
+const FEET_BAND: [number, number] = [0.08, 0.2];
+/** 발마다 나눈 영역끼리 맞닿은 칸 수가 작은 쪽 영역의 이 비율 넘으면 한 물건(의자 다리 넷은 좌석으로 넓게 맞닿는다) */
+const SAME_THING_CONTACT = 0.12;
 
 export type PieceSplat = { x: number; y: number; z: number; scale: number; opacity: number };
 
@@ -218,7 +222,8 @@ export type PieceSplat = { x: number; y: number; z: number; scale: number; opaci
  * 2) 남은 것을 PIECE_VOXEL 칸으로 이어진 덩어리로 나눈다 (가로·세로·대각선 이웃 26칸)
  * 3) 가장 큰 덩어리(가구 몸통)는 남기고, 나머지는 작으면(떠다니는 조각), 상자 옆면 띠에 대부분 걸쳐 있으면(옆 물건·벽 조각),
  *    몸통과 떨어져 바닥에 따로 서 있으면(옆 스탠드) 버린다. 그 밖(가구 위·안의 물건)은 남긴다
- * 가구 높이 h 위에서 벽 쪽 변에 붙은 스플랫(벽등·전선)도 뺀다
+ * 4) 몸통 덩어리에 닿아 붙은 옆 물건은 바닥에 선 발마다 영역을 나눠, 좁게만 맞닿은 작은 물건을 버린다 (splitTouching)
+ * 가구 높이 h 위에서 벽 쪽 변에 붙은 스플랫(벽등·전선)과 원래 가구 사각형(넓히기 전) 밖의 스플랫(옆 스탠드 갓·창틀·기둥)도 뺀다
  * @param box 고른 바닥 사각형 (pickBox)
  * @param walls 벽 때문에 줄인 변 (wallSides)
  * @param h 원래 가구 높이 (위에 얹힌 물건 자리를 가린다)
@@ -240,11 +245,24 @@ export function cleanPieceMask(splats: ArrayLike<PieceSplat>, box: Footprint, wa
       walls.vMax ? box.d / 2 - lv : Infinity,
     );
   };
+  // 원래 가구 사각형 (넓힌 PIECE_GROW를 되돌린다. 벽 쪽 변은 벽 때문에 이미 줄였으니 그대로)
+  const inner = {
+    uMin: -box.w / 2 + (walls?.uMin ? 0 : PIECE_GROW),
+    uMax: box.w / 2 - (walls?.uMax ? 0 : PIECE_GROW),
+    vMin: -box.d / 2 + (walls?.vMin ? 0 : PIECE_GROW),
+    vMax: box.d / 2 - (walls?.vMax ? 0 : PIECE_GROW),
+  };
+  const outsideFixture = (s: PieceSplat) => {
+    const lu = (s.x - box.x) * u[0] + (s.z - box.z) * u[1];
+    const lv = (s.x - box.x) * v[0] + (s.z - box.z) * v[1];
+    return lu < inner.uMin || lu > inner.uMax || lv < inner.vMin || lv > inner.vMax;
+  };
   for (let i = 0; i < n; i += 1) {
     const s = splats[i];
     if (s.scale > MAX_SPLAT_SCALE || (s.scale > LOOSE_SCALE && s.opacity < LOOSE_OPACITY)) continue;
     if ((s.scale > WALL_BLUR_SCALE || s.opacity < WALL_BLUR_OPACITY) && (wallGap(s) < WALL_BLUR_BAND || s.y < FLOOR_BLUR_BAND)) continue;
-    if (s.y > h + 0.05 && wallGap(s) < WALL_STACK_BAND) continue;
+    // 가구 높이 위: 벽 쪽 변에 붙은 것, 원래 가구 사각형 밖(넓혀 고른 여유)에 있는 것은 옆 물건 (위에 얹힌 물건은 가구 안쪽에 놓인다)
+    if (s.y > h + 0.05 && (wallGap(s) < WALL_STACK_BAND || outsideFixture(s))) continue;
     keep[i] = 1;
   }
   const label = labelParts(splats, keep);
@@ -281,7 +299,185 @@ export function cleanPieceMask(splats: ArrayLike<PieceSplat>, box: Footprint, wa
     if (small || atEdge || standsAlone) drop.add(root);
   }
   for (let i = 0; i < n; i += 1) if (keep[i] && drop.has(label[i])) keep[i] = 0;
+  splitTouching(splats, keep, label, main);
   return keep;
+}
+
+/**
+ * 몸통 덩어리(main)에 닿아 붙은 옆 물건을 뺀다 (keep을 고친다).
+ * FEET_BAND 높이에서 바닥에 선 발(이어진 칸 무리)을 찾고, 몸통의 칸마다 가장 가까운 발(덩어리 안으로 잰 거리)로 영역을 나눈다.
+ * 넓게 맞닿은 영역끼리는 한 물건으로 묶고(SAME_THING_CONTACT), 가장 큰 물건의 BIG_PART보다 작은 다른 물건은 바닥에 따로 선 것으로 버린다.
+ * 위에 얹힌 물건은 발이 없어 아래 가구 영역에 들어가므로 남는다.
+ * 한계: 영역은 가까운 발 기준으로 나뉘므로, 옆 물건이 높은 곳(좌석·등받이)에 넓게 기대 닿아 있으면 경계가 그 물건 안쪽에 그어져
+ * 맞닿은 칸이 많아지고 한 물건으로 본다 (그대로 남긴다). 바닥 근처(받침·러그·그림자)나 좁은 곳으로만 이어진 경우를 가른다.
+ */
+function splitTouching(splats: ArrayLike<PieceSplat>, keep: Uint8Array, label: Int32Array, main: number) {
+  const n = splats.length;
+  let minX = Infinity;
+  let minZ = Infinity;
+  for (let i = 0; i < n; i += 1) {
+    if (!keep[i] || label[i] !== main) continue;
+    minX = Math.min(minX, splats[i].x);
+    minZ = Math.min(minZ, splats[i].z);
+  }
+  if (minX === Infinity) return;
+  // 칸 (x, y, z 정수) → 칸 순번. y는 바닥(0) 기준이라 발 높이를 칸으로 바로 잴 수 있다
+  const keyOf = (ix: number, iy: number, iz: number) => `${ix},${iy},${iz}`;
+  const index = new Map<string, number>();
+  const cells: [number, number, number][] = [];
+  const cellOf = new Int32Array(n).fill(-1);
+  for (let i = 0; i < n; i += 1) {
+    if (!keep[i] || label[i] !== main) continue;
+    const s = splats[i];
+    const ix = Math.floor((s.x - minX) / PIECE_VOXEL);
+    const iy = Math.floor(s.y / PIECE_VOXEL);
+    const iz = Math.floor((s.z - minZ) / PIECE_VOXEL);
+    const k = keyOf(ix, iy, iz);
+    let c = index.get(k);
+    if (c === undefined) {
+      c = cells.length;
+      index.set(k, c);
+      cells.push([ix, iy, iz]);
+    }
+    cellOf[i] = c;
+  }
+  const neighbors = (c: number, visit: (o: number, step: number) => void) => {
+    const [ix, iy, iz] = cells[c];
+    for (let dz = -1; dz <= 1; dz += 1) {
+      for (let dy = -1; dy <= 1; dy += 1) {
+        for (let dx = -1; dx <= 1; dx += 1) {
+          if (dx === 0 && dy === 0 && dz === 0) continue;
+          const o = index.get(keyOf(ix + dx, iy + dy, iz + dz));
+          if (o !== undefined) visit(o, Math.sqrt(dx * dx + dy * dy + dz * dz));
+        }
+      }
+    }
+  };
+  // 발: FEET_BAND 높이의 칸을 이어진 무리로 묶는다
+  const lo = Math.floor(FEET_BAND[0] / PIECE_VOXEL);
+  const hi = Math.floor(FEET_BAND[1] / PIECE_VOXEL);
+  const region = new Int32Array(cells.length).fill(-1);
+  let feet = 0;
+  for (let c = 0; c < cells.length; c += 1) {
+    if (region[c] >= 0 || cells[c][1] < lo || cells[c][1] > hi) continue;
+    const stack = [c];
+    region[c] = feet;
+    while (stack.length) {
+      neighbors(stack.pop()!, (o) => {
+        if (region[o] >= 0 || cells[o][1] < lo || cells[o][1] > hi) return;
+        region[o] = feet;
+        stack.push(o);
+      });
+    }
+    feet += 1;
+  }
+  if (feet < 2) return;
+  // 발에서 덩어리 안으로 가장 가까운 발의 영역으로 (여러 출발점 다익스트라)
+  const dist = new Float64Array(cells.length).fill(Infinity);
+  const heap = new MinHeap();
+  for (let c = 0; c < cells.length; c += 1) {
+    if (region[c] < 0) continue;
+    dist[c] = 0;
+    heap.push(0, c);
+  }
+  while (heap.size > 0) {
+    const [d, c] = heap.pop();
+    if (d > dist[c]) continue;
+    neighbors(c, (o, step) => {
+      const nd = d + step;
+      if (nd < dist[o]) {
+        dist[o] = nd;
+        region[o] = region[c];
+        heap.push(nd, o);
+      }
+    });
+  }
+  // 영역 크기와 맞닿은 칸 수
+  const size = new Array<number>(feet).fill(0);
+  for (let c = 0; c < cells.length; c += 1) if (region[c] >= 0) size[region[c]] += 1;
+  const contact = new Map<number, number>();
+  for (let c = 0; c < cells.length; c += 1) {
+    const a = region[c];
+    if (a < 0) continue;
+    neighbors(c, (o) => {
+      const b = region[o];
+      if (o <= c || b < 0 || b === a) return;
+      const key = Math.min(a, b) * feet + Math.max(a, b);
+      contact.set(key, (contact.get(key) ?? 0) + 1);
+    });
+  }
+  // 넓게 맞닿은 영역끼리 한 물건으로
+  const parent = Array.from({ length: feet }, (_, i) => i);
+  const find = (a: number): number => {
+    while (parent[a] !== a) {
+      parent[a] = parent[parent[a]];
+      a = parent[a];
+    }
+    return a;
+  };
+  for (const [key, count] of contact) {
+    const a = Math.floor(key / feet);
+    const b = key % feet;
+    if (count >= SAME_THING_CONTACT * Math.min(size[a], size[b])) parent[find(a)] = find(b);
+  }
+  const thing = new Map<number, number>();
+  for (let r = 0; r < feet; r += 1) thing.set(find(r), (thing.get(find(r)) ?? 0) + size[r]);
+  let biggest = -1;
+  let biggestSize = 0;
+  for (const [t, count] of thing) {
+    if (count > biggestSize) {
+      biggest = t;
+      biggestSize = count;
+    }
+  }
+  const dropCell = (c: number) => region[c] >= 0 && find(region[c]) !== biggest && (thing.get(find(region[c])) ?? 0) < biggestSize * BIG_PART;
+  for (let i = 0; i < n; i += 1) if (cellOf[i] >= 0 && dropCell(cellOf[i])) keep[i] = 0;
+}
+
+/** 다익스트라용 최소 힙 (거리, 칸) */
+class MinHeap {
+  private keys: number[] = [];
+  private values: number[] = [];
+  get size() {
+    return this.keys.length;
+  }
+  push(key: number, value: number) {
+    const { keys, values } = this;
+    let i = keys.length;
+    keys.push(key);
+    values.push(value);
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (keys[p] <= key) break;
+      keys[i] = keys[p];
+      values[i] = values[p];
+      i = p;
+    }
+    keys[i] = key;
+    values[i] = value;
+  }
+  pop(): [number, number] {
+    const { keys, values } = this;
+    const top: [number, number] = [keys[0], values[0]];
+    const lastKey = keys.pop()!;
+    const lastValue = values.pop()!;
+    if (keys.length > 0) {
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1;
+        if (l >= keys.length) break;
+        const r = l + 1;
+        const m = r < keys.length && keys[r] < keys[l] ? r : l;
+        if (keys[m] >= lastKey) break;
+        keys[i] = keys[m];
+        values[i] = values[m];
+        i = m;
+      }
+      keys[i] = lastKey;
+      values[i] = lastValue;
+    }
+    return top;
+  }
 }
 
 /**
