@@ -245,6 +245,13 @@ describe('blendFill', () => {
     const out = blendFill(image(() => 100), image((x) => (x >= 44 ? 0 : 140)), W, H, [20, 12, 24, 16], (px) => px < 44);
     expect(at(out, 40, 20)).toBeGreaterThan(130);
   });
+  it('둘레 한쪽만 AI 그림과 크게 다르면(남은 가구 잔상을 AI가 다르게 다시 그림) 그 칸은 빼고 맞춘다', () => {
+    // 원래 그림의 왼쪽 위 둘레에 어두운 잔상이 있다. AI 그림은 거기도 밝게 그렸다
+    const original = image((x, y) => (x < 22 && y < 16 ? 10 : 120));
+    const out = blendFill(image(() => 120), original, W, H, [20, 12, 24, 16]);
+    expect(at(out, 21, 13)).toBeGreaterThan(110);
+    expect(at(out, 32, 20)).toBeGreaterThan(115);
+  });
 });
 
 describe('pickBox · keptBox · hiddenBox', () => {
