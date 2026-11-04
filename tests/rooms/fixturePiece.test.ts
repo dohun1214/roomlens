@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { blendFill } from '@/lib/rooms/fillBlend';
-import { boxFootprint, cleanPieceMask, hiddenBox, keptBox, pickBox, pixelPlane, planeSurfaceAt, PIECE_GROW, wallSides, FILL_IMAGE, FILL_MARGIN, fillPlanes, fixturePieceKey, holeRect, pieceAccess, inFootprint, type PieceSplat, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, planePixel, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
+import { boxFromClips, hasWall, suspectClip, wallClips, wallEvidence, boxFootprint, cleanPieceMask, hiddenBox, keptBox, pickBox, pixelPlane, planeSurfaceAt, PIECE_GROW, wallSides, FILL_IMAGE, FILL_MARGIN, fillPlanes, fixturePieceKey, holeRect, pieceAccess, inFootprint, type PieceSplat, MAX_PIECE_TOP, pieceBox, pieceTop, PIECE_WALL_GAP, planePixel, planePoint, toPieceFrame } from '@/lib/rooms/fixturePiece';
 import { fixtureObstacles, parseFixtures, type Fixture } from '@/lib/rooms/fixtures';
 import { movedFixtureIds, placeFixtureItem, restoreItems, toSavedItems } from '@/lib/layout/saved';
 import { remapFixtures, roomRemap } from '@/lib/rooms/recalibrate';
@@ -43,6 +43,59 @@ describe('pieceBox', () => {
   it('지나치게 줄어들면 원래 사각형을 쓴다', () => {
     const thin = pieceBox(fixture({ x: -2, w: 0.1 }), ROOM);
     expect(thin.w).toBe(0.1);
+  });
+});
+
+describe('의심스러운 벽 (틀린 바닥 다각형)', () => {
+  // ㄱ자 방: x 1~2, z 1~1.5가 빠짐 (꺾인 벽 x=1, z=1)
+  const NOTCHED: Point2[] = [
+    [-2, -1.5],
+    [2, -1.5],
+    [2, 1],
+    [1, 1],
+    [1, 1.5],
+    [-2, 1.5],
+  ];
+
+  it('가구 깊이 들어오거나 변 끝에만 걸친 벽을 고른다', () => {
+    // 의자 x 0.5 ~ 1.3, z 0.95 ~ 1.55: x=1 벽이 0.34m 들어옴(깊음), z=1 벽은 동쪽 끝만 덮음(걸침)
+    const clips = wallClips(fixture({ x: 0.9, z: 1.25 }), NOTCHED, PIECE_GROW);
+    const deep = clips.find((c) => c.side === 'uMax');
+    const edge = clips.find((c) => c.side === 'vMin');
+    expect(deep && suspectClip(deep)).toBe(true);
+    expect(edge && edge.cover < 0.5 && suspectClip(edge)).toBe(true);
+    // 북쪽 벽(z=1.5)은 얕고 변을 넓게 덮는다
+    const north = clips.find((c) => c.side === 'vMax');
+    expect(north && suspectClip(north)).toBe(false);
+    // 벽에 얕게 붙은 가구(서쪽 벽)는 의심하지 않는다
+    const shallow = wallClips(fixture({ x: -1.65 }), NOTCHED, PIECE_GROW);
+    expect(shallow).toHaveLength(1);
+    expect(suspectClip(shallow[0])).toBe(false);
+    // 모든 벽으로 줄인 사각형은 pickBox와 같다
+    expect(boxFromClips(fixture({ x: -1.65 }), shallow, PIECE_GROW)).toEqual(pickBox(fixture({ x: -1.65 }), NOTCHED));
+  });
+
+  it('가구 위에 벽면이 보이면 벽이 있고, 비어 있으면 없다', () => {
+    const f = fixture({ x: 1, z: 0, h: 0.8 });
+    const [clip] = wallClips(f, [
+      [-2, -1.5],
+      [1.3, -1.5],
+      [1.3, 1.5],
+      [-2, 1.5],
+    ]);
+    expect(clip.side).toBe('uMax');
+    // 벽 x=1.3을 따라 가구 위(0.95 ~ 1.75m)에 촘촘한 스플랫
+    const wall: { x: number; y: number; z: number }[] = [];
+    for (let y = 0.96; y < 1.75; y += 0.02) for (let z = -0.34; z < 0.34; z += 0.02) wall.push({ x: 1.3, y, z });
+    const seen = wallEvidence(wall, f, clip);
+    expect(seen && seen.wall).toBeGreaterThan(1000);
+    expect(hasWall(seen)).toBe(true);
+    // 가구만 있고 위는 빈 곳 → 벽 없음
+    const furniture = [{ x: 1.2, y: 0.5, z: 0 }, { x: 1.3, y: 0.7, z: 0.1 }];
+    expect(hasWall(wallEvidence(furniture, f, clip))).toBe(false);
+    // 천장에 닿는 큰 가구는 위를 볼 수 없어 벽을 믿는다
+    expect(wallEvidence(wall, { ...f, h: 2.2 }, clip)).toBeNull();
+    expect(hasWall(null)).toBe(true);
   });
 });
 
