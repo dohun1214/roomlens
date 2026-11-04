@@ -38,16 +38,32 @@ export function fixturePieceKey(roomId: string, fixtureId: string, kind: PieceKi
 
 const round3 = (v: number) => Math.round(v * 1000) / 1000 + 0;
 
+/** 고른 사각형의 네 변 가운데 벽 때문에 줄인 변 (원래 가구 좌표의 가로 u·깊이 v 방향) */
+export type WallSides = { uMin: boolean; uMax: boolean; vMin: boolean; vMax: boolean };
+
+/** 바닥 다각형의 벽 하나가 고를 사각형의 한 변을 줄이는 곳 */
+export type WallClip = {
+  /** 줄이는 변 */
+  side: keyof WallSides;
+  /** 원래 가구 좌표(가운데 원점)에서 그 변을 줄일 자리: 벽에서 PIECE_WALL_GAP 안쪽 */
+  limit: number;
+  /** 원래 가구 사각형(넓히기 전) 안으로 줄어드는 깊이 (m) */
+  depth: number;
+  /** 벽이 그 변을 덮는 비율 (0~1) */
+  cover: number;
+};
+
 /**
- * 조각을 고를 바닥 사각형: 원래 가구 사각형에서 벽 쪽 변을 벽에서 PIECE_WALL_GAP만큼 떨어지게 줄인다.
- * 사각형의 변과 나란한(10° 안) 벽만 본다.
+ * 원래 가구 사각형(grow만큼 넓힌 것)의 변을 줄이는 벽들: 변과 나란한(10° 안) 벽이 변 옆을 지나가면
+ * 그 변을 벽에서 PIECE_WALL_GAP만큼 떨어지게 줄인다.
  */
-export function pieceBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[]): Footprint {
+export function wallClips(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[], grow = 0): WallClip[] {
   const [u, v] = fixtureAxes(f.rotationDeg);
-  // 가운데에서 본 각 방향의 끝 (u는 가로, v는 깊이 방향)
-  const ext = { uMin: -f.w / 2, uMax: f.w / 2, vMin: -f.d / 2, vMax: f.d / 2 };
+  const gw = f.w + 2 * grow;
+  const gd = f.d + 2 * grow;
   const c: Point2 = [f.x, f.z];
   const dot = (a: Point2, b: Point2) => a[0] * b[0] + a[1] * b[1];
+  const clips: WallClip[] = [];
   for (let i = 0; i < polygon.length; i += 1) {
     const p = polygon[i];
     const q = polygon[(i + 1) % polygon.length];
@@ -55,9 +71,9 @@ export function pieceBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>
     if (len < 1e-6) continue;
     const t: Point2 = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
     const n: Point2 = [-t[1], t[0]];
-    for (const [axis, other, key, otherHalf] of [
-      [u, v, 'u', f.d / 2],
-      [v, u, 'v', f.w / 2],
+    for (const [axis, other, key, half, otherHalf, ownHalf] of [
+      [u, v, 'u', gw / 2, gd / 2, f.w / 2],
+      [v, u, 'v', gd / 2, gw / 2, f.d / 2],
     ] as const) {
       const facing = dot(n, axis);
       if (Math.abs(facing) < Math.cos((10 * Math.PI) / 180)) continue;
@@ -68,31 +84,109 @@ export function pieceBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>
       // 가운데에서 axis 방향으로 벽 직선까지의 거리 (부호: axis 쪽이 +)
       const along = -dot([c[0] - p[0], c[1] - p[1]], n) / facing;
       const limit = along > 0 ? along - PIECE_WALL_GAP : along + PIECE_WALL_GAP;
-      if (along > 0) {
-        if (key === 'u') ext.uMax = Math.min(ext.uMax, limit);
-        else ext.vMax = Math.min(ext.vMax, limit);
-      } else if (key === 'u') ext.uMin = Math.max(ext.uMin, limit);
-      else ext.vMin = Math.max(ext.vMin, limit);
+      if (Math.abs(limit) >= half) continue;
+      const cover = (Math.min(Math.max(a, b), otherHalf) - Math.max(Math.min(a, b), -otherHalf)) / (2 * otherHalf);
+      clips.push({ side: `${key}${along > 0 ? 'Max' : 'Min'}` as keyof WallSides, limit, depth: along > 0 ? ownHalf - limit : ownHalf + limit, cover });
     }
+  }
+  return clips;
+}
+
+/** 원래 가구 사각형(grow만큼 넓힌 것)을 벽들로 줄인 바닥 사각형. 지나치게 줄어들면 넓힌 사각형 그대로 */
+export function boxFromClips(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, clips: WallClip[], grow = 0): Footprint {
+  const [u, v] = fixtureAxes(f.rotationDeg);
+  const gw = f.w + 2 * grow;
+  const gd = f.d + 2 * grow;
+  const ext = { uMin: -gw / 2, uMax: gw / 2, vMin: -gd / 2, vMax: gd / 2 };
+  for (const clip of clips) {
+    if (clip.side === 'uMax' || clip.side === 'vMax') ext[clip.side] = Math.min(ext[clip.side], clip.limit);
+    else ext[clip.side] = Math.max(ext[clip.side], clip.limit);
   }
   const w = ext.uMax - ext.uMin;
   const d = ext.vMax - ext.vMin;
-  if (w < MIN_BOX || d < MIN_BOX) return { x: f.x, z: f.z, w: f.w, d: f.d, rotationDeg: f.rotationDeg };
+  if (w < MIN_BOX || d < MIN_BOX) return { x: f.x, z: f.z, w: round3(gw), d: round3(gd), rotationDeg: f.rotationDeg };
   const cu = (ext.uMin + ext.uMax) / 2;
   const cv = (ext.vMin + ext.vMax) / 2;
   return { x: round3(f.x + u[0] * cu + v[0] * cv), z: round3(f.z + u[1] * cu + v[1] * cv), w: round3(w), d: round3(d), rotationDeg: f.rotationDeg };
 }
 
-/** 조각을 고를 사각형: 원래 가구 사각형을 PIECE_GROW만큼 넓힌 뒤 벽 쪽을 줄인다 (pieceBox) */
-export function pickBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[]): Footprint {
-  return pieceBox({ ...f, w: f.w + 2 * PIECE_GROW, d: f.d + 2 * PIECE_GROW }, polygon);
+/**
+ * 조각을 고를 바닥 사각형: 원래 가구 사각형에서 벽 쪽 변을 벽에서 PIECE_WALL_GAP만큼 떨어지게 줄인다.
+ * 사각형의 변과 나란한(10° 안) 벽만 본다.
+ */
+export function pieceBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[]): Footprint {
+  return boxFromClips(f, wallClips(f, polygon));
 }
 
-/** 고른 사각형의 네 변 가운데 벽 때문에 줄인 변 (원래 가구 좌표의 가로 u·깊이 v 방향) */
-export type WallSides = { uMin: boolean; uMax: boolean; vMin: boolean; vMax: boolean };
+/** 조각을 고를 사각형: 원래 가구 사각형을 PIECE_GROW만큼 넓힌 뒤 벽 쪽을 줄인다 (pieceBox) */
+export function pickBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[]): Footprint {
+  return boxFromClips(f, wallClips(f, polygon, PIECE_GROW), PIECE_GROW);
+}
+
+// 바닥 다각형은 자동 보정이 틀릴 수 있다 (없는 꺾임, 어긋난 벽). 원래 가구 사각형 깊이 들어온 벽이나 변 끝에만 살짝 걸친 벽은
+// 그대로 줄이면 가구가 잘린다 → 고른 스플랫에서 그 자리에 벽면이 정말 있는지 보고 정한다.
+/** 원래 가구 사각형 안으로 이보다 깊이 들어온 벽은 확인한다 (m). 얕게 걸친 벽은 그대로 믿는다 (가구 상자가 벽에 살짝 걸침) */
+export const WALL_TRUST_DEPTH = 0.15;
+/** 변을 이 비율보다 적게만 덮는 벽은 확인한다 (꺾인 모서리 끝) */
+export const WALL_MIN_COVER = 0.5;
+/** 벽면을 찾는 띠: 벽 직선 양쪽 (m) */
+const WALL_EVIDENCE_BAND = 0.05;
+/** 벽면을 찾는 높이: 원래 가구 높이 위로 이 구간 (가구 자신이 아닌 곳) */
+const WALL_EVIDENCE_ABOVE: [number, number] = [0.15, 0.95];
+/** 찾을 높이가 이보다 낮으면(천장에 닿는 큰 가구) 확인하지 못한다 → 벽을 믿는다 (m) */
+const WALL_EVIDENCE_MIN_SPAN = 0.3;
+/** 비교할 안쪽 띠: 벽 직선에서 가구 쪽으로 이만큼 (m) */
+const WALL_EVIDENCE_INSIDE = 0.3;
+/** 벽 띠의 스플랫이 1m²에 이보다 적으면 벽이 없다고 본다 */
+export const WALL_EVIDENCE_DENSITY = 150;
+
+export const suspectClip = (clip: WallClip) => clip.depth > WALL_TRUST_DEPTH || clip.cover < WALL_MIN_COVER;
+
+/** 벽 직선 띠와 안쪽 띠의 스플랫 수, 띠의 넓이(m², 가로 × 높이). 높이가 모자라 확인하지 못하면 null */
+export type WallEvidence = { wall: number; inside: number; area: number } | null;
+
+/**
+ * 벽이 정말 있는지: 원래 가구 높이 위(WALL_EVIDENCE_ABOVE)에서, 벽 직선 띠(양쪽 WALL_EVIDENCE_BAND)의 스플랫 수를 센다.
+ * 같은 높이의 안쪽 띠(벽에서 WALL_EVIDENCE_INSIDE 가구 쪽)와 비교한다
+ * @param splats 고른 스플랫 (방 좌표)
+ * @param grow 고를 때 넓힌 만큼 (변을 따라 셀 구간)
+ */
+export function wallEvidence(splats: ArrayLike<{ x: number; y: number; z: number }>, f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'h' | 'rotationDeg'>, clip: WallClip, grow = 0): WallEvidence {
+  const y0 = f.h + WALL_EVIDENCE_ABOVE[0];
+  const y1 = Math.min(f.h + WALL_EVIDENCE_ABOVE[1], MAX_PIECE_TOP);
+  if (y1 - y0 < WALL_EVIDENCE_MIN_SPAN) return null;
+  const [u, v] = fixtureAxes(f.rotationDeg);
+  const onU = clip.side === 'uMin' || clip.side === 'uMax';
+  const axis = onU ? u : v;
+  const other = onU ? v : u;
+  const otherHalf = (onU ? f.d : f.w) / 2 + grow;
+  const sign = clip.side === 'uMax' || clip.side === 'vMax' ? 1 : -1;
+  const line = clip.limit + sign * PIECE_WALL_GAP;
+  const inner = line - sign * WALL_EVIDENCE_INSIDE;
+  let wall = 0;
+  let inside = 0;
+  for (let i = 0; i < splats.length; i += 1) {
+    const s = splats[i];
+    if (s.y < y0 || s.y > y1) continue;
+    const dx = s.x - f.x;
+    const dz = s.z - f.z;
+    if (Math.abs(dx * other[0] + dz * other[1]) > otherHalf) continue;
+    const a = dx * axis[0] + dz * axis[1];
+    if (Math.abs(a - line) <= WALL_EVIDENCE_BAND) wall += 1;
+    else if (Math.abs(a - inner) <= WALL_EVIDENCE_BAND) inside += 1;
+  }
+  return { wall, inside, area: 2 * otherHalf * (y1 - y0) };
+}
+
+/** 벽면이 있다고 볼지 (확인하지 못했으면 벽을 믿는다) */
+export const hasWall = (e: WallEvidence) => e === null || (e.wall / e.area >= WALL_EVIDENCE_DENSITY && e.wall >= 2 * e.inside);
 
 export function wallSides(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, polygon: Point2[]): WallSides {
-  const pick = pickBox(f, polygon);
+  return sidesOfBox(f, pickBox(f, polygon));
+}
+
+/** 고른 사각형(pickBox처럼 PIECE_GROW만큼 넓힌 뒤 줄인 것)에서 줄인 변 */
+export function sidesOfBox(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, pick: Footprint): WallSides {
   const [u, v] = fixtureAxes(f.rotationDeg);
   const cu = (pick.x - f.x) * u[0] + (pick.z - f.z) * u[1];
   const cv = (pick.x - f.x) * v[0] + (pick.z - f.z) * v[1];
