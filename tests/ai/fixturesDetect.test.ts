@@ -91,6 +91,16 @@ describe('locateFixtures', () => {
     expect([f.x, f.w]).toEqual([-1.725, 0.25]);
   });
 
+  it('가구 셋 이상을 통째로 감싼 상자(여러 가구를 묶은 것)는 버린다', () => {
+    const chairs = [det([300, 300, 380, 380], { label: '의자' }), det([300, 420, 380, 500], { label: '의자' }), det([300, 540, 380, 620], { label: '의자' })];
+    // 의자 셋을 감싼 큰 상자 → 버림, 의자는 남김
+    const grouped = locateFixtures([det([280, 280, 400, 640], { label: '가구' }), ...chairs], tiles, ROOM);
+    expect(grouped.map((f) => f.label)).toEqual(['의자', '의자', '의자']);
+    // 둘만 감싼 책상(밑에 넣은 의자)은 남김
+    const desk = locateFixtures([det([280, 280, 400, 520], { label: '책상' }), ...chairs.slice(0, 2)], tiles, ROOM);
+    expect(desk.map((f) => f.label)).toEqual(['책상', '의자', '의자']);
+  });
+
   it('확실한 것, 큰 것부터 번호를 붙인다', () => {
     const out = locateFixtures(
       [det([500, 500, 600, 600], { label: '의자', confidence: 'low' }), det([500, 500, 600, 600], { label: '의자' }), det([250, 250, 750, 500], { label: '소파' })],
