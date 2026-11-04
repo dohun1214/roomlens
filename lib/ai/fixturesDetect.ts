@@ -41,6 +41,13 @@ export const MAX_TILES = 4;
 const MARGIN = 0.15;
 /** 상자가 그림 가장자리에서 이 비율 안이면 가장자리에서 잘린 것으로 본다 */
 const EDGE = 0.015;
+/**
+ * 다른 후보를 이만큼 이상 통째로 감싸는 상자는 여러 가구를 묶은 상자로 보고 버린다 (프롬프트로 막아도 가끔 줄지어 놓인 소파·탁자를 한 상자로 묶는다).
+ * 책상 밑에 넣은 의자처럼 한두 개를 감싸는 것은 흔하므로 셋부터 본다
+ */
+const GROUP_MIN_INSIDE = 3;
+/** 다른 후보의 넓이 가운데 이 비율 이상이 안에 들면 통째로 감싼 것으로 본다 */
+const GROUP_INSIDE_SHARE = 0.9;
 
 /** 위에서 찍을 칸 하나: 가운데(방 좌표), 한 변의 길이(m, 정사각형), 그림의 가로 방향(회전) */
 export type TopTile = { center: Point2; size: number; rotationDeg: number };
@@ -170,7 +177,7 @@ function fixtureRect(f: Pick<Fixture, 'x' | 'z' | 'w' | 'd' | 'rotationDeg'>, ro
 
 /**
  * Gemini가 찾은 상자들을 원래 가구 후보로 바꾼다. 높이는 이름별로 흔한 값(나중에 스플랫에서 다시 잰다).
- * 방 밖, 너무 작거나 큰 것은 버리고, 이웃한 칸에서 두 번 찾은 것은 하나로 합친다. 방의 범위를 넘는 부분은 자른다.
+ * 방 밖, 너무 작거나 큰 것, 여러 가구를 묶은 상자(다른 후보 셋 이상을 통째로 감쌈)는 버리고, 이웃한 칸에서 두 번 찾은 것은 하나로 합친다. 방의 범위를 넘는 부분은 자른다.
  */
 export function locateFixtures(detections: FixtureDetection[], tiles: TopTile[], polygon: Point2[]): Fixture[] {
   if (tiles.length === 0 || polygon.length < 3) return [];
@@ -217,6 +224,8 @@ export function locateFixtures(detections: FixtureDetection[], tiles: TopTile[],
   }
 
   const out: Fixture[] = [];
+  // 여러 가구를 묶은 상자 (다른 후보 셋 이상을 통째로 감쌈)
+  const groups = new Set(found.filter((f) => found.filter((g) => g !== f && overlap(f, g) >= GROUP_INSIDE_SHARE * area(g)).length >= GROUP_MIN_INSIDE));
   // 확실한 것, 큰 것부터
   found.sort((p, q) => Number(q.high) - Number(p.high) || area(q) - area(p));
   // 벽 밖으로 나간 부분(벽에 붙은 가구를 조금 크게 감싼 것)은 방의 범위까지 자른다
@@ -224,6 +233,7 @@ export function locateFixtures(detections: FixtureDetection[], tiles: TopTile[],
   const bs = polygon.map((p) => dot(p, down));
   const [minA, maxA, minB, maxB] = [Math.min(...as), Math.max(...as), Math.min(...bs), Math.max(...bs)];
   for (const f of found) {
+    if (groups.has(f)) continue;
     f.a0 = Math.max(f.a0, minA);
     f.a1 = Math.min(f.a1, maxA);
     f.b0 = Math.max(f.b0, minB);
