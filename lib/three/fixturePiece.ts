@@ -2,8 +2,30 @@
 // 방 화면은 LOD로 열어 원본 배열이 비어 있으므로, 조각을 만들 때만 같은 파일을 LOD 없이 한 번 더 읽는다.
 import * as THREE from 'three';
 import { PackedSplats, SplatEdit, type SplatMesh, SplatEditRgbaBlendMode, SplatEditSdf, SplatEditSdfType, writeSpz } from '@sparkjsdev/spark';
-import type { Point2 } from './floorDrag';
-import { cleanPieceMask, fillPlanes, hiddenBox, inFootprint, keptBox, MAX_PIECE_TOP, PIECE_FLOOR_CUT, pickBox, pieceTop, planePoint, toPieceFrame, wallSides, type PieceSplat } from '@/lib/rooms/fixturePiece';
+import type { Footprint, Point2 } from './floorDrag';
+import {
+  boxFromClips,
+  cleanPieceMask,
+  fillPlanes,
+  hasWall,
+  hiddenBox,
+  inFootprint,
+  keptBox,
+  MAX_PIECE_TOP,
+  PIECE_FLOOR_CUT,
+  PIECE_GROW,
+  pieceTop,
+  planePoint,
+  sidesOfBox,
+  suspectClip,
+  toPieceFrame,
+  wallClips,
+  wallEvidence,
+  type PieceSplat,
+  type WallClip,
+  type WallEvidence,
+  type WallSides,
+} from '@/lib/rooms/fixturePiece';
 import type { Fixture, PieceBox } from '@/lib/rooms/fixtures';
 import type { SegmentHook, SegmentOutcome } from './fixtureSegment';
 
@@ -25,7 +47,7 @@ export async function loadSourceSplats(url: string, onProgress?: (fraction: numb
 }
 
 /** 개발 서버 실측용: window.__roomlensPieceDump가 배열이면 고른 스플랫(x,y,z,크기,불투명도,r,g,b)과 다듬기 결과를 넣는다 */
-type PieceDump = { id: string; h: number; box: ReturnType<typeof pickBox>; walls: ReturnType<typeof wallSides>; data: Float32Array; keep: Uint8Array; geomKeep: Uint8Array; aiKeep: Uint8Array | null; segment: string }[];
+type PieceDump = { id: string; h: number; box: Footprint; walls: WallSides; data: Float32Array; keep: Uint8Array; geomKeep: Uint8Array; aiKeep: Uint8Array | null; segment: string; clips: (WallClip & { suspect: boolean; evidence: WallEvidence })[] }[];
 const pieceDump = (): PieceDump | null => {
   if (process.env.NODE_ENV === 'production' || typeof window === 'undefined') return null;
   const dump = (window as unknown as { __roomlensPieceDump?: unknown }).__roomlensPieceDump;
@@ -43,11 +65,14 @@ export type ExtractedPiece = { bytes: Uint8Array; count: number; top: number; bo
  * @returns 고를 스플랫이 없으면 null
  */
 export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Matrix4, f: Fixture, polygon: Point2[], others: Fixture[] = [], segment?: SegmentHook): Promise<ExtractedPiece | null> {
-  const box = pickBox(f, polygon);
+  // 바닥 다각형의 벽으로 줄인다. 의심스러운 벽(가구 깊이 들어오거나 변 끝에만 걸친 것)은 일단 넓게 고른 뒤 벽면이 보이면 줄인다
+  const clips = wallClips(f, polygon, PIECE_GROW);
+  const trusted = clips.filter((c) => !suspectClip(c));
+  const suspects = clips.filter(suspectClip);
+  const loose = boxFromClips(f, trusted, PIECE_GROW);
   // 넓혀 고른 곳이 다른 원래 가구 자리에 걸치면 그 가구 것은 가져오지 않는다 (이 가구 자리와 겹치는 곳은 이 가구 것으로 본다)
   const near = others.filter((o) => o.id !== f.id && Math.hypot(o.x - f.x, o.z - f.z) < (o.w + o.d + f.w + f.d) / 2 + 0.3);
   const otherFixture = (x: number, z: number) => near.some((o) => inFootprint(o, x, z)) && !inFootprint(f, x, z);
-  const walls = wallSides(f, polygon);
   const p = new THREE.Vector3();
   const scaleOf = new THREE.Vector3().setFromMatrixScale(toRoom).x;
   const picked: number[] = [];
@@ -57,12 +82,31 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
   source.forEachSplat((i, center, scales, _quaternion, opacity, color) => {
     if (opacity < MIN_OPACITY) return;
     p.copy(center).applyMatrix4(toRoom);
-    if (p.y < PIECE_FLOOR_CUT || p.y > MAX_PIECE_TOP || !inFootprint(box, p.x, p.z) || otherFixture(p.x, p.z)) return;
+    if (p.y < PIECE_FLOOR_CUT || p.y > MAX_PIECE_TOP || !inFootprint(loose, p.x, p.z) || otherFixture(p.x, p.z)) return;
     picked.push(i);
     found.push({ x: p.x, y: p.y, z: p.z, scale: Math.max(scales.x, scales.y, scales.z) * scaleOf, opacity });
     if (dump) colors.push(color.r, color.g, color.b);
   });
   if (picked.length === 0) return null;
+  const evidence = suspects.map((clip) => ({ clip, evidence: wallEvidence(found, f, clip, PIECE_GROW) }));
+  const real = evidence.filter((e) => hasWall(e.evidence)).map((e) => e.clip);
+  const box = real.length > 0 ? boxFromClips(f, [...trusted, ...real], PIECE_GROW) : loose;
+  if (real.length > 0) {
+    // 정말 있는 벽 너머(벽 쪽 여유)는 버린다
+    let n = 0;
+    for (let k = 0; k < found.length; k += 1) {
+      if (!inFootprint(box, found[k].x, found[k].z)) continue;
+      picked[n] = picked[k];
+      found[n] = found[k];
+      if (dump) colors.copyWithin(n * 3, k * 3, k * 3 + 3);
+      n += 1;
+    }
+    picked.length = n;
+    found.length = n;
+    if (dump) colors.length = n * 3;
+    if (n === 0) return null;
+  }
+  const walls = sidesOfBox(f, box);
   // 옆 물건·떠다니는 조각·흐린 배경을 뺀 뒤 높이를 잰다
   let keep = cleanPieceMask(found, box, walls, f.h);
   const geomKeep = keep;
@@ -91,7 +135,9 @@ export async function extractFixturePiece(source: PackedSplats, toRoom: THREE.Ma
   if (dump) {
     const data = new Float32Array(found.length * 8);
     found.forEach((s, k) => data.set([s.x, s.y, s.z, s.scale, s.opacity, colors[k * 3], colors[k * 3 + 1], colors[k * 3 + 2]], k * 8));
-    dump.push({ id: f.id, h: f.h, box, walls, data, keep, geomKeep, aiKeep: aiKeep ?? null, segment: segmentStatus });
+    // 모든 벽(믿은 것 포함)의 벽면 근거: 문턱 값을 재 보는 데 쓴다
+    const clipEvidence = [...trusted.map((clip) => ({ ...clip, suspect: false, evidence: null })), ...evidence.map((e) => ({ ...e.clip, suspect: true, evidence: e.evidence }))];
+    dump.push({ id: f.id, h: f.h, box, walls, data, keep, geomKeep, aiKeep: aiKeep ?? null, segment: segmentStatus, clips: clipEvidence });
   }
   const heights: number[] = [];
   for (let k = 0; k < found.length; k += 1) if (keep[k]) heights.push(found[k].y);
