@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { closeDoorways, estimateRoomLayout, removeSmallSteps, simplifyOrthogonal, surroundedCells, traceOutline } from '@/lib/rooms/autoLayout';
+import { closeDoorways, estimateRoomLayout, furnitureTops, removeSmallSteps, simplifyOrthogonal, surroundedCells, traceOutline } from '@/lib/rooms/autoLayout';
 import type { Point2 } from '@/lib/three/floorDrag';
 import { polygonIoU } from '@/lib/eval/roomPrepScore';
 import { FURNITURE, L_ROOM, fakeRoom, iouBack, rotation, type Vec3 } from './fakeRoom';
@@ -73,6 +73,14 @@ describe('estimateRoomLayout: 위아래 표가 약한 방', () => {
     const est = estimateRoomLayout({ count, positions: Float32Array.from(pos), normals: Float32Array.from(nor), weights: new Float32Array(count).fill(1) })!;
     expect(est.up[1]).toBeGreaterThan(0.99);
     expect(est.ceiling - est.floor).toBeCloseTo(2.4, 1);
+  });
+});
+
+describe('furnitureTops', () => {
+  it('가구 윗면은 바닥 쪽에 몰려 있다: 바른 위쪽이면 +, 거꾸로면 -', () => {
+    const pts = fakeRoom(L_ROOM, 2.5, FURNITURE, (p: Vec3) => p);
+    expect(furnitureTops(pts, { up: [0, 1, 0], floor: 0, ceiling: 2.5 })).toBeGreaterThan(0.3);
+    expect(furnitureTops(pts, { up: [0, -1, 0], floor: -2.5, ceiling: 0 })).toBeLessThan(-0.3);
   });
 });
 
