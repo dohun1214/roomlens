@@ -945,10 +945,34 @@ function localWallAngle(
 }
 
 /** 표면 점에서 방의 위쪽·바닥·천장·크기·벽 윤곽을 찾는다 */
+/**
+ * 위아래 표(upVote)가 이보다 약하면 표만 믿지 않는다. 가구가 적고 창 밖·붙박이장·커튼처럼 위쪽에도 표면이 많은 방에서는
+ * 표가 약하게 반대로 나오기 때문이다 (생성한 한국식 침실·작은방·원룸에서 확인)
+ */
+export const UP_VOTE_SURE = 0.3;
+
 export function estimateRoomLayout(points: ScenePoints, options: EstimateOptions = {}): LayoutEstimate | null {
   if (points.count < 1000) return null;
   const axes = dominantAxes(points);
-  const best = chooseUp(points, axes, options.flipUp);
+  const auto = chooseUp(points, axes);
+  // 표가 약하면 두 방향으로 다 풀어 보고, 벽을 찾는 높이(문틀 위~천장 아래)에 세로 표면이 적은 쪽을 고른다.
+  // 그 높이에는 벽만 있어야 하는데(4번의 가정), 거꾸로 보면 그 높이가 바닥 근처라 가구 옆면이 잔뜩 걸린다
+  let flip = false;
+  let solved: LayoutEstimate | null = null;
+  if (Math.abs(auto.score) < UP_VOTE_SURE) {
+    const asIs = solveLayout(points, axes, auto, {});
+    const other = solveLayout(points, axes, chooseUp(points, axes, true), {});
+    flip = !!asIs && !!other && other.info.wallCells < asIs.info.wallCells;
+    solved = flip ? other : asIs;
+  }
+  if (options.flipUp) flip = !flip;
+  // 같은 방향을 이미 풀었고 다른 선택(방 고르기·디버그·사용자 뒤집기)이 없으면 그대로 쓴다
+  if (solved && !options.flipUp && options.pick === undefined && !options.debug) return solved;
+  return solveLayout(points, axes, flip ? chooseUp(points, axes, true) : auto, options);
+}
+
+/** 정해진 위쪽(best)으로 바닥 위 윤곽을 찾는다 */
+function solveLayout(points: ScenePoints, axes: [Vec3, Vec3, Vec3], best: ReturnType<typeof chooseUp>, options: EstimateOptions): LayoutEstimate | null {
   const up = best.up;
   const other = axes.filter((a) => Math.abs(dot(a, up)) < 0.5)[0] ?? axes[1];
   // 위쪽과 정확히 직각이 되게 다듬는다 (바닥 기울기를 바로잡았을 때)
