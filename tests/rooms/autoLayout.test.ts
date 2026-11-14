@@ -51,6 +51,31 @@ describe('estimateRoomLayout', () => {
   });
 });
 
+describe('estimateRoomLayout: 위아래 표가 약한 방', () => {
+  it('가구가 적고 창 밖 풍경이 위쪽에 많은 방도 위아래를 바로 잡는다', () => {
+    const id = (p: Vec3) => p;
+    const room: [number, number][] = [[0, 0], [4, 0], [4, 3.6], [0, 3.6]];
+    // 침대 하나와 천장까지 닿는 붙박이장 (위아래가 같다)
+    const pts = fakeRoom(room, 2.4, [{ x0: 1, x1: 2.6, z0: 1.4, z1: 3.5, h: 0.5 }, { x0: 0, x1: 0.6, z0: 0, z1: 3.6, h: 2.4 }], id);
+    // 창 밖(벽 너머): 0.9~2.1 m 높이의 풍경면과 베란다 바닥·천장
+    const pos = Array.from(pts.positions);
+    const nor = Array.from(pts.normals);
+    let seed = 7;
+    const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let k = 0; k < 60000; k += 1) {
+      const x = 1 + r() * 2;
+      const pick = r();
+      if (pick < 0.5) { pos.push(x, 0.9 + r() * 1.2, -0.8); nor.push(0, 0, 1); }
+      else if (pick < 0.75) { pos.push(x, 0.9, -r() * 0.8); nor.push(0, 1, 0); }
+      else { pos.push(x, 2.1, -r() * 0.8); nor.push(0, -1, 0); }
+    }
+    const count = pos.length / 3;
+    const est = estimateRoomLayout({ count, positions: Float32Array.from(pos), normals: Float32Array.from(nor), weights: new Float32Array(count).fill(1) })!;
+    expect(est.up[1]).toBeGreaterThan(0.99);
+    expect(est.ceiling - est.floor).toBeCloseTo(2.4, 1);
+  });
+});
+
 describe('closeDoorways', () => {
   it('벽 줄 위의 문 폭 틈은 잇고, 세로로 지나가는 벽 단면끼리는 잇지 않는다', () => {
     const nx = 40;
