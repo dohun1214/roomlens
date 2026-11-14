@@ -44,6 +44,11 @@ const ROOMS: Record<string, string> = {
   villa09: 'c6ec1a27-ed23-4f8c-ad79-69901ec4a794',
   villa02: '710a3ada-2dd1-4ade-9615-0382229aafb5',
   living: '01a65fef-29cd-4d75-b1fb-6713c9505c86',
+  // 생성한 한국식 방
+  koLiving: 'cb05693e-5745-4316-bf5f-8fc8a5a78160',
+  koBedroom: '48fdf433-b393-430c-a606-83811eab1624',
+  koStudy: '500cdafd-f868-40e5-beb9-7b21f9b5ee85',
+  koOneroom: '81a23433-52b0-4312-b7e4-30515e754e41',
 };
 
 type Rule = 'desk-window' | 'bed-far-door' | 'tv-facing-sofa' | 'shoe-near-door';
