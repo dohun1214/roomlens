@@ -36,8 +36,10 @@ export function sampleScenePoints(mesh: SplatMesh, maxPoints = 600_000): ScenePo
   const xs: number[] = [];
   const ys: number[] = [];
   const zs: number[] = [];
-  source.forEachSplat((i, center) => {
+  const ops: number[] = [];
+  source.forEachSplat((i, center, _scales, _quaternion, opacity) => {
     if (i % probe !== 0) return;
+    ops.push(opacity);
     xs.push(center.x);
     ys.push(center.y);
     zs.push(center.z);
@@ -50,6 +52,10 @@ export function sampleScenePoints(mesh: SplatMesh, maxPoints = 600_000): ScenePo
   if (!(size > 0)) return null;
   // 장면의 한 변이 10 m라면 6 cm 넘는 스플랫은 뭉친 것으로 본다
   const maxScale = size * 0.006;
+  // 흐린 스플랫이 대부분인 장면(겹친 반투명 스플랫으로 표면을 만드는 학습기)에서는 기준을 낮춘다:
+  // 더 불투명한 30%는 남도록
+  ops.sort((a, b) => a - b);
+  const minOpacity = Math.min(MIN_OPACITY, ops[Math.floor(ops.length * 0.7)] ?? MIN_OPACITY);
 
   // 2) 고르게 건너뛰며 뽑는다. 파일 순서는 공간적으로 몰려 있으므로 끝까지 훑은 뒤에 다시 고르게 줄인다
   const room = maxPoints * 3;
@@ -61,7 +67,7 @@ export function sampleScenePoints(mesh: SplatMesh, maxPoints = 600_000): ScenePo
   const axis = new THREE.Vector3();
   let count = 0;
   source.forEachSplat((i, center, scales, quaternion, opacity, color) => {
-    if (count >= room || i % stride !== 0 || opacity < MIN_OPACITY) return;
+    if (count >= room || i % stride !== 0 || opacity < minOpacity) return;
     const s = [scales.x, scales.y, scales.z];
     const big = Math.max(...s);
     if (!(big > 0) || big > maxScale) return;
