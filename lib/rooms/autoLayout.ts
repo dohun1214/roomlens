@@ -955,20 +955,46 @@ export function estimateRoomLayout(points: ScenePoints, options: EstimateOptions
   if (points.count < 1000) return null;
   const axes = dominantAxes(points);
   const auto = chooseUp(points, axes);
-  // 표가 약하면 두 방향으로 다 풀어 보고, 벽을 찾는 높이(문틀 위~천장 아래)에 세로 표면이 적은 쪽을 고른다.
-  // 그 높이에는 벽만 있어야 하는데(4번의 가정), 거꾸로 보면 그 높이가 바닥 근처라 가구 옆면이 잔뜩 걸린다
+  // 표가 약하면 두 단서를 더 본다 (+ 쪽이면 표대로, - 쪽이면 뒤집는다).
+  // 1) 두 방향으로 다 풀어, 벽을 찾는 높이(문틀 위~천장 아래)에 벽 칸이 적은 쪽. 그 높이에는 벽만 있어야 하는데(4번의 가정),
+  //    거꾸로 보면 그 높이가 바닥 근처라 키 큰 가구가 벽처럼 걸린다. 키 큰 가구가 없는 방에서는 차이가 작다
+  // 2) 가구 윗면: 가구는 바닥에 서 있어서 앉는 면·탁자·침대·장 윗면이 바닥 쪽에 몰린다
   let flip = false;
   let solved: LayoutEstimate | null = null;
   if (Math.abs(auto.score) < UP_VOTE_SURE) {
     const asIs = solveLayout(points, axes, auto, {});
     const other = solveLayout(points, axes, chooseUp(points, axes, true), {});
-    flip = !!asIs && !!other && other.info.wallCells < asIs.info.wallCells;
+    if (asIs && other) {
+      const walls = Math.max(-1, Math.min(1, (other.info.wallCells - asIs.info.wallCells) / Math.max(1, asIs.info.wallCells)));
+      flip = walls + furnitureTops(points, auto) < 0;
+    }
     solved = flip ? other : asIs;
   }
   if (options.flipUp) flip = !flip;
   // 같은 방향을 이미 풀었고 다른 선택(방 고르기·디버그·사용자 뒤집기)이 없으면 그대로 쓴다
   if (solved && !options.flipUp && options.pick === undefined && !options.debug) return solved;
   return solveLayout(points, axes, flip ? chooseUp(points, axes, true) : auto, options);
+}
+
+/**
+ * 가구 윗면 단서 (-1~1, +면 best.up이 맞다): 바닥에서 12~40% 높이의 수평면 무게와 천장에서 같은 만큼 아래의 수평면 무게를 견준다.
+ * 바닥·천장 바로 곁(12% 안)은 걸레받이·몰딩·창틀이라 뺀다
+ */
+export function furnitureTops(points: ScenePoints, best: { up: Vec3; floor: number; ceiling: number }): number {
+  const span = best.ceiling - best.floor;
+  if (!(span > 0)) return 0;
+  const cos20 = Math.cos((20 * Math.PI) / 180);
+  const [ux, uy, uz] = best.up;
+  let low = 0;
+  let high = 0;
+  for (let i = 0; i < points.count; i += 1) {
+    const k = i * 3;
+    if (Math.abs(points.normals[k] * ux + points.normals[k + 1] * uy + points.normals[k + 2] * uz) < cos20) continue;
+    const t = (points.positions[k] * ux + points.positions[k + 1] * uy + points.positions[k + 2] * uz - best.floor) / span;
+    if (t > 0.12 && t < 0.4) low += points.weights[i];
+    else if (t > 0.6 && t < 0.88) high += points.weights[i];
+  }
+  return (low - high) / Math.max(1e-9, low + high);
 }
 
 /** 정해진 위쪽(best)으로 바닥 위 윤곽을 찾는다 */
