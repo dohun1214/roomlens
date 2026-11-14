@@ -53,7 +53,7 @@
 - [Spark](https://sparkjs.dev) 렌더러의 LOD로 폰에서도 그립니다 (iPhone 15 Pro 실측: 60FPS, 로딩 약 8.5초).
 - 파일은 브라우저가 Cloudflare R2에 직접 올리므로 서버 요청 크기 제한(4.5MB)과 상관없습니다.
 - 마우스 끌기·휠, 키보드(W A S D, Q E, Shift), 폰 두 손가락으로 움직이고, 보정된 방에서는 카메라가 벽 밖으로 나가지 않습니다.
-- 촬영하지 않아도 쓸 수 있도록 공개 라이선스(CC BY 4.0) 장면 10개와, 직접 만든 한국식 방 4개(거실·안방·작은방·오피스텔 원룸: 베란다 샷시, 붙박이장, 장판·강마루, 스탠드 에어컨)를 샘플 방으로 공개해 두었습니다.
+- 촬영하지 않아도 쓸 수 있도록 공개 라이선스(CC BY 4.0) 장면 10개와, 직접 만든 한국식 방 4개(거실·안방·작은방·오피스텔 원룸: 간유리 샷시, 붙박이장, 장판·강마루, 스탠드 에어컨)를 샘플 방으로 공개해 두었습니다. 한국식 방은 절차적으로 만든 방을 Blender(Cycles)로 사진처럼 240장쯤 렌더링하고, 그 사진으로 3D 가우시안을 학습(Brush)해 실제 스캔과 같은 형태로 만들었습니다.
 
 ### 2. AI로 방 준비하기 (크기 보정 · 문·창문 · 원래 가구)
 
@@ -426,7 +426,8 @@ npm run build
 | Studio 11 | milanoski, [SuperSplat](https://superspl.at/scene/c37cb759) | CC BY 4.0 | 샘플 방, 홈·화면 예시 그림 |
 | HAUSSMANN APARTMENT | Stéphane Agullo (sa3d), [SuperSplat](https://superspl.at/scene/4de797f4) | CC BY 4.0 | 가구 없는 샘플 방, 화면 예시 그림 |
 | 그 밖의 샘플 방 8개 | milanoski, ethan3111, tosolini, adamassets, leninlpg777, andriishramko, [SuperSplat](https://superspl.at) | CC BY 4.0 | 샘플 방 (방 화면에 장면마다 출처 표시) |
-| 한국식 샘플 방 4개 | 직접 만듦 (방·가구·소품 모두 절차적 생성) | - | 샘플 방, 한국식 방 평가 |
+| 한국식 샘플 방 4개 | 직접 만듦 (방·가구·소품 절차적 생성 → Blender 렌더 → Brush로 3DGS 학습) | - | 샘플 방, 한국식 방 평가 |
+| 바닥·벽·천장·패브릭·원목 텍스처 | [Poly Haven](https://polyhaven.com/textures) (laminate_floor_02, laminate_floor, marble_01, plastered_wall_04, ceiling_interior, 패브릭·원목 등) | CC0 | 한국식 샘플 방 렌더링 |
 | InteriorGS | Hugging Face 데이터셋 | 비상업 연구·교육 전용 | 개발 중 검증·평가용 (저장소·공개 방에 올리지 않음) |
 
 - 가구 모델은 웹용으로 메시·텍스처를 압축하고 크기를 맞췄습니다 (`scripts/dev-data/build-furniture-models.mjs`). 목록의 작은 사진(`public/furniture/`)은 이 모델을 그린 것입니다 (`scripts/dev-data/render-furniture-thumbs.mjs`).
