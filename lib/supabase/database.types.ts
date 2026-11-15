@@ -391,6 +391,38 @@ export type Database = {
         };
         Relationships: [];
       };
+      usage_events: {
+        Row: {
+          created_at: string;
+          id: number;
+          kind: string;
+          room_id: string | null;
+          visitor: string;
+        };
+        Insert: {
+          created_at?: string;
+          id?: never;
+          kind: string;
+          room_id?: string | null;
+          visitor: string;
+        };
+        Update: {
+          created_at?: string;
+          id?: never;
+          kind?: string;
+          room_id?: string | null;
+          visitor?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: 'usage_events_room_id_fkey';
+            columns: ['room_id'];
+            isOneToOne: false;
+            referencedRelation: 'rooms';
+            referencedColumns: ['id'];
+          },
+        ];
+      };
       user_furniture: {
         Row: {
           category: string;
