@@ -124,6 +124,34 @@ describe('closeDoorways', () => {
     expect(Array.from({ length: 16 }, (_, k) => mask[2 * nx + 15 + k]).every((v) => v === 1)).toBe(true);
     expect(mask[6 * nx + 8]).toBe(0);
   });
+
+  it('문보다 넓은 틈은 인방이 보일 때만 잇는다 (틈 안의 짧은 인방 조각은 틈으로 센다)', () => {
+    const nx = 60;
+    const nz = 6;
+    const make = () => {
+      const mask = new Uint8Array(nx * nz);
+      // 가로 벽 (z=2): x 0~9, 40~59. 그 사이 30칸(1.5 m) 틈 = 복도로 트인 곳. 틈 안에 인방 조각 두 칸
+      for (let i = 0; i < nx; i += 1) if (i < 10 || i >= 40) mask[2 * nx + i] = 1;
+      mask[2 * nx + 20] = 1;
+      mask[2 * nx + 21] = 1;
+      return mask;
+    };
+    const gapClosed = (mask: Uint8Array) => Array.from({ length: 30 }, (_, k) => mask[2 * nx + 10 + k]).every((v) => v === 1);
+    // 인방이 없으면 문 폭(20칸)보다 넓어서 잇지 않는다
+    const bare = make();
+    closeDoorways(bare, nx, nz, 20, 6, { mask: new Uint8Array(nx * nz), maxGap: 40 });
+    expect(gapClosed(bare)).toBe(false);
+    // 인방이 틈의 대부분에 보이면 잇는다
+    const withHeader = make();
+    const header = new Uint8Array(nx * nz);
+    for (let i = 12; i < 36; i += 1) header[2 * nx + i] = 1;
+    closeDoorways(withHeader, nx, nz, 20, 6, { mask: header, maxGap: 40 });
+    expect(gapClosed(withHeader)).toBe(true);
+    // header.maxGap보다 넓으면 인방이 있어도 잇지 않는다
+    const tooWide = make();
+    closeDoorways(tooWide, nx, nz, 20, 6, { mask: header, maxGap: 25 });
+    expect(gapClosed(tooWide)).toBe(false);
+  });
 });
 
 describe('removeSmallSteps', () => {
