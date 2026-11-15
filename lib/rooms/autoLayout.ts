@@ -556,14 +556,23 @@ function components(mask: Uint8Array, nx: number, nz: number): { labels: Int32Ar
 
 /** 문틀 위의 벽(인방)이 안 보이는 출입구도 방의 경계로 막는다 (m) */
 export const DOOR_GAP = 1.25;
+/** 천장 바로 아래에서 인방을 찾는 띠의 두께 (m) */
+export const HEADER_THIN = 0.2;
+/** 인방이 보이면 이 너비(m)까지의 틈도 잇는다 (복도로 트인 곳, 미닫이 문) */
+export const WIDE_DOOR_GAP = 2.0;
+/** 틈 가운데 인방이 보여야 하는 비율 */
+const HEADER_COVER = 0.6;
+/** 천장 점이 섞이지 않게 띠의 위쪽은 천장보다 이만큼 아래에서 끝낸다 (m) */
+const HEADER_TOP = 0.05;
 /** 이만큼 이상 가로·세로로 이어진 벽끼리만 잇는다 (세로로 지나가는 벽의 단면은 짧아서 잇지 않는다) (m) */
 const MIN_WALL_RUN = 0.3;
 
 /**
  * 같은 줄(가로 또는 세로) 위에서 maxGap칸 이하로 끊긴 벽을 잇는다. 끊긴 양쪽 벽이 그 줄 방향으로 minRun칸 넘게 이어질 때만.
  * 벽이 끊긴 곳은 대부분 출입구라서, 이어야 이웃한 방으로 새어 나가지 않는다.
+ * header가 있으면 header.maxGap칸까지의 넓은 틈도, 틈의 HEADER_COVER 넘게 인방(header.mask)이 보이면 잇는다.
  */
-export function closeDoorways(mask: Uint8Array, nx: number, nz: number, maxGap: number, minRun: number): void {
+export function closeDoorways(mask: Uint8Array, nx: number, nz: number, maxGap: number, minRun: number, header?: { mask: Uint8Array; maxGap: number }): void {
   const fill = (len: number, at: (k: number) => number) => {
     const runs: [number, number][] = [];
     let start = -1;
@@ -575,11 +584,25 @@ export function closeDoorways(mask: Uint8Array, nx: number, nz: number, maxGap: 
         start = -1;
       }
     }
+    const long = (r: [number, number]) => r[1] - r[0] + 1 >= minRun;
     for (let r = 1; r < runs.length; r += 1) {
       const [a0, a1] = runs[r - 1];
       const [b0, b1] = runs[r];
       const gap = b0 - a1 - 1;
       if (gap > 0 && gap <= maxGap && a1 - a0 + 1 >= minRun && b1 - b0 + 1 >= minRun) for (let k = a1 + 1; k < b0; k += 1) mask[at(k)] = 2;
+    }
+    if (!header) return;
+    // 더 넓은 틈(복도로 트인 곳, 미닫이 문)은 그 위에 인방(천장 바로 아래의 벽)이 대부분 보일 때만 잇는다.
+    // 틈 안의 짧은 벽 조각(인방의 일부)은 틈으로 센다
+    const longRuns = runs.filter(long);
+    for (let r = 1; r < longRuns.length; r += 1) {
+      const a1 = longRuns[r - 1][1];
+      const b0 = longRuns[r][0];
+      const gap = b0 - a1 - 1;
+      if (gap <= 0 || gap > header.maxGap) continue;
+      let covered = 0;
+      for (let k = a1 + 1; k < b0; k += 1) if (header.mask[at(k)] || mask[at(k)]) covered += 1;
+      if (covered >= gap * HEADER_COVER) for (let k = a1 + 1; k < b0; k += 1) if (mask[at(k)] !== 1) mask[at(k)] = 2;
     }
   };
   for (let j = 0; j < nz; j += 1) fill(nx, (i) => j * nx + i);
@@ -705,6 +728,9 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
   // 2) 문·창문 위의 벽(인방): 2 m부터 천장 조금 아래까지, 세로 표면이 절반 넘게 (천장의 흐린 점은 세로 표면이 아니다)
   const header = height - 0.12 > 2.15 ? slotsBetween(2.02, height - 0.12) : 0;
   const headerN = popcount(header);
+  // 천장이 낮아 인방이 얇을 때(천장 2.3 m, 문 2.2 m): 천장 바로 아래 띠만 본다
+  const thin = slotsBetween(height - HEADER_THIN, height - HEADER_TOP);
+  const thinN = popcount(thin);
   // 점이 듬성한 장면에서도 벽이 끊기지 않게 이웃 칸(3×3)의 높이 표시를 합쳐서 본다
   const near = (src: Uint32Array, c: number) => {
     const i = c % nx;
@@ -717,18 +743,21 @@ export function roomOutline(input: OutlineInput, cell = GRID, debug?: (d: Outlin
     return v >>> 0;
   };
   const wallMask = new Uint8Array(nx * nz);
+  const thinMask = new Uint8Array(nx * nz);
   let wallCells = 0;
   for (let c = 0; c < nx * nz; c += 1) {
     if (!any[c]) continue;
     const column = near(any, c);
     const isBody = bodyN > 0 && popcount(column & body) >= bodyN * 0.6 && popcount(column & top) >= topN * 0.5;
-    const isHeader = headerN >= 2 && popcount(near(vert, c) & header) >= headerN * 0.5;
+    const verts = near(vert, c);
+    const isHeader = headerN >= 2 && popcount(verts & header) >= headerN * 0.5;
+    if (thinN >= 2 && popcount(verts & thin) >= thinN * 0.5) thinMask[c] = 1;
     if (isBody || isHeader) {
       wallMask[c] = 1;
       wallCells += 1;
     }
   }
-  closeDoorways(wallMask, nx, nz, Math.round(DOOR_GAP / cell), Math.round(MIN_WALL_RUN / cell));
+  closeDoorways(wallMask, nx, nz, Math.round(DOOR_GAP / cell), Math.round(MIN_WALL_RUN / cell), { mask: thinMask, maxGap: Math.round(WIDE_DOOR_GAP / cell) });
   const wallThick = dilate(wallMask, nx, nz, 1);
   // 방 안 후보: 벽이 아니고, 바닥이나 가구가 보이는 칸 + 벽으로 둘러싸인 칸(바닥이 스캔되지 않은 곳도 방이다)
   const seen = new Uint8Array(nx * nz);
