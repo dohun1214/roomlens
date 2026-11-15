@@ -1,39 +1,41 @@
 import Image from 'next/image';
 import Link from 'next/link';
-import SamplePlan from '@/components/home/SamplePlan';
+import SampleRooms from '@/components/home/SampleRooms';
 import RoomList from '@/components/rooms/RoomList';
 import Icon, { type IconName } from '@/components/ui/Icon';
+import { pickFeatured } from '@/lib/rooms/featured';
 import { countByRoom, PUBLIC_ROOMS_LIMIT, toRoomCards, type RoomListRow } from '@/lib/rooms/list';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
-import heroImage from '@/public/samples/studio11-living.jpg';
+import heroImage from '@/public/home/hero-bedroom.jpg';
+import moveAfter from '@/public/home/move-after.jpg';
+import moveBefore from '@/public/home/move-before.jpg';
+import oneroomImage from '@/public/home/oneroom.jpg';
+import placedImage from '@/public/home/placed-3d.jpg';
+import planImage from '@/public/home/plan-ai.jpg';
 
 const COLUMNS = 'id, owner_id, title, description, is_public, status, source, created_at, transform, floor_polygon, openings, thumbnail_key';
 
-/** 이 서비스로 하는 두 가지 일. 둘은 같은 비중이다 */
-const USES: { icon: IconName; tile: string; title: string; lead: string; points: string[] }[] = [
+const FEATURES: { icon: IconName; title: string; text: string; note: string; dark?: boolean }[] = [
   {
-    icon: 'door',
-    tile: 'bg-[#e3ecfc] text-[#3d63bf]',
-    title: '이사 가기 전에',
-    lead: '집 보러 갔을 때 찍어 두면, 가 보지 않고도 새 방에 가구를 놓아 볼 수 있습니다.',
-    points: ['지금 쓰는 침대·책상·옷장이 다 들어갈까?', '문을 열 때 가구에 걸리지 않을까?', '책상을 창가에 두면 지나갈 길이 남을까?'],
+    icon: 'ruler',
+    title: 'AI 방 준비',
+    text: '바닥과 벽을 찾아 방을 미터 단위로 맞추고, 문·창문과 원래 있던 가구를 찾아 표시합니다.',
+    note: '방 모양 일치도 89% · 시험 장면 72곳',
   },
   {
-    icon: 'rotate',
-    tile: 'bg-[#e1f2de] text-[#3f7f36]',
-    title: '지금 방을 바꿀 때',
-    lead: '무거운 가구를 직접 옮기기 전에, 새 배치를 3D로 먼저 확인합니다.',
-    points: ['스캔에 찍힌 원래 가구를 그대로 떼어 옮겨 보기', '새 가구를 사기 전에 실제 크기로 놓아 보기', '통로·문 앞을 막지 않는지 자동 검사'],
+    icon: 'check',
+    title: '배치 자동 검사',
+    text: '놓을 때마다 겹침, 방 밖, 문 앞, 60 cm 통로, 창문 가림을 검사합니다.',
+    note: '검사 5가지',
+  },
+  {
+    icon: 'chat',
+    title: '말로 하는 AI 배치 추천',
+    text: '"책상은 창가에, 침대는 문에서 먼 쪽에"라고 적으면 AI가 배치하고 이유를 알려 줍니다.',
+    note: '요청 반영 88% · 한국식 방 4곳',
+    dark: true,
   },
 ];
-
-const STEPS: { icon: IconName; title: string; text: string }[] = [
-  { icon: 'upload', title: '방 찍어 올리기', text: 'Scaniverse 같은 3D 스캔 앱으로 방을 한 바퀴 찍고 파일(.spz, .ply)을 올립니다.' },
-  { icon: 'ruler', title: 'AI가 크기 맞추기', text: '바닥·벽·문·창문과 원래 있던 가구를 AI가 찾아 방을 실제 미터 단위로 맞춥니다.' },
-  { icon: 'sofa', title: '가구 놓고 확인하기', text: '실제 치수의 가구를 끌어 놓거나 AI에게 추천받고, 겹침·문 앞·통로를 검사합니다.' },
-];
-
-const FEATURES = ['3D 방 둘러보기', '실제 치수(m)', '배치 자동 검사', 'AI 배치 추천'];
 
 /**
  * 홈: 공개 방 목록과 (로그인했다면) 내 방 목록.
@@ -77,140 +79,198 @@ export default async function Home() {
     reportRoomIds: new Set((reportRows ?? []).map((row) => row.room_id)),
   });
 
+  const featured = pickFeatured(publicRooms);
+  const pill = 'flex items-center gap-2 rounded-full bg-surface/95 px-3.5 py-2 text-sm font-semibold text-ink shadow-sm';
+
   return (
-    <main className="mx-auto flex w-full max-w-[1160px] flex-1 flex-col gap-12 px-4 pt-2 pb-16 sm:gap-16 sm:px-6">
-      <section className="flex flex-wrap items-center gap-8 rounded-[28px] bg-surface p-6 shadow-card sm:gap-10 sm:p-10" data-testid="home-hero">
-        <div className="flex min-w-0 flex-[1_1_380px] flex-col gap-5">
-          <span className="self-start rounded-full bg-accent-soft px-3 py-1 text-[13px] font-semibold text-accent-strong">3D 방 · 실제 크기 가구 배치</span>
-          <h1 className="text-[28px] leading-[1.25] font-bold tracking-[-0.025em] text-balance sm:text-[44px] sm:leading-[1.22]">
-            방을 3D로 보고, <span className="whitespace-nowrap"><span className="text-accent">실제 크기</span>로</span> 가구를 놓아 보세요
-          </h1>
-          <p className="max-w-[30em] text-[15px] text-pretty text-sub sm:text-[17px]" data-testid="home-purpose">
-            RoomLens는 휴대폰으로 찍은 방을 3D로 만들고, 실제 치수의 가구를 놓아 보는 서비스입니다. 이사 갈 방도, 지금 사는 방도 가구를 옮기기 전에 먼저 확인할 수
-            있습니다.
-          </p>
-          <ul className="flex flex-wrap gap-2" aria-label="할 수 있는 것">
-            {FEATURES.map((feature) => (
-              <li key={feature} className="flex items-center gap-1.5 rounded-full bg-soft px-3 py-1.5 text-[13px] font-medium text-ink-2">
-                <Icon name="check" size={13} className="text-accent" />
-                {feature}
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-col gap-2.5">
-            <div className="flex flex-wrap items-center gap-3">
-              {publicRooms.length > 0 && (
-                <a href="#public-rooms" className="btn btn-primary h-[52px] rounded-[14px] px-6 text-base shadow-accent" data-testid="home-try">
-                  샘플 방에서 해 보기
-                  <Icon name="arrowRight" />
-                </a>
-              )}
-              <Link
-                href="/rooms/new"
-                className={`btn h-[52px] rounded-[14px] px-6 text-base ${publicRooms.length > 0 ? 'btn-soft' : 'btn-primary shadow-accent'}`}
-                data-testid="home-create"
-              >
-                <Icon name="upload" />내 방 올리기
-              </Link>
+    <main className="flex w-full flex-1 flex-col pb-16" data-page="home">
+      {/* 첫 화면: 무엇을 하는 서비스인지 */}
+      <section className="mx-auto flex w-full max-w-[1200px] flex-col items-center gap-6 px-4 pt-10 text-center sm:px-6 sm:pt-16" data-testid="home-hero">
+        <span className="rounded-full bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-strong sm:text-sm">이사 전 확인 · 지금 방 재배치</span>
+        <h1 className="max-w-[900px] text-[34px] leading-[1.18] font-bold tracking-[-0.04em] text-balance sm:text-[56px] lg:text-[68px] lg:leading-[1.12]">
+          방을 3D로 보고, <span className="whitespace-nowrap"><span className="text-accent">실제 크기</span>로</span> 가구를 놓아 보세요
+        </h1>
+        <p className="max-w-[620px] text-[15px] leading-relaxed text-pretty text-sub sm:text-lg" data-testid="home-purpose">
+          RoomLens는 휴대폰으로 찍은 방을 3D로 만들고, 실제 치수의 가구를 놓아 보는 서비스입니다. 침대가 들어가는지, 문과 통로를 막지 않는지 옮기기 전에 확인하세요.
+        </p>
+        <div className="flex flex-wrap justify-center gap-3">
+          {featured.length > 0 && (
+            <a href="#sample-rooms" className="btn btn-primary h-14 rounded-full px-7 text-base shadow-accent sm:text-[17px]" data-testid="home-try">
+              샘플 방에서 해 보기
+              <Icon name="arrowRight" />
+            </a>
+          )}
+          <Link
+            href="/rooms/new"
+            className={`btn h-14 rounded-full px-7 text-base sm:text-[17px] ${featured.length > 0 ? 'bg-soft text-ink hover:bg-chip' : 'btn-primary shadow-accent'}`}
+            data-testid="home-create"
+          >
+            내 방 올리기
+          </Link>
+        </div>
+        <p className="text-[13px] text-mute sm:text-sm">{user ? '저장한 배치와 AI 추천은 내 방 목록에서 이어서 할 수 있습니다' : '로그인 없이 바로 체험 · 저장과 AI 추천은 로그인 후'}</p>
+      </section>
+
+      {/* 화면 미리 보기 */}
+      <section aria-label="화면 미리 보기" className="mx-auto mt-10 w-full max-w-[1200px] px-4 sm:mt-14 sm:px-6">
+        <div className="grid gap-4 lg:grid-cols-3">
+          <figure className="relative min-h-[300px] overflow-hidden rounded-[28px] bg-soft sm:min-h-[420px] lg:col-span-2 lg:min-h-[480px]">
+            <Image src={heroImage} alt="3D로 복원한 침실. AI가 원래 있던 가구를 찾아 상자로 표시했다" priority sizes="(min-width: 1024px) 780px, 100vw" className="object-cover" fill />
+            <div className="absolute right-4 bottom-4 left-4 flex flex-wrap gap-2 sm:right-5 sm:bottom-5 sm:left-5">
+              <span className={pill}>
+                <span className="h-2 w-2 rounded-full bg-ok-dot" />
+                크기 보정됨 · <span className="font-mono font-medium">5.8 × 4.0 m</span>
+              </span>
+              <span className={pill}>AI가 찾은 원래 가구 4개</span>
             </div>
-            {!user && <p className="text-[13px] text-mute">샘플 방은 로그인 없이 가구를 놓아 볼 수 있습니다. 저장·AI 추천은 로그인 후에 쓸 수 있습니다.</p>}
+          </figure>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+            <figure className="relative min-h-[220px] overflow-hidden rounded-[28px] bg-soft">
+              <Image src={placedImage} alt="3D 방에 소파·침대·책상을 놓은 화면" sizes="(min-width: 1024px) 380px, 50vw" className="object-cover" fill />
+              <span className="absolute top-4 left-4 rounded-full bg-surface/95 px-3 py-1.5 text-[13px] font-semibold shadow-sm">3D에서 가구 놓기</span>
+            </figure>
+            <figure className="relative min-h-[220px] overflow-hidden rounded-[28px] bg-[#fafafa] ring-1 ring-line ring-inset">
+              <Image src={planImage} alt="가구를 놓은 평면도" sizes="(min-width: 1024px) 380px, 50vw" className="object-contain p-4" fill />
+              <span className="absolute top-4 left-4 rounded-full bg-ink px-3 py-1.5 text-[13px] font-semibold text-white">평면도로 한눈에</span>
+            </figure>
           </div>
         </div>
-
-        <figure className="relative min-w-0 flex-[1_1_440px]">
-          <Image
-            src={heroImage}
-            alt="3D로 복원한 방의 거실"
-            priority
-            sizes="(min-width: 1024px) 520px, 100vw"
-            className="aspect-[4/3] w-full rounded-[22px] object-cover"
-          />
-          <span className="absolute top-4 right-4 rounded-full bg-surface/95 px-3 py-1.5 font-mono text-xs text-ink-2">10.55 × 5.80 m</span>
-          <div className="absolute bottom-10 left-4 flex w-[46%] max-w-[230px] flex-col gap-1.5 rounded-2xl bg-surface p-3 shadow-float">
-            <SamplePlan className="block h-auto w-full" />
-            <span className="text-xs font-semibold">평면도에서도 가구 배치</span>
-          </div>
-          <figcaption className="mt-2.5 text-right text-xs text-mute">Studio 11 by milanoski (SuperSplat), CC BY 4.0 · 스플랫 수를 줄여 찍은 화면</figcaption>
-        </figure>
+        <p className="mt-2.5 text-right text-xs text-mute">Bedroom by ethan3111, HAUSSMANN APARTMENT by Stéphane Agullo (SuperSplat), CC BY 4.0 · RoomLens 화면</p>
       </section>
 
       {user && (
-        <section className="flex flex-col gap-[18px]">
+        <section className="mx-auto mt-20 flex w-full max-w-[1200px] flex-col gap-[18px] px-4 sm:px-6">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-2xl font-bold tracking-tight">
+            <h2 className="text-2xl font-bold tracking-tight sm:text-[28px]">
               내 방{myRooms.length > 0 && <span className="ml-2 font-mono text-lg font-medium text-mute">{myRooms.length}</span>}
             </h2>
-            <Link href="/rooms/new" className="btn h-10 rounded-full bg-surface px-4 text-sm hover:bg-soft">
+            <Link href="/rooms/new" className="btn h-10 rounded-full bg-soft px-4 text-sm hover:bg-chip">
               <Icon name="plus" />새 방 올리기
             </Link>
           </div>
           {myRooms.length ? (
             <RoomList rooms={myRooms} testId="my-rooms" />
           ) : (
-            <p className="rounded-[20px] bg-surface px-7 py-8 text-[15px] text-sub" data-testid="my-rooms-empty">
+            <p className="rounded-[20px] bg-ground px-7 py-8 text-[15px] text-sub" data-testid="my-rooms-empty">
               아직 만든 방이 없습니다. 위의 &ldquo;내 방 올리기&rdquo;로 첫 방을 올려 보세요.
             </p>
           )}
         </section>
       )}
 
-      <section aria-labelledby="home-uses-title" className="flex flex-col gap-[18px]" data-testid="home-uses">
-        <h2 id="home-uses-title" className="text-2xl font-bold tracking-tight">
-          이럴 때 씁니다
+      {/* 쓰임새 두 가지 (같은 비중) */}
+      <section aria-labelledby="home-uses-title" className="mx-auto mt-24 flex w-full max-w-[1200px] flex-col gap-8 px-4 sm:mt-32 sm:px-6" data-testid="home-uses">
+        <h2 id="home-uses-title" className="text-center text-[28px] font-bold tracking-[-0.03em] sm:text-[40px]">
+          두 가지 상황에서 씁니다
         </h2>
         <div className="grid gap-4 md:grid-cols-2">
-          {USES.map((use) => (
-            <div key={use.title} className="flex flex-col gap-4 rounded-[20px] bg-surface p-6 sm:p-7">
-              <div className="flex items-center gap-3">
-                <span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-[13px] ${use.tile}`}>
-                  <Icon name={use.icon} size={22} />
-                </span>
-                <h3 className="text-xl font-bold">{use.title}</h3>
-              </div>
-              <p className="text-[15px] text-body">{use.lead}</p>
-              <ul className="flex flex-col gap-2">
-                {use.points.map((point) => (
-                  <li key={point} className="flex items-start gap-2 text-sm text-sub">
-                    <Icon name="check" size={15} className="mt-0.5 shrink-0 text-ok" />
-                    {point}
-                  </li>
-                ))}
-              </ul>
+          <div className="flex flex-col gap-4 rounded-[28px] bg-accent-soft p-6 sm:p-9">
+            <span className="text-sm font-bold text-accent-strong">A · 이사 가기 전에</span>
+            <h3 className="text-[22px] leading-snug font-bold tracking-[-0.025em] sm:text-[28px]">가 보지 않은 방에 지금 가진 가구를 놓아 봅니다</h3>
+            <p className="text-[15px] leading-relaxed text-ink-2 sm:text-base">
+              집 보러 갔을 때 한 바퀴 찍어 두면, 침대·책상·옷장이 다 들어가는지, 문을 열 때 걸리지 않는지 이사 전에 알 수 있습니다.
+            </p>
+            <Image src={oneroomImage} alt="3D로 복원한 오피스텔 원룸" sizes="(min-width: 768px) 520px, 100vw" className="mt-auto aspect-video w-full rounded-[18px] object-cover" />
+          </div>
+          <div className="flex flex-col gap-4 rounded-[28px] bg-ok-soft p-6 sm:p-9">
+            <span className="text-sm font-bold text-ok">B · 지금 방을 바꿀 때</span>
+            <h3 className="text-[22px] leading-snug font-bold tracking-[-0.025em] sm:text-[28px]">무거운 가구를 옮기기 전에 새 배치를 먼저 봅니다</h3>
+            <p className="text-[15px] leading-relaxed text-ink-2 sm:text-base">
+              스캔에 찍힌 원래 가구를 그대로 떼어 옮겨 보고(빈자리는 AI가 채움), 새로 살 가구는 실제 크기로 놓아 봅니다.
+            </p>
+            <div className="mt-auto grid grid-cols-2 gap-2">
+              <figure className="relative">
+                <Image src={moveBefore} alt="옮기기 전: 창가의 의자" sizes="(min-width: 768px) 260px, 50vw" className="aspect-[8/9] w-full rounded-[18px] object-cover" />
+                <figcaption className="absolute top-3 left-3 rounded-lg bg-surface px-2.5 py-1 text-xs font-bold">지금</figcaption>
+              </figure>
+              <figure className="relative">
+                <Image src={moveAfter} alt="옮긴 뒤: 의자를 떼어 낸 자리를 AI가 채웠다" sizes="(min-width: 768px) 260px, 50vw" className="aspect-[8/9] w-full rounded-[18px] object-cover" />
+                <figcaption className="absolute top-3 left-3 rounded-lg bg-ok px-2.5 py-1 text-xs font-bold text-white">옮긴 뒤</figcaption>
+              </figure>
             </div>
-          ))}
+          </div>
         </div>
       </section>
 
-      <section aria-labelledby="home-steps-title" className="flex flex-col gap-[18px]">
-        <h2 id="home-steps-title" className="text-2xl font-bold tracking-tight">
-          쓰는 순서
+      {/* 기능 */}
+      <section aria-labelledby="home-features-title" className="mx-auto mt-24 flex w-full max-w-[1200px] flex-col gap-8 px-4 sm:mt-32 sm:px-6">
+        <h2 id="home-features-title" className="text-center text-[28px] font-bold tracking-[-0.03em] text-balance sm:text-[40px]">
+          AI가 방을 준비하고, 배치를 도와줍니다
         </h2>
-        <ol className="grid gap-4 sm:grid-cols-3">
-          {STEPS.map((step, i) => (
-            <li key={step.title} className="flex flex-col gap-3 rounded-[20px] bg-surface p-6">
-              <div className="flex items-center gap-3">
-                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-accent font-mono text-[15px] font-semibold text-white">{i + 1}</span>
-                <h3 className="text-lg font-bold">{step.title}</h3>
-              </div>
-              <p className="text-sm text-sub">{step.text}</p>
+        <div className="grid gap-4 md:grid-cols-3">
+          {FEATURES.map((feature) => (
+            <div key={feature.title} className={`flex flex-col gap-3.5 rounded-[24px] p-7 ${feature.dark ? 'bg-ink text-white' : 'bg-ground'}`}>
+              <span className={`flex h-11 w-11 items-center justify-center rounded-[13px] ${feature.dark ? 'bg-accent text-white' : 'bg-surface text-accent'}`}>
+                <Icon name={feature.icon} size={22} />
+              </span>
+              <h3 className="text-xl font-bold">{feature.title}</h3>
+              <p className={`text-[15px] leading-relaxed ${feature.dark ? 'text-[#b4bccd]' : 'text-sub'}`}>{feature.text}</p>
+              <span className={`mt-auto text-[13px] font-semibold ${feature.dark ? 'text-[#9fb0ff]' : 'text-accent'}`}>{feature.note}</span>
+            </div>
+          ))}
+        </div>
+        <ol className="grid gap-3 sm:grid-cols-3" aria-label="쓰는 순서">
+          {['방을 3D 스캔 앱으로 찍어 올리기', '"AI로 방 준비하기"로 크기·문·창문 맞추기', '가구를 놓고 저장·공유하기'].map((step, i) => (
+            <li key={step} className="flex items-center gap-3 rounded-2xl border border-line px-5 py-4 text-[15px] text-ink-2">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent font-mono text-sm font-semibold text-white">{i + 1}</span>
+              {step}
             </li>
           ))}
         </ol>
       </section>
 
-      <section className="flex scroll-mt-6 flex-col gap-[18px]" id="public-rooms">
-        <div className="flex flex-col gap-1">
-          <h2 className="text-2xl font-bold tracking-tight">샘플 방</h2>
-          <p className="text-[15px] text-sub">공개된 방에 들어가 가구를 놓아 보세요. 방을 직접 찍지 않아도 바로 해 볼 수 있습니다.</p>
+      {/* 샘플 방 */}
+      <section id="sample-rooms" aria-labelledby="sample-rooms-title" className="mx-auto mt-24 flex w-full max-w-[1200px] scroll-mt-6 flex-col gap-7 px-4 sm:mt-32 sm:px-6">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="flex flex-col gap-2">
+            <h2 id="sample-rooms-title" className="text-[28px] font-bold tracking-[-0.03em] sm:text-[40px]">
+              샘플 방
+            </h2>
+            <p className="text-[15px] text-sub sm:text-base">로그인 없이 들어가 가구를 놓아 보세요.</p>
+          </div>
+          {publicRooms.length > 0 && (
+            <a href="#public-rooms" className="text-[15px] font-semibold text-accent hover:text-accent-strong">
+              공개된 방 전체 보기 →
+            </a>
+          )}
         </div>
-        {publicRooms.length ? (
-          <RoomList rooms={publicRooms} testId="public-rooms" />
+        {featured.length ? (
+          <SampleRooms rooms={featured} />
         ) : (
-          <p className="rounded-[20px] bg-surface px-7 py-8 text-[15px] text-sub" data-testid="public-rooms-empty">
+          <p className="rounded-[20px] bg-ground px-7 py-8 text-[15px] text-sub" data-testid="public-rooms-empty">
             아직 공개된 방이 없습니다.
           </p>
         )}
       </section>
+
+      {/* 마지막 권유 */}
+      <section aria-label="시작하기" className="mx-auto mt-24 w-full max-w-[1200px] px-4 sm:mt-32 sm:px-6">
+        <div className="flex flex-col items-center gap-4 rounded-[32px] bg-accent px-6 py-14 text-center text-white sm:px-10">
+          <h2 className="text-[26px] font-bold tracking-[-0.03em] sm:text-[36px]">가구를 옮기기 전에, 먼저 3D로</h2>
+          <p className="text-[15px] text-[#dde3ff] sm:text-base">스캔 파일이 없어도 샘플 방에서 바로 시작할 수 있습니다.</p>
+          <div className="mt-2 flex flex-wrap justify-center gap-3">
+            <a href="#sample-rooms" className="btn h-[52px] rounded-full bg-white px-6 text-base font-bold text-accent-strong hover:bg-accent-tint">
+              샘플 방에서 해 보기
+            </a>
+            <Link href="/rooms/new" className="btn h-[52px] rounded-full border border-white/50 px-6 text-base text-white hover:bg-white/10">
+              내 방 올리기
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* 공개된 방 전체 */}
+      {publicRooms.length > 0 && (
+        <section className="mx-auto mt-24 flex w-full max-w-[1200px] scroll-mt-6 flex-col gap-[18px] px-4 sm:px-6" id="public-rooms">
+          <h2 className="text-2xl font-bold tracking-tight">공개된 방 전체</h2>
+          <RoomList rooms={publicRooms} testId="public-rooms" />
+        </section>
+      )}
+
+      <footer className="mx-auto mt-20 flex w-full max-w-[1200px] flex-wrap justify-between gap-3 px-4 text-[13px] text-mute sm:px-6">
+        <span>RoomLens · 2026 교내 AI 경진대회 출품작</span>
+        <span>한국식 샘플 방은 RoomLens에서 직접 만든 장면입니다</span>
+      </footer>
     </main>
   );
 }

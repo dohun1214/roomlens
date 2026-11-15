@@ -28,7 +28,7 @@ export default async function SiteHeader() {
   const displayName = nickname ?? user?.email ?? '내 정보';
 
   return (
-    <header className="h-(--header-h) shrink-0 bg-ground" data-testid="site-header">
+    <header className="h-(--header-h) shrink-0" data-testid="site-header">
       <div className="mx-auto flex h-full w-full max-w-[1160px] items-center justify-between gap-3 px-4 sm:px-6">
         <nav className="flex min-w-0 items-center gap-3 sm:gap-7" aria-label="메뉴">
           <Link href="/" aria-label="RoomLens 홈">
