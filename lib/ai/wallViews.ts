@@ -193,6 +193,7 @@ export function locateWallDetections(detections: WallDetection[], views: WallVie
     }
     found.push(item);
   }
+  joinWindowPanels(found);
   const out: Opening[] = [];
   // 확실한 것, 넓은 것부터 (겹치는 것은 먼저 넣은 쪽만)
   found.sort((a, b) => Number(b.high) - Number(a.high) || b.to - b.from - (a.to - a.from));
@@ -203,12 +204,34 @@ export function locateWallDetections(detections: WallDetection[], views: WallVie
     const part = wall.parts.reduce((best, p) => (overlapLength(p.start, p.start + p.length, f) > overlapLength(best.start, best.start + best.length, f) ? p : best));
     const from = Math.max(f.from, part.start) - part.start;
     const to = Math.min(f.to, part.start + part.length) - part.start;
-    if (to - from < 0.25) continue;
+    if (to - from < (f.type === 'door' ? MIN_DOOR_WIDTH : 0.25)) continue;
     const made = makeOpening(f.type, part.index, round2(from), round2(to - from), polygon);
     if (!made.ok || overlapsExisting(made.opening, out)) continue;
     out.push(made.opening);
   }
   return out.sort((a, b) => a.wallIndex - b.wallIndex || a.from - b.from);
+}
+
+/** 이보다 좁은 문은 없다: 벽 틈·그림 가장자리에서 잘린 조각이다 (m) */
+export const MIN_DOOR_WIDTH = 0.5;
+/** 같은 벽에서 이만큼 이하로 떨어진 창문은 한 창의 여러 짝(샷시)이다 (m) */
+export const WINDOW_PANEL_GAP = 0.3;
+
+/** 같은 벽에 바짝 붙어 이어진 창문 조각(여러 짝 샷시를 짝마다 찾은 것)을 하나로 잇는다 */
+function joinWindowPanels(found: Found[]): void {
+  const windows = found.filter((f) => f.type === 'window').sort((a, b) => a.wallIndex - b.wallIndex || a.from - b.from);
+  for (let k = 1; k < windows.length; k += 1) {
+    const prev = windows[k - 1];
+    const cur = windows[k];
+    if (prev.wallIndex !== cur.wallIndex || cur.from - prev.to > WINDOW_PANEL_GAP) continue;
+    cur.from = Math.min(cur.from, prev.from);
+    cur.to = Math.max(cur.to, prev.to);
+    cur.bottom = Math.min(cur.bottom, prev.bottom);
+    cur.top = Math.max(cur.top, prev.top);
+    cur.votes += prev.votes;
+    cur.high ||= prev.high;
+    found.splice(found.indexOf(prev), 1);
+  }
 }
 
 const round2 = (v: number) => Math.round(v * 100) / 100 + 0;

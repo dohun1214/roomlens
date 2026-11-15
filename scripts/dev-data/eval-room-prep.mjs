@@ -3,6 +3,8 @@
 //   --mode layout : 보정 전 파일을 열어 자동 보정만 잰다 (Gemini 없음, 로그인 없음)
 //   --mode full   : 자동 보정 → 문·창문 → 원래 가구를 이어서 하고 정답 좌표로 옮겨 잰다
 //   --mode points : 장면의 표면 점을 eval/points/<이름>.bin 으로 저장한다 (eval-layout-offline.mjs로 빠르게 고쳐 보기용)
+//   --save-views  : detect·full에서 문·창문·원래 가구 찾기 요청(캡처 그림)을 eval/views/<이름>/<도구>.json 으로 남긴다
+//                   (eval-detect-offline.mts로 Gemini 결과를 그 자리에서 다시 받아 고쳐 보기용)
 //   --mode analysis : 정답 보정·문창문을 넣은 방에서 "방 분석"을 돌려, 정답 원래 가구로 옵션(침대·책상·옷장·냉장고·세탁기)을 채점한다
 //                     (원래 가구는 넣지 않는다: 그림만 보고 맞히는지 본다)
 // 준비: 개발 서버(APP_URL, 기본 http://localhost:3100), 데이터 폴더를 내주는 파일 서버(DATA_URL, 기본 http://localhost:8094, --cors),
@@ -30,6 +32,7 @@ const { values } = parseArgs({
     only: { type: 'string', default: '' },
     tag: { type: 'string', default: new Date().toISOString().slice(0, 16).replace(/[:T]/g, '') },
     headed: { type: 'boolean', default: false },
+    'save-views': { type: 'boolean', default: false },
   },
 });
 const appUrl = process.env.APP_URL ?? 'http://localhost:3100';
@@ -57,6 +60,17 @@ const context = await browser.newContext({ viewport: { width: 1280, height: 800 
 const page = await context.newPage();
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(String(e).slice(0, 300)));
+/** --save-views: 지금 재는 장면의 이름. 찾기 요청의 본문(그림)을 남긴다 */
+let currentScene = null;
+if (values['save-views']) {
+  page.on('request', (request) => {
+    const m = request.url().match(/\/api\/rooms\/[^/]+\/(openings|fixtures)-suggest$/);
+    if (!m || !currentScene || request.method() !== 'POST') return;
+    const dir = path.join(evalDir, 'views', currentScene);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, `${m[1]}.json`), request.postData() ?? '');
+  });
+}
 // R2의 CORS는 정해진 주소만 허락한다. 다른 포트의 개발 서버로 열 때를 위해 허락 머리말을 붙인다
 await page.route(/r2\.cloudflarestorage\.com/, async (route) => {
   const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': 'GET, HEAD, PUT, OPTIONS', 'access-control-expose-headers': '*' };
@@ -307,6 +321,7 @@ if (!['detect', 'full', 'layout', 'points', 'analysis'].includes(values.mode)) t
 const rows = [];
 for (const truth of truths) {
   log(truth.name, values.mode);
+  currentScene = truth.name;
   try {
     const out =
       values.mode === 'analysis'
