@@ -7,6 +7,7 @@
 //   --repeat n : Gemini 답을 n개까지 받아 각각 재고 평균을 낸다 (답이 매번 조금씩 다르다)
 //   --fresh    : 남긴 답을 쓰지 않고 새로 받는다 (프롬프트를 고쳤을 때)
 //   --list     : 장면마다 맞힌 것·틀린 것을 자세히 보여 준다
+//   --variant v: 답을 <도구>-raw-v-<n>.json 으로 따로 남긴다 (지시문을 고쳐 볼 때 원래 답을 덮어쓰지 않게)
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
@@ -25,6 +26,7 @@ const { values } = parseArgs({
     fresh: { type: 'boolean', default: false },
     tag: { type: 'string', default: '' },
     list: { type: 'boolean', default: false },
+    variant: { type: 'string', default: '' },
   },
 });
 const tool = values.tool as 'openings' | 'fixtures';
@@ -49,7 +51,7 @@ const scenes = readdirSync(viewsDir)
 
 /** n번째 Gemini 답. 남겨 둔 것이 있으면 그것을 쓴다 */
 async function raw(name: string, n: number, body: { images: { data: string }[] }): Promise<unknown> {
-  const file = path.join(viewsDir, name, `${tool}-raw-${n}.json`);
+  const file = path.join(viewsDir, name, `${tool}-raw${values.variant ? `-${values.variant}` : ''}-${n}.json`);
   if (!values.fresh && existsSync(file)) return JSON.parse(readFileSync(file, 'utf8'));
   const parts = body.images.map((image) => ({ inlineData: { mimeType: 'image/jpeg', data: image.data } }));
   const generated =

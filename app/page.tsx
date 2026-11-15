@@ -2,6 +2,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import SampleRooms from '@/components/home/SampleRooms';
 import RoomList from '@/components/rooms/RoomList';
+import TrackView from '@/components/usage/TrackView';
 import Icon, { type IconName } from '@/components/ui/Icon';
 import { pickFeatured } from '@/lib/rooms/featured';
 import { SURVEY_URL } from '@/lib/survey';
@@ -85,6 +86,7 @@ export default async function Home() {
 
   return (
     <main className="flex w-full flex-1 flex-col pb-16" data-page="home">
+      <TrackView kind="home_view" />
       {/* 첫 화면: 무엇을 하는 서비스인지 */}
       <section className="mx-auto flex w-full max-w-[1200px] flex-col items-center gap-6 px-4 pt-10 text-center sm:px-6 sm:pt-16" data-testid="home-hero">
         <span className="rounded-full bg-accent-soft px-3.5 py-1.5 text-[13px] font-semibold text-accent-strong sm:text-sm">이사 전 확인 · 지금 방 재배치</span>

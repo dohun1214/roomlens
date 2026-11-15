@@ -53,6 +53,7 @@ import FurnitureThumb from '@/components/ui/FurnitureThumb';
 import Icon from '@/components/ui/Icon';
 import { AiBadge, PanelBody, PanelFooter, PanelTitle, SaveStatePill, SectionTitle, StageLayer, ToolPanel, type Slots } from '@/components/viewer/workspace';
 import { furnitureTone, sizeLabel } from '@/lib/layout/furnitureLook';
+import { roomIdFromPath, trackOnce } from '@/lib/usage/client';
 import ScanFurnitureForm from './ScanFurnitureForm';
 import FloorPlan from './FloorPlan';
 import LayoutShareBox from './LayoutShareBox';
@@ -678,6 +679,7 @@ export default function FurnitureLayer({
 
   const add = (entry: CatalogItem) => {
     if (itemsRef.current.length >= MAX_LAYOUT_ITEMS) return;
+    trackOnce('furniture_place', roomIdFromPath(window.location.pathname));
     const id = `f${nextItemNumber(itemsRef.current)}`;
     // 방 가운데부터 찾아, 다른 가구와 겹치지 않고 문 앞도 아닌 가장 가까운 빈자리에 놓는다.
     // 되도록 가구의 쓰는 쪽(책상·수납의 앞 등)이 서로 막히지 않는 자리를 고른다

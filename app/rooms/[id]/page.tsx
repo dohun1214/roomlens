@@ -25,6 +25,7 @@ import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, thumbnailSrc } from '@/lib/rooms/thu
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 import { SURVEY_URL } from '@/lib/survey';
+import TrackView from '@/components/usage/TrackView';
 
 /** 공유 링크 미리보기: 방 이름·설명과 대표 사진. 볼 수 없는 방은 이름을 드러내지 않는다 */
 export async function generateMetadata({ params }: PageProps<'/rooms/[id]'>): Promise<Metadata> {
@@ -184,6 +185,7 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
       </header>
 
       <div className="relative min-h-0 flex-1">
+        {ready && <TrackView kind="room_view" roomId={room.id} />}
         {splatUrl ? (
           <SplatViewer
             url={splatUrl}
