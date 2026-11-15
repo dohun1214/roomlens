@@ -71,6 +71,11 @@ body {
   overflow-wrap: anywhere;
 }
 
+/* 홈은 흰 바탕 (위 메뉴도 같은 바탕 위에 놓인다) */
+body:has([data-page="home"]) {
+  background: var(--color-surface);
+}
+
 @layer components {
   /* 글자 입력 칸 */
   .field {
