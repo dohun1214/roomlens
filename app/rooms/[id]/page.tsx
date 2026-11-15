@@ -24,6 +24,7 @@ import { RoomId } from '@/lib/rooms/schemas';
 import { THUMBNAIL_HEIGHT, THUMBNAIL_WIDTH, thumbnailSrc } from '@/lib/rooms/thumbnail';
 import { createAdminClient } from '@/lib/supabase/admin';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
+import { SURVEY_URL } from '@/lib/survey';
 
 /** 공유 링크 미리보기: 방 이름·설명과 대표 사진. 볼 수 없는 방은 이름을 드러내지 않는다 */
 export async function generateMetadata({ params }: PageProps<'/rooms/[id]'>): Promise<Metadata> {
@@ -161,6 +162,10 @@ export default async function RoomPage({ params, searchParams }: PageProps<'/roo
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          <a href={SURVEY_URL} target="_blank" rel="noopener noreferrer" className="shrink-0 rounded-full bg-warn-tint px-3 py-1.5 text-[13px] font-semibold text-warn hover:bg-warn-soft" data-testid="room-survey">
+            <span className="sm:hidden">설문</span>
+            <span className="hidden sm:inline">1분 설문</span>
+          </a>
           {room.is_public && ready && <RoomShareButton roomId={room.id} />}
           {isOwner && <RoomOwnerControls roomId={room.id} initialPublic={room.is_public} canPublish={ready} />}
           {user ? (

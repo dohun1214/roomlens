@@ -4,6 +4,7 @@ import SampleRooms from '@/components/home/SampleRooms';
 import RoomList from '@/components/rooms/RoomList';
 import Icon, { type IconName } from '@/components/ui/Icon';
 import { pickFeatured } from '@/lib/rooms/featured';
+import { SURVEY_URL } from '@/lib/survey';
 import { countByRoom, PUBLIC_ROOMS_LIMIT, toRoomCards, type RoomListRow } from '@/lib/rooms/list';
 import { createClient, getCurrentUser } from '@/lib/supabase/server';
 import heroImage from '@/public/home/hero-bedroom.jpg';
@@ -109,6 +110,9 @@ export default async function Home() {
           </Link>
         </div>
         <p className="text-[13px] text-mute sm:text-sm">{user ? '저장한 배치와 AI 추천은 내 방 목록에서 이어서 할 수 있습니다' : '로그인 없이 바로 체험 · 저장과 AI 추천은 로그인 후'}</p>
+        <a href={SURVEY_URL} target="_blank" rel="noopener noreferrer" className="rounded-full bg-warn-tint px-4 py-2 text-[13px] font-semibold text-warn hover:bg-warn-soft sm:text-sm" data-testid="home-survey">
+          써 보셨다면 1분 설문에 답해 주세요 →
+        </a>
       </section>
 
       {/* 화면 미리 보기 */}
@@ -268,7 +272,12 @@ export default async function Home() {
       )}
 
       <footer className="mx-auto mt-20 flex w-full max-w-[1200px] flex-wrap justify-between gap-3 px-4 text-[13px] text-mute sm:px-6">
-        <span>RoomLens · 2026 교내 AI 경진대회 출품작</span>
+        <span>
+          RoomLens · 2026 교내 AI 경진대회 출품작 ·{' '}
+          <a href={SURVEY_URL} target="_blank" rel="noopener noreferrer" className="underline hover:text-ink">
+            사용자 설문
+          </a>
+        </span>
         <span>한국식 샘플 방은 RoomLens에서 직접 만든 장면입니다</span>
       </footer>
     </main>
