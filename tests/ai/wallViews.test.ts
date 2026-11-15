@@ -73,6 +73,20 @@ describe('locateWallDetections', () => {
     expect(out[1]).toMatchObject({ type: 'window', wallIndex: 0 });
   });
 
+  it('바짝 붙은 창문 조각(여러 짝 샷시)은 한 창문으로, 떨어진 창문은 따로', () => {
+    const w = (a: number, b: number) => det(1, box(0, a, b, 0.9, 2.1), { type: 'window' });
+    const joined = locateWallDetections([w(0.3, 1.2), w(1.25, 2.1), w(2.15, 3.0)], plan, ROOM);
+    expect(joined).toHaveLength(1);
+    expect(joined[0].from).toBeCloseTo(0.3, 1);
+    expect(joined[0].to).toBeCloseTo(3.0, 1);
+    expect(locateWallDetections([w(0.3, 1.2), w(2.0, 3.0)], plan, ROOM)).toHaveLength(2);
+  });
+
+  it('0.5 m보다 좁은 문은 버린다 (벽 틈·잘린 조각)', () => {
+    expect(locateWallDetections([det(1, box(0, 1.0, 1.4, 0, 2.05))], plan, ROOM)).toHaveLength(0);
+    expect(locateWallDetections([det(1, box(0, 1.0, 1.7, 0, 2.05))], plan, ROOM)).toHaveLength(1);
+  });
+
   it('반대쪽 벽은 그림의 오른쪽이 벽 방향과 반대일 수 있다', () => {
     // 벽 2 = (4,3)→(0,3). 시작 꼭짓점에서 0.5~1.3 m
     const out = locateWallDetections([det(3, box(2, 0.5, 1.3, 0, 2))], plan, ROOM);
