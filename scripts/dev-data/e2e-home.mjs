@@ -62,7 +62,9 @@ const home = (p) => p.goto(`${appUrl}/`, { waitUntil: 'domcontentloaded' });
 try {
   // 1) 로그인 전 홈
   await home(anon);
-  check('비로그인 홈: "내 방" 영역이 없고 공개된 방 영역은 있음', (await anon.getByRole('heading', { name: '내 방' }).count()) === 0 && (await anon.getByRole('heading', { name: '공개된 방' }).count()) === 1, null);
+  check('비로그인 홈: "내 방" 영역이 없고 샘플 방 영역은 있음', (await anon.getByRole('heading', { name: '내 방' }).count()) === 0 && (await anon.getByRole('heading', { name: '샘플 방' }).count()) === 1, null);
+  check('비로그인 홈: 서비스 목적 문장과 쓰임새 두 가지', (await anon.getByTestId('home-purpose').innerText()).includes('실제 치수의 가구') && (await anon.locator('[data-testid=home-uses] h3').count()) === 2, null);
+  check('비로그인 홈: "샘플 방에서 해 보기"는 샘플 방 목록으로', (await anon.getByTestId('home-try').getAttribute('href')) === '#public-rooms', null);
 
   // 2) 가입 → 방이 없을 때
   await page.goto(`${appUrl}/account`);

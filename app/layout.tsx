@@ -25,7 +25,7 @@ const siteUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL ? `https://${process.e
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: "RoomLens",
-  description: "원룸부터 집 전체까지, 이사 갈 곳도 지금 사는 곳도 3D로 복원해 가구 배치를 미리 해 보는 서비스",
+  description: "방을 3D로 보고 실제 크기로 가구를 놓아 보는 서비스. 이사 갈 방도 지금 사는 방도 가구를 옮기기 전에 먼저 확인합니다.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
