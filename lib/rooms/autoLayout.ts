@@ -220,6 +220,37 @@ export function heightProfile(points: ScenePoints, up: Vec3): HeightProfile {
       break;
     }
   }
+  // 세로 표면의 높이 범위
+  const sin25 = Math.sin((25 * Math.PI) / 180);
+  const vh: number[] = [];
+  for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 100_000))) {
+    const k = i * 3;
+    const nd = Math.abs(points.normals[k] * up[0] + points.normals[k + 1] * up[1] + points.normals[k + 2] * up[2]);
+    const has = points.normals[k] !== 0 || points.normals[k + 1] !== 0 || points.normals[k + 2] !== 0;
+    if (has && nd < sin25) vh.push(h[i]);
+  }
+  vh.sort((p, q) => p - q);
+  const vq = (t: number) => (vh.length ? vh[Math.min(vh.length - 1, Math.floor(t * vh.length))] : t < 0.5 ? q0 : q1);
+  // 바닥·천장이 납작하게 복원되지 않은 장면(반짝이는 바닥, 매끈한 천장)에서는 침대·탁자 윗면 같은 가구 윗면이 더 큰 봉우리가 된다.
+  // 벽은 바닥에서 천장까지 이어지므로, 벽 끝 근처에 약한 봉우리가 있고 그것이 고른 면보다 한참 바깥이면 그것을 바닥(천장)으로 본다
+  const toBin = (v: number) => Math.floor(((v - lo) / (hi - lo)) * bins);
+  const isPeak = (i: number) => smooth(hz, i) >= smooth(hz, i - 1) && smooth(hz, i) >= smooth(hz, i + 1);
+  const near = Math.max(2, Math.round(bins * 0.03));
+  const far = Math.round(bins * 0.08);
+  const wl = toBin(vq(0.02));
+  const wh = toBin(vq(0.98));
+  for (let i = Math.max(0, wl - near); i <= Math.min(lb - far, wl + near); i += 1) {
+    if (smooth(hz, i) >= lowMax * 0.03 && isPeak(i)) {
+      lb = i;
+      break;
+    }
+  }
+  for (let i = Math.min(bins - 1, wh + near); i >= Math.max(hb + far, wh - near); i -= 1) {
+    if (smooth(hz, i) >= highMax * 0.03 && isPeak(i)) {
+      hb = i;
+      break;
+    }
+  }
   const at = (b: number) => lo + ((b + 0.5) / bins) * (hi - lo);
   // 두 면의 밝기
   const bright = (b: number) => {
@@ -249,17 +280,6 @@ export function heightProfile(points: ScenePoints, up: Vec3): HeightProfile {
     }
     return sum[0] === 0 && sum[1] === 0 && sum[2] === 0 ? up : norm(sum);
   };
-  // 세로 표면의 높이 범위
-  const sin25 = Math.sin((25 * Math.PI) / 180);
-  const vh: number[] = [];
-  for (let i = 0; i < n; i += Math.max(1, Math.floor(n / 100_000))) {
-    const k = i * 3;
-    const nd = Math.abs(points.normals[k] * up[0] + points.normals[k + 1] * up[1] + points.normals[k + 2] * up[2]);
-    const has = points.normals[k] !== 0 || points.normals[k + 1] !== 0 || points.normals[k + 2] !== 0;
-    if (has && nd < sin25) vh.push(h[i]);
-  }
-  vh.sort((p, q) => p - q);
-  const vq = (t: number) => (vh.length ? vh[Math.min(vh.length - 1, Math.floor(t * vh.length))] : t < 0.5 ? q0 : q1);
   let lower = 0;
   let upper = 0;
   const mid = Math.floor((lb + hb) / 2);

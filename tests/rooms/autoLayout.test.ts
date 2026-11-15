@@ -76,6 +76,30 @@ describe('estimateRoomLayout: 위아래 표가 약한 방', () => {
   });
 });
 
+describe('estimateRoomLayout: 바닥이 납작하게 복원되지 않은 방', () => {
+  it('바닥 수평면이 약하고 침대 윗면이 크면, 벽의 아래 끝 근처의 약한 면을 바닥으로 본다', () => {
+    let seed = 3;
+    const r = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    const pos: number[] = [];
+    const nor: number[] = [];
+    const W = 3.6, D = 3.4, H = 2.4;
+    for (let i = 0; i < 30000; i += 1) { pos.push(r() * W, H, r() * D); nor.push(0, -1, 0); } // 천장
+    for (let i = 0; i < 1200; i += 1) { pos.push(r() * W, 0, r() * D); nor.push(0, 1, 0); } // 바닥 (약함)
+    for (let i = 0; i < 30000; i += 1) { pos.push(0.6 + r() * 1.6, 0.55, 0.3 + r() * 2.1); nor.push(0, 1, 0); } // 침대 윗면
+    for (let i = 0; i < 4000; i += 1) { const x = 0.6 + r() * 1.6; pos.push(x, r() * 0.55, 2.4); nor.push(0, 0, 1); } // 침대 옆면
+    const walls: [number, number, number, number][] = [[0, 0, W, 0], [W, 0, W, D], [W, D, 0, D], [0, D, 0, 0]];
+    for (const [x0, z0, x1, z1] of walls) {
+      const len = Math.hypot(x1 - x0, z1 - z0);
+      for (let i = 0; i < len * 4000; i += 1) { const t = r(); pos.push(x0 + (x1 - x0) * t, r() * H, z0 + (z1 - z0) * t); nor.push(-(z1 - z0) / len, 0, (x1 - x0) / len); }
+    }
+    const count = pos.length / 3;
+    const est = estimateRoomLayout({ count, positions: Float32Array.from(pos), normals: Float32Array.from(nor), weights: new Float32Array(count).fill(1) })!;
+    expect(est.scaleGuessed).toBe(false);
+    expect(est.floor).toBeCloseTo(0, 1);
+    expect(est.ceiling - est.floor).toBeCloseTo(H, 1);
+  });
+});
+
 describe('furnitureTops', () => {
   it('가구 윗면은 바닥 쪽에 몰려 있다: 바른 위쪽이면 +, 거꾸로면 -', () => {
     const pts = fakeRoom(L_ROOM, 2.5, FURNITURE, (p: Vec3) => p);
